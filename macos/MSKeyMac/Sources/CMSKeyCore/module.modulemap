@@ -1,0 +1,4 @@
+module CMSKeyCore [system] {
+    header "../../../../crates/mskey-ffi/include/mskey_core.h"
+    export *
+}

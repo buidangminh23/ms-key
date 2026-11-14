@@ -1,0 +1,38 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+
+jobs:
+  rust-windows:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - run: cargo test --workspace
+      - run: cargo build --release -p mskey-win -p mskey-ffi
+
+  rust-linux:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - run: sudo apt-get update && sudo apt-get install -y libgtk-3-dev pkg-config xvfb
+      - run: cargo test -p mskey-core -p mskey-ffi -p mskey-linux
+      - run: cargo build --release -p mskey-linux
+      - run: ./target/release/mskey-linux --print-xml
+      - run: xvfb-run -a ./target/release/mskey-linux --verify-smoke /tmp/smoke_linux.txt && cat /tmp/smoke_linux.txt
+
+  macos-swift:
+    runs-on: macos-15
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - run: cargo test -p mskey-core -p mskey-ffi
+      - run: cargo build --release -p mskey-ffi
+      - run: cd macos/MSKeyMac && swift test
+      - run: bash scripts/build-macos.sh
+      - run: dist/MSKey.app/Contents/MacOS/MSKey --verify-smoke /tmp/smoke_mac.txt && cat /tmp/smoke_mac.txt

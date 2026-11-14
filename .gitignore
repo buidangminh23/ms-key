@@ -1,0 +1,10 @@
+target/
+**/*.rs.bk
+*.pdb
+*.exe
+*.dll
+*.app/
+.DS_Store
+macos/MSKeyMac/.build/
+macos/MSKeyMac/DerivedData/
+dist/

@@ -1,0 +1,15 @@
+[package]
+name = "mskey-ffi"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+authors.workspace = true
+rust-version.workspace = true
+
+[lib]
+name = "mskey_ffi"
+crate-type = ["staticlib", "cdylib", "rlib"]
+
+[dependencies]
+mskey-core = { workspace = true }
+serde_json = { workspace = true }

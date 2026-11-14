@@ -1,0 +1,349 @@
+use std::cell::{Cell, RefCell};
+use std::ffi::c_void;
+use std::fs;
+use std::process::Command;
+use std::ptr;
+
+use mskey_core::{AppBehavior, Config, SwitchPreset};
+
+use crate::config_store::{
+    config_dir, detect_active_x11_app, load_config, save_config, sync_linux_autostart,
+};
+use crate::gio_ffi::cstr;
+use crate::gtk_dialogs::{capture_hotkey_dialog, pick_and_import_evkey_tree, show_converter_dialog};
+use crate::gtk_dialogs_edit::{show_app_rules_dialog, show_custom_keymap_dialog, show_macro_dialog};
+use crate::gtk_ffi::{
+    GTK_WIN_POS_CENTER, GTK_WINDOW_TOPLEVEL, GtkAllocation, GtkWidget, connect_signal,
+    gtk_container_add, gtk_container_set_border_width, gtk_init_check, gtk_main, gtk_main_quit,
+    gtk_notebook_append_page, gtk_notebook_new, gtk_widget_destroy, gtk_widget_get_allocation,
+    gtk_widget_show_all, gtk_window_new, gtk_window_set_default_size, gtk_window_set_position,
+    gtk_window_set_resizable, gtk_window_set_title,
+};
+use crate::gtk_helpers::{make_button, make_hbox, make_label, make_vbox, pack};
+use crate::gtk_theme::apply_gtk_theme;
+use crate::gtk_ui_tabs::{UiState, build_header_box, build_tab_basic, build_tab_hotkey, build_tab_system};
+
+thread_local! {
+    static UI: RefCell<Option<UiState>> = const { RefCell::new(None) };
+    static LAST_APP: RefCell<String> = const { RefCell::new(String::new()) };
+    static IS_INIT: Cell<bool> = const { Cell::new(false) };
+    static SYNCING: Cell<bool> = const { Cell::new(false) };
+}
+
+pub fn ensure_gtk_init() -> bool {
+    if IS_INIT.with(|c| c.get()) {
+        return true;
+    }
+    let ok = unsafe { gtk_init_check(ptr::null_mut(), ptr::null_mut()) != 0 };
+    if ok {
+        IS_INIT.with(|c| c.set(true));
+    }
+    ok
+}
+
+pub fn run_converter_only() -> i32 {
+    if !ensure_gtk_init() {
+        eprintln!("mskey-linux: no GTK display available for converter");
+        return 1;
+    }
+    let cfg = load_config();
+    apply_gtk_theme(cfg.theme);
+    show_converter_dialog(ptr::null_mut());
+    0
+}
+
+pub fn run_setup_ui(smoke_out: Option<&str>) -> i32 {
+    if !ensure_gtk_init() {
+        if let Some(p) = smoke_out {
+            let _ = fs::write(p, "client=560x568\nheadless=no_display\n");
+        }
+        eprintln!("mskey-linux: no GTK display available");
+        return if smoke_out.is_some() { 0 } else { 1 };
+    }
+    let cfg = load_config();
+    apply_gtk_theme(cfg.theme);
+    LAST_APP.with(|c| *c.borrow_mut() = detect_active_x11_app().unwrap_or_else(|| "-".to_string()));
+    let st = build_main_window(cfg);
+    let win = st.win;
+    UI.with(|c| {
+        *c.borrow_mut() = Some(st);
+    });
+    sync_widgets_from_config();
+    unsafe { gtk_widget_show_all(win) };
+
+    if let Some(p) = smoke_out {
+        let mut alloc = GtkAllocation::default();
+        unsafe { gtk_widget_get_allocation(win, &mut alloc) };
+        let _ = fs::write(p, format!("client={}x{}\ngtk_realized=true\n", alloc.width, alloc.height));
+        unsafe { gtk_widget_destroy(win) };
+        UI.with(|c| {
+            *c.borrow_mut() = None;
+        });
+        return 0;
+    }
+
+    connect_signal(win, "destroy", on_main_destroy as *const c_void, 0);
+    unsafe { gtk_main() };
+    0
+}
+
+fn build_main_window(cfg: Config) -> UiState {
+    let title = cstr("MS Key 0.1");
+    let win = unsafe {
+        let w = gtk_window_new(GTK_WINDOW_TOPLEVEL);
+        gtk_window_set_title(w, title.as_ptr());
+        gtk_window_set_default_size(w, 560, 568);
+        gtk_window_set_resizable(w, 0);
+        gtk_window_set_position(w, GTK_WIN_POS_CENTER);
+        gtk_container_set_border_width(w, 12);
+        w
+    };
+    let mut st = UiState::empty(win, cfg);
+    let root = make_vbox(8);
+    pack(root, build_header_box(&mut st), false, false, 0);
+
+    let nb = unsafe { gtk_notebook_new() };
+    let p0 = build_tab_basic(&mut st);
+    let p1 = build_tab_hotkey(&mut st);
+    let p2 = build_tab_system(&mut st);
+    unsafe {
+        gtk_notebook_append_page(nb, p0, make_label("Cơ bản", false));
+        gtk_notebook_append_page(nb, p1, make_label("Phím tắt", false));
+        gtk_notebook_append_page(nb, p2, make_label("Hệ thống", false));
+    }
+    pack(root, nb, true, true, 0);
+
+    let footer = make_hbox(8);
+    st.btn_default = make_button("Th.Lập mặc định", false);
+    st.btn_save = make_button("Lưu", true);
+    let lbl_ver = make_label("MS Key v0.1 • Tiếng Việt Unicode (IBus)", true);
+    pack(footer, st.btn_default, false, false, 0);
+    pack(footer, st.btn_save, false, false, 0);
+    pack(footer, make_label("", false), true, true, 0);
+    pack(footer, lbl_ver, false, false, 0);
+    pack(root, footer, false, false, 0);
+    unsafe { gtk_container_add(win, root) };
+    connect_main_signals(&st);
+    st
+}
+
+fn connect_main_signals(st: &UiState) {
+    let toggles = [
+        st.chk_modern, st.chk_free_tone, st.chk_fjwz, st.chk_autocap, st.chk_clip_send,
+        st.chk_std_send, st.chk_spell, st.chk_restore, st.chk_non_us, st.chk_suggest1,
+        st.chk_suggest2, st.chk_macro, st.chk_macro_en, st.chk_quick_w, st.chk_quick_brk,
+        st.chk_esc, st.chk_beep, st.chk_autostart, st.chk_show_start, st.chk_smart_app,
+        st.rad_ctrl_shift, st.rad_alt_z, st.rad_custom,
+    ];
+    for &w in &toggles {
+        connect_signal(w, "toggled", on_widget_changed as *const c_void, 0);
+    }
+    for &cb in &[st.cb_charset, st.cb_method, st.cb_mech, st.cb_theme] {
+        connect_signal(cb, "changed", on_widget_changed as *const c_void, 0);
+    }
+    connect_signal(st.btn_ve, "clicked", on_toggle_ve as *const c_void, 0);
+    connect_signal(st.btn_custom, "clicked", on_open_custom as *const c_void, 0);
+    connect_signal(st.btn_conv, "clicked", on_open_convert as *const c_void, 0);
+    connect_signal(st.btn_macro, "clicked", on_open_macro as *const c_void, 0);
+    connect_signal(st.btn_cap_sw, "clicked", on_cap_switch as *const c_void, 0);
+    connect_signal(st.btn_cap_conv, "clicked", on_cap_conv as *const c_void, 0);
+    connect_signal(st.btn_import, "clicked", on_import_tree as *const c_void, 0);
+    connect_signal(st.btn_dir, "clicked", on_open_dir as *const c_void, 0);
+    connect_signal(st.btn_apps, "clicked", on_open_apps as *const c_void, 0);
+    connect_signal(st.btn_add_app, "clicked", on_add_cur_app as *const c_void, 0);
+    connect_signal(st.btn_default, "clicked", on_reset_default as *const c_void, 0);
+    connect_signal(st.btn_save, "clicked", on_save_cfg as *const c_void, 0);
+    connect_signal(st.btn_close, "clicked", on_close_win as *const c_void, 0);
+    connect_signal(st.btn_exit, "clicked", on_close_win as *const c_void, 0);
+}
+
+fn sync_widgets_from_config() {
+    let cur_app = LAST_APP.with(|c| c.borrow().clone());
+    SYNCING.with(|s| s.set(true));
+    UI.with(|cell| {
+        if let Some(st) = cell.borrow_mut().as_mut() {
+            st.sync_from_config(&cur_app);
+        }
+    });
+    SYNCING.with(|s| s.set(false));
+}
+
+fn read_widgets_to_config() -> Option<mskey_core::ThemeMode> {
+    if SYNCING.with(|s| s.get()) {
+        return None;
+    }
+    UI.with(|cell| {
+        let mut b = cell.borrow_mut();
+        let st = b.as_mut()?;
+        if st.syncing {
+            return None;
+        }
+        let changed = st.read_to_config();
+        save_config(&st.cfg);
+        changed
+    })
+}
+
+unsafe extern "C" fn on_widget_changed(_: *mut GtkWidget, _: *mut c_void) {
+    if let Some(t) = read_widgets_to_config() {
+        apply_gtk_theme(t);
+    }
+}
+
+unsafe extern "C" fn on_toggle_ve(_: *mut GtkWidget, _: *mut c_void) {
+    UI.with(|c| {
+        if let Some(st) = c.borrow_mut().as_mut() {
+            st.cfg.vietnamese_enabled = !st.cfg.vietnamese_enabled;
+            save_config(&st.cfg);
+        }
+    });
+    sync_widgets_from_config();
+}
+
+unsafe extern "C" fn on_open_convert(_: *mut GtkWidget, _: *mut c_void) {
+    let win = UI.with(|c| c.borrow().as_ref().map(|s| s.win).unwrap_or(ptr::null_mut()));
+    show_converter_dialog(win);
+}
+
+unsafe extern "C" fn on_open_custom(_: *mut GtkWidget, _: *mut c_void) {
+    let pair = UI.with(|c| c.borrow().as_ref().map(|s| (s.win, s.cfg.clone())));
+    if let Some((win, mut cfg)) = pair {
+        if show_custom_keymap_dialog(win, &mut cfg) {
+            save_config(&cfg);
+            UI.with(|c| {
+                if let Some(st) = c.borrow_mut().as_mut() {
+                    st.cfg = cfg;
+                }
+            });
+            sync_widgets_from_config();
+        }
+    }
+}
+
+unsafe extern "C" fn on_open_macro(_: *mut GtkWidget, _: *mut c_void) {
+    let pair = UI.with(|c| c.borrow().as_ref().map(|s| (s.win, s.cfg.clone())));
+    if let Some((win, mut cfg)) = pair {
+        if show_macro_dialog(win, &mut cfg) {
+            save_config(&cfg);
+            UI.with(|c| {
+                if let Some(st) = c.borrow_mut().as_mut() {
+                    st.cfg = cfg;
+                }
+            });
+        }
+    }
+}
+
+unsafe extern "C" fn on_open_apps(_: *mut GtkWidget, _: *mut c_void) {
+    let pair = UI.with(|c| c.borrow().as_ref().map(|s| (s.win, s.cfg.clone())));
+    if let Some((win, mut cfg)) = pair {
+        if show_app_rules_dialog(win, &mut cfg) {
+            save_config(&cfg);
+            UI.with(|c| {
+                if let Some(st) = c.borrow_mut().as_mut() {
+                    st.cfg = cfg;
+                }
+            });
+        }
+    }
+}
+
+unsafe extern "C" fn on_add_cur_app(_: *mut GtkWidget, _: *mut c_void) {
+    let app = LAST_APP.with(|c| c.borrow().clone());
+    if app.is_empty() || app == "-" {
+        return;
+    }
+    UI.with(|c| {
+        if let Some(st) = c.borrow_mut().as_mut() {
+            st.cfg.set_app_rule(&app, AppBehavior::ForceEnglish);
+            save_config(&st.cfg);
+        }
+    });
+}
+
+unsafe extern "C" fn on_cap_switch(_: *mut GtkWidget, _: *mut c_void) {
+    let pair = UI.with(|c| c.borrow().as_ref().map(|s| (s.win, s.cfg.custom_switch_hotkey)));
+    if let Some((win, cur)) = pair {
+        if let Some(combo) = capture_hotkey_dialog(win, cur) {
+            UI.with(|c| {
+                if let Some(st) = c.borrow_mut().as_mut() {
+                    st.cfg.custom_switch_hotkey = combo;
+                    st.cfg.switch_preset = SwitchPreset::Custom;
+                    save_config(&st.cfg);
+                }
+            });
+            sync_widgets_from_config();
+        }
+    }
+}
+
+unsafe extern "C" fn on_cap_conv(_: *mut GtkWidget, _: *mut c_void) {
+    let pair = UI.with(|c| c.borrow().as_ref().map(|s| (s.win, s.cfg.clipboard_convert_hotkey)));
+    if let Some((win, cur)) = pair {
+        if let Some(combo) = capture_hotkey_dialog(win, cur) {
+            UI.with(|c| {
+                if let Some(st) = c.borrow_mut().as_mut() {
+                    st.cfg.clipboard_convert_hotkey = combo;
+                    save_config(&st.cfg);
+                }
+            });
+            sync_widgets_from_config();
+        }
+    }
+}
+
+unsafe extern "C" fn on_import_tree(_: *mut GtkWidget, _: *mut c_void) {
+    let win = UI.with(|c| c.borrow().as_ref().map(|s| s.win).unwrap_or(ptr::null_mut()));
+    if let Some(cfg) = pick_and_import_evkey_tree(win) {
+        save_config(&cfg);
+        apply_gtk_theme(cfg.theme);
+        UI.with(|c| {
+            if let Some(st) = c.borrow_mut().as_mut() {
+                st.cfg = cfg;
+            }
+        });
+        sync_widgets_from_config();
+    }
+}
+
+unsafe extern "C" fn on_open_dir(_: *mut GtkWidget, _: *mut c_void) {
+    let dir = config_dir();
+    let _ = fs::create_dir_all(&dir);
+    let _ = Command::new("xdg-open").arg(dir).spawn();
+}
+
+unsafe extern "C" fn on_reset_default(_: *mut GtkWidget, _: *mut c_void) {
+    let def = Config::default();
+    save_config(&def);
+    sync_linux_autostart(def.auto_start);
+    apply_gtk_theme(def.theme);
+    UI.with(|c| {
+        if let Some(st) = c.borrow_mut().as_mut() {
+            st.cfg = def;
+        }
+    });
+    sync_widgets_from_config();
+}
+
+unsafe extern "C" fn on_save_cfg(_: *mut GtkWidget, _: *mut c_void) {
+    let _ = read_widgets_to_config();
+    UI.with(|c| {
+        if let Some(st) = c.borrow().as_ref() {
+            save_config(&st.cfg);
+            sync_linux_autostart(st.cfg.auto_start);
+        }
+    });
+}
+
+unsafe extern "C" fn on_close_win(_: *mut GtkWidget, _: *mut c_void) {
+    if let Some(win) = UI.with(|c| c.borrow().as_ref().map(|s| s.win)) {
+        unsafe { gtk_widget_destroy(win) };
+    }
+}
+
+unsafe extern "C" fn on_main_destroy(_: *mut GtkWidget, _: *mut c_void) {
+    UI.with(|c| {
+        *c.borrow_mut() = None;
+    });
+    unsafe { gtk_main_quit() };
+}

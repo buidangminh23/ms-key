@@ -1,0 +1,5 @@
+module CMSKeyCore {
+    header "mskey_core.h"
+    link "mskey_ffi"
+    export *
+}

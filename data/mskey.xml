@@ -1,0 +1,24 @@
+<?xml version="1.0" encoding="utf-8"?>
+<component>
+	<name>org.freedesktop.IBus.MSKey</name>
+	<description>MS Key Vietnamese Unicode Input Method</description>
+	<exec>/usr/local/bin/mskey-linux --ibus</exec>
+	<version>0.1.0</version>
+	<author>MS Key</author>
+	<license>MIT</license>
+	<textdomain>mskey</textdomain>
+	<engines>
+		<engine>
+			<name>mskey</name>
+			<language>vi</language>
+			<license>MIT</license>
+			<author>MS Key</author>
+			<icon>preferences-desktop-locale</icon>
+			<layout>us</layout>
+			<longname>MS Key (Tiếng Việt)</longname>
+			<description>Vietnamese Unicode IME inspired by EVKey, OpenKey, Gonhanh, IBus Bamboo</description>
+			<rank>99</rank>
+			<setup>/usr/local/bin/mskey-linux --setup</setup>
+		</engine>
+	</engines>
+</component>

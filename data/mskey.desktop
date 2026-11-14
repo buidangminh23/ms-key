@@ -1,0 +1,10 @@
+[Desktop Entry]
+Version=1.0
+Type=Application
+Name=MS Key
+Comment=Vietnamese Unicode Input Method Settings
+Exec=/usr/local/bin/mskey-linux
+Icon=preferences-desktop-locale
+Terminal=false
+Categories=Utility;Settings;
+Keywords=vietnamese;ime;telex;vni;ibus;
