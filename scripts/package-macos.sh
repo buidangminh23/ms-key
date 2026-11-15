@@ -2,6 +2,12 @@
 set -euo pipefail
 
 ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+SOURCE_APP=""
+if [ "${1:-}" = "--dmg-from-app" ]; then
+    [ $# -ge 2 ] || { echo "Usage: $0 --dmg-from-app <MSKey.app> [output-directory]" >&2; exit 2; }
+    SOURCE_APP="$(cd "$2" && pwd)"
+    shift 2
+fi
 OUT_DIR="${1:-${ROOT_DIR}/dist}"
 mkdir -p "${OUT_DIR}"
 OUT_DIR="$(cd "${OUT_DIR}" && pwd)"
@@ -11,6 +17,49 @@ BUILD_NUMBER="${BUILD_NUMBER:-1}"
 RUST_TARGETS=(aarch64-apple-darwin x86_64-apple-darwin)
 
 [ -n "${VERSION}" ] || { echo "Cannot read workspace version from Cargo.toml" >&2; exit 1; }
+
+create_dmg() (
+    SOURCE="$1"
+    codesign --verify --deep --strict "${SOURCE}"
+    [ "$(/usr/libexec/PlistBuddy -c 'Print :CFBundleIdentifier' "${SOURCE}/Contents/Info.plist")" = "org.mskey.mac" ]
+    [ "$(/usr/libexec/PlistBuddy -c 'Print :CFBundleShortVersionString' "${SOURCE}/Contents/Info.plist")" = "${VERSION}" ]
+    SOURCE_ARCHS="$(lipo -archs "${SOURCE}/Contents/MacOS/MSKey")"
+    case "${SOURCE_ARCHS}" in
+        *arm64*x86_64*|*x86_64*arm64*) ;;
+        *) echo "Expected a universal binary, got: ${SOURCE_ARCHS}" >&2; exit 1 ;;
+    esac
+    DMG_WORK="$(mktemp -d)"
+    trap 'rm -rf "${DMG_WORK}"' EXIT
+    mkdir -p "${DMG_WORK}/volume"
+    ditto "${SOURCE}" "${DMG_WORK}/volume/MSKey.app"
+    ln -s /Applications "${DMG_WORK}/volume/Applications"
+    cat > "${DMG_WORK}/volume/Install.txt" <<'EOF'
+MS Key for macOS 13 or later (Apple Silicon and Intel)
+
+1. Quit MS Key if it is already running.
+2. Drag MSKey.app to Applications, then eject this disk image.
+3. Open MS Key from Applications.
+4. Allow MS Key in System Settings > Privacy & Security > Accessibility.
+
+This app is ad-hoc signed and has not been notarized by Apple. If macOS
+blocks it, open System Settings > Privacy & Security after attempting to
+launch it, then choose Open Anyway for MS Key.
+https://support.apple.com/en-us/102445
+
+After an update, remove the old MS Key Accessibility entry and allow it again.
+EOF
+    DMG="${OUT_DIR}/MSKey-${VERSION}-macos-universal.dmg"
+    hdiutil create -volname "MS Key ${VERSION}" -srcfolder "${DMG_WORK}/volume" \
+        -format UDZO -fs HFS+ "${DMG_WORK}/MSKey.dmg"
+    hdiutil verify "${DMG_WORK}/MSKey.dmg"
+    mv -f "${DMG_WORK}/MSKey.dmg" "${DMG}"
+    echo "${DMG}"
+)
+
+if [ -n "${SOURCE_APP}" ]; then
+    create_dmg "${SOURCE_APP}"
+    exit 0
+fi
 
 cd "${ROOT_DIR}"
 rustup target add "${RUST_TARGETS[@]}" >/dev/null
@@ -54,6 +103,7 @@ ZIP="${OUT_DIR}/MSKey-${VERSION}-macos-universal.zip"
 rm -f "${ZIP}"
 ditto -c -k --sequesterRsrc --keepParent "${APP}" "${ZIP}"
 cp "${ROOT_DIR}/scripts/install-macos.sh" "${OUT_DIR}/install-macos.sh"
+create_dmg "${APP}"
 
 echo "${ZIP}"
 echo "${OUT_DIR}/install-macos.sh"

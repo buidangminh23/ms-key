@@ -39,11 +39,17 @@ On other distributions with GTK 3 and IBus, extract `MSKey-<version>-linux-amd64
 
 ### macOS 13+ (Apple Silicon and Intel)
 
+Download `MSKey-<version>-macos-universal.dmg` from the latest release, open it and drag **MSKey.app** into **Applications**. Eject the disk image, then open MS Key from Applications.
+
+The app is ad-hoc signed and not notarized. If macOS blocks the first launch, open **System Settings > Privacy & Security**, choose **Open Anyway** for MS Key and confirm the launch.
+
+Alternatively, install from Terminal:
+
 ```bash
 curl -fsSL https://github.com/buidangminh23/ms-key/releases/latest/download/install-macos.sh | bash
 ```
 
-The installer checks the download against `SHA256SUMS`, verifies the app signature and installs `MSKey.app` into `/Applications` (or `~/Applications`). Use this command rather than a browser download: the app is not notarized, so a zip downloaded with a browser is blocked by Gatekeeper.
+The Terminal installer downloads the zip, checks it against `SHA256SUMS`, verifies the app signature and installs `MSKey.app` into `/Applications` (or `~/Applications`).
 
 On first launch, allow MS Key in **System Settings > Privacy & Security > Accessibility**. After each update, remove the old MS Key entry there and allow it again.
 
@@ -143,7 +149,7 @@ open dist/MSKey.app
 |---|---|
 | `scripts/package-windows.ps1` | NSIS installer and portable zip (needs NSIS) |
 | `scripts/package-linux.sh` | `.deb` and `.tar.gz` |
-| `scripts/package-macos.sh` | Universal ad-hoc signed `MSKey.app` zip and `install-macos.sh` |
+| `scripts/package-macos.sh` | Universal ad-hoc signed `MSKey.app` in a drag-to-install `.dmg`, a zip and `install-macos.sh` |
 
 Pushing a tag such as `v0.1.0` runs `.github/workflows/release.yml`. It builds every package on its own runner, installs it, launches the settings panel in smoke-test mode, uninstalls it, and then publishes the release with `SHA256SUMS` and the matching section of [CHANGELOG.md](CHANGELOG.md). The tag must match the version in `Cargo.toml`.
 

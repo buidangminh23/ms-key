@@ -14,7 +14,8 @@ First public release of MS Key, a lightweight Vietnamese Unicode input method fo
 | Windows (portable) | `MSKey-0.1.0-windows-x64-portable.zip` | Unzip and run `MSKey.exe`. |
 | Ubuntu / Debian (amd64) | `mskey_0.1.0_amd64.deb` | `sudo apt install ./mskey_0.1.0_amd64.deb`, then `ibus restart` and add **MS Key (Tiếng Việt)** under Settings > Keyboard > Input Sources. |
 | Other Linux (amd64) | `MSKey-0.1.0-linux-amd64.tar.gz` | Extract and run `./install.sh` (needs GTK 3 and IBus). |
-| macOS 13+ (Apple Silicon and Intel) | `MSKey-0.1.0-macos-universal.zip` | Recommended: `curl -fsSL https://github.com/buidangminh23/ms-key/releases/latest/download/install-macos.sh \| bash` |
+| macOS 13+ (Apple Silicon and Intel) | `MSKey-0.1.0-macos-universal.dmg` | Open the disk image, drag **MSKey.app** into **Applications**, eject the image and open MS Key from Applications. |
+| macOS (Terminal installer) | `MSKey-0.1.0-macos-universal.zip` | `curl -fsSL https://github.com/buidangminh23/ms-key/releases/latest/download/install-macos.sh \| bash` |
 
 Every file is listed in `SHA256SUMS`.
 
@@ -44,7 +45,7 @@ Every file is listed in `SHA256SUMS`.
 
 ### Known limitations
 
-- The Windows installer and macOS app are not code-signed by a paid certificate. Windows SmartScreen may warn on first run (choose **More info > Run anyway**). The macOS app is ad-hoc signed and not notarized, so install it with the `curl` command above; a zip downloaded with a browser is quarantined and blocked by Gatekeeper.
+- The Windows installer and macOS app are not code-signed by a paid certificate. Windows SmartScreen may warn on first run (choose **More info > Run anyway**). The macOS app is ad-hoc signed and not notarized. If Gatekeeper blocks the first launch after installing from the DMG, open **System Settings > Privacy & Security > Open Anyway** for MS Key and confirm the launch. The Terminal installer remains available as an alternative.
 - macOS needs Accessibility permission. After every update, remove the old MS Key entry in System Settings > Privacy & Security > Accessibility and allow it again.
 - The Linux packages target amd64 with glibc 2.35 or newer (Ubuntu 22.04+, Debian 12+).
 - Real typing through each system's keyboard hook was tested by hand only on the developer's machines; please report problems in GitHub Issues.
