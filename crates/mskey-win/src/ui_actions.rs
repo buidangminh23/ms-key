@@ -61,6 +61,37 @@ pub fn add_current_app_force_english() {
     });
 }
 
+pub fn export_json_backup_dialog(hwnd: HWND) {
+    let filter = crate::platform_extra::make_win_filter(&[
+        ("MS Key JSON (*.json)", "*.json"),
+        ("All Files (*.*)", "*.*"),
+    ]);
+    let Some(path) = crate::platform_extra::browse_file_dialog(hwnd, true, &filter, "json") else {
+        return;
+    };
+    let cfg = with_state(|st| st.engine.config().clone());
+    let _ = crate::platform_extra::export_config_json(&cfg, &path);
+}
+
+pub fn import_json_backup_dialog(hwnd: HWND) -> bool {
+    let filter = crate::platform_extra::make_win_filter(&[
+        ("MS Key JSON (*.json)", "*.json"),
+        ("All Files (*.*)", "*.*"),
+    ]);
+    let Some(path) = crate::platform_extra::browse_file_dialog(hwnd, false, &filter, "json") else {
+        return false;
+    };
+    let Ok(cfg) = crate::platform_extra::import_config_json(&path) else {
+        return false;
+    };
+    save_config(&cfg);
+    with_state(|st| {
+        st.user_preferred_ve = cfg.vietnamese_enabled;
+        st.engine.update_config(cfg);
+    });
+    true
+}
+
 pub fn dump_layout_report(hwnd: HWND, out_path: &Path) {
     let mut client = RECT { left: 0, top: 0, right: 0, bottom: 0 };
     unsafe { GetClientRect(hwnd, &mut client) };

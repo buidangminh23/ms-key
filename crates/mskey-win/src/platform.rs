@@ -214,7 +214,7 @@ pub fn query_foreground_info() -> (HWND, String, String, bool) {
     let hkl = unsafe { GetKeyboardLayout(tid) } as usize;
     let lang_id = (hkl & 0xFFFF) as u16;
     let primary = lang_id & 0x03FF;
-    let is_latin_us = primary == 0 || primary == 0x09 || primary == 0x2A;
+    let is_latin_us = primary == 0 || primary == 0x09;
 
     let mut class_buf = [0u16; 128];
     let clen = unsafe { GetClassNameW(hwnd, class_buf.as_mut_ptr(), class_buf.len() as i32) };

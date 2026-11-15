@@ -1,7 +1,7 @@
 use std::cell::{Cell, RefCell};
 use std::ptr;
 
-use mskey_core::{CaseTransform, Charset, HotkeyCombo, convert_text};
+use mskey_core::{CaseTransform, HotkeyCombo};
 use windows_sys::Win32::Foundation::{HWND, LPARAM, LRESULT, RECT, WPARAM};
 use windows_sys::Win32::Graphics::Gdi::{
     BeginPaint, CreateSolidBrush, DeleteObject, EndPaint, HBRUSH, HFONT, PAINTSTRUCT,
@@ -66,8 +66,22 @@ unsafe extern "system" fn conv_wnd_proc(
             let font = create_ui_font(scale_px(14, dpi), false);
             let bg_br = unsafe { CreateSolidBrush(pal.card_bg) };
             let in_br = unsafe { CreateSolidBrush(pal.input_bg) };
-            let cs = &["Unicode", "TCVN3 (ABC)", "VNI Windows", "Unicode tổ hợp"];
-            let cases = &["Giữ nguyên chữ", "CHỮ HOA", "chữ thường", "Hoa đầu câu", "Hoa Mỗi Từ"];
+            let cs = &[
+                "Unicode",
+                "TCVN3 (ABC)",
+                "VNI Windows",
+                "Unicode tổ hợp",
+                "VIQR",
+                "Tự động (Auto)",
+            ];
+            let cases = &[
+                "Giữ nguyên chữ",
+                "CHỮ HOA",
+                "chữ thường",
+                "Hoa đầu câu",
+                "Hoa Mỗi Từ",
+                "Bỏ dấu tiếng Việt",
+            ];
             make_child(hwnd, "STATIC", "Bảng mã nguồn", 0, 16, 16, 120, 24, 0, font, dpi);
             let from_cb = make_combo(hwnd, 140, 12, 152, 28, ID_CONV_FROM, cs, 0, font, dpi);
             make_child(hwnd, "STATIC", "Bảng mã đích", 0, 16, 52, 120, 24, 0, font, dpi);
@@ -120,24 +134,34 @@ unsafe extern "system" fn conv_wnd_proc(
                         }
                     }
                     ID_CONV_RUN => {
-                        let map_cs = |idx: usize| match idx {
-                            1 => Charset::Tcvn3,
-                            2 => Charset::VniWindows,
-                            3 => Charset::UnicodeComposite,
-                            _ => Charset::Unicode,
+                        let src = read_window_text(st.edit);
+                        let map_from = |idx: usize| match idx {
+                            1 => mskey_core::ConvertEncoding::Tcvn3,
+                            2 => mskey_core::ConvertEncoding::VniWindows,
+                            3 => mskey_core::ConvertEncoding::UnicodeComposite,
+                            4 => mskey_core::ConvertEncoding::Viqr,
+                            5 => mskey_core::detect_convert_encoding(&src),
+                            _ => mskey_core::ConvertEncoding::Unicode,
+                        };
+                        let map_to = |idx: usize| match idx {
+                            1 => mskey_core::ConvertEncoding::Tcvn3,
+                            2 => mskey_core::ConvertEncoding::VniWindows,
+                            3 => mskey_core::ConvertEncoding::UnicodeComposite,
+                            4 => mskey_core::ConvertEncoding::Viqr,
+                            _ => mskey_core::ConvertEncoding::Unicode,
                         };
                         let map_case = |idx: usize| match idx {
                             1 => CaseTransform::Upper,
                             2 => CaseTransform::Lower,
                             3 => CaseTransform::Sentence,
                             4 => CaseTransform::Title,
+                            5 => CaseTransform::StripDiacritics,
                             _ => CaseTransform::None,
                         };
-                        let src = read_window_text(st.edit);
-                        let out = convert_text(
+                        let out = mskey_core::convert_with_encoding(
                             &src,
-                            map_cs(combo_index(st.from_cb)),
-                            map_cs(combo_index(st.to_cb)),
+                            map_from(combo_index(st.from_cb)),
+                            map_to(combo_index(st.to_cb)),
                             map_case(combo_index(st.case_cb)),
                         );
                         write_window_text(st.edit, &out);
@@ -216,14 +240,16 @@ unsafe extern "system" fn cap_wnd_proc(
             make_owner_button(hwnd, "Hủy", 264, 56, 84, 32, ID_CAP_CANCEL, font, dpi);
             0
         }
-        WM_KEYDOWN => {
+        WM_KEYDOWN | 0x0104 => {
             let vk = wparam as u32;
             if !matches!(vk, 0x10..=0x12 | 0xA0..=0xA5 | 0x5B | 0x5C) {
                 let ctrl = unsafe { GetAsyncKeyState(VK_CONTROL as i32) } < 0;
                 let shift = unsafe { GetAsyncKeyState(VK_SHIFT as i32) } < 0;
                 let alt = unsafe { GetAsyncKeyState(VK_MENU as i32) } < 0;
+                let win = unsafe { GetAsyncKeyState(0x5B) } < 0
+                    || unsafe { GetAsyncKeyState(0x5C) } < 0;
                 CAP_RESULT.with(|c| {
-                    c.set(Some(HotkeyCombo { ctrl, alt, shift, win_cmd: false, key_code: vk }));
+                    c.set(Some(HotkeyCombo { ctrl, alt, shift, win_cmd: win, key_code: vk }));
                 });
                 unsafe {
                     DestroyWindow(hwnd);

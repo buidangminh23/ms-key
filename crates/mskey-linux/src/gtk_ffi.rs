@@ -23,10 +23,13 @@ pub type GtkCssProvider = c_void;
 pub type GtkStyleContext = c_void;
 pub type GtkClipboard = c_void;
 pub type GtkFileChooser = c_void;
+pub type GtkTextMark = c_void;
+pub type GtkSpinButton = c_void;
 pub type GdkScreen = c_void;
 pub type GList = c_void;
 
 pub const GTK_WINDOW_TOPLEVEL: c_int = 0;
+pub const GTK_WINDOW_POPUP: c_int = 1;
 pub const GTK_WIN_POS_CENTER: c_int = 1;
 pub const GTK_ORIENTATION_HORIZONTAL: c_int = 0;
 pub const GTK_ORIENTATION_VERTICAL: c_int = 1;
@@ -35,6 +38,7 @@ pub const GTK_POLICY_NEVER: c_int = 2;
 pub const GTK_SELECTION_SINGLE: c_int = 1;
 pub const GTK_WRAP_WORD_CHAR: c_int = 3;
 pub const GTK_FILE_CHOOSER_ACTION_OPEN: c_int = 0;
+pub const GTK_FILE_CHOOSER_ACTION_SAVE: c_int = 1;
 pub const GTK_STYLE_PROVIDER_PRIORITY_APPLICATION: c_uint = 600;
 
 #[repr(C)]
@@ -70,6 +74,8 @@ unsafe extern "C" {
     pub fn gtk_init_check(argc: *mut c_int, argv: *mut *mut *mut c_char) -> c_int;
     pub fn gtk_main();
     pub fn gtk_main_quit();
+    pub fn gtk_events_pending() -> c_int;
+    pub fn gtk_main_iteration_do(blocking: c_int) -> c_int;
 
     pub fn g_signal_connect_data(
         instance: *mut c_void,
@@ -88,6 +94,12 @@ unsafe extern "C" {
     pub fn gtk_window_set_transient_for(win: *mut GtkWindow, parent: *mut GtkWindow);
     pub fn gtk_window_set_modal(win: *mut GtkWindow, modal: c_int);
     pub fn gtk_window_present(win: *mut GtkWindow);
+    pub fn gtk_window_move(win: *mut GtkWindow, x: c_int, y: c_int);
+    pub fn gtk_window_set_decorated(win: *mut GtkWindow, setting: c_int);
+    pub fn gtk_window_set_keep_above(win: *mut GtkWindow, setting: c_int);
+    pub fn gtk_window_set_accept_focus(win: *mut GtkWindow, setting: c_int);
+    pub fn gtk_window_set_skip_taskbar_hint(win: *mut GtkWindow, setting: c_int);
+    pub fn gtk_window_set_skip_pager_hint(win: *mut GtkWindow, setting: c_int);
 
     pub fn gtk_box_new(orientation: c_int, spacing: c_int) -> *mut GtkWidget;
     pub fn gtk_box_pack_start(
@@ -149,6 +161,9 @@ unsafe extern "C" {
     pub fn gtk_entry_set_text(entry: *mut GtkEntry, text: *const c_char);
     pub fn gtk_entry_get_text(entry: *mut GtkEntry) -> *const c_char;
     pub fn gtk_entry_set_max_length(entry: *mut GtkEntry, max: c_int);
+    pub fn gtk_spin_button_new_with_range(min: f64, max: f64, step: f64) -> *mut GtkWidget;
+    pub fn gtk_spin_button_set_value(sb: *mut GtkSpinButton, value: f64);
+    pub fn gtk_spin_button_get_value_as_int(sb: *mut GtkSpinButton) -> c_int;
 
     pub fn gtk_text_view_new() -> *mut GtkWidget;
     pub fn gtk_text_view_get_buffer(tv: *mut GtkTextView) -> *mut GtkTextBuffer;
@@ -162,6 +177,29 @@ unsafe extern "C" {
         end: *const GtkTextIter,
         include_hidden: c_int,
     ) -> *mut c_char;
+    pub fn gtk_text_buffer_get_insert(buf: *mut GtkTextBuffer) -> *mut GtkTextMark;
+    pub fn gtk_text_buffer_get_iter_at_mark(
+        buf: *mut GtkTextBuffer,
+        iter: *mut GtkTextIter,
+        mark: *mut GtkTextMark,
+    );
+    pub fn gtk_text_iter_get_offset(iter: *const GtkTextIter) -> c_int;
+    pub fn gtk_text_buffer_get_iter_at_offset(
+        buf: *mut GtkTextBuffer,
+        iter: *mut GtkTextIter,
+        char_offset: c_int,
+    );
+    pub fn gtk_text_buffer_delete(
+        buf: *mut GtkTextBuffer,
+        start: *mut GtkTextIter,
+        end: *mut GtkTextIter,
+    );
+    pub fn gtk_text_buffer_insert_at_cursor(
+        buf: *mut GtkTextBuffer,
+        text: *const c_char,
+        len: c_int,
+    );
+    pub fn gtk_text_buffer_place_cursor(buf: *mut GtkTextBuffer, where_iter: *const GtkTextIter);
 
     pub fn gtk_scrolled_window_new(hadj: *mut c_void, vadj: *mut c_void) -> *mut GtkWidget;
     pub fn gtk_scrolled_window_set_policy(sw: *mut c_void, hpol: c_int, vpol: c_int);
@@ -171,6 +209,8 @@ unsafe extern "C" {
     pub fn gtk_list_box_row_get_index(row: *mut GtkListBoxRow) -> c_int;
     pub fn gtk_list_box_insert(lb: *mut GtkListBox, child: *mut GtkWidget, pos: c_int);
 
+    pub fn gtk_widget_show(w: *mut GtkWidget);
+    pub fn gtk_widget_hide(w: *mut GtkWidget);
     pub fn gtk_widget_show_all(w: *mut GtkWidget);
     pub fn gtk_widget_set_size_request(w: *mut GtkWidget, width: c_int, height: c_int);
     pub fn gtk_widget_set_hexpand(w: *mut GtkWidget, expand: c_int);
@@ -202,6 +242,8 @@ unsafe extern "C" {
         error: *mut *mut c_void,
     ) -> c_int;
     pub fn gdk_screen_get_default() -> *mut GdkScreen;
+    pub fn gdk_screen_get_width(screen: *mut GdkScreen) -> c_int;
+    pub fn gdk_screen_get_height(screen: *mut GdkScreen) -> c_int;
 
     pub fn gdk_atom_intern_static_string(name: *const c_char) -> *mut c_void;
     pub fn gdk_display_get_default() -> *mut c_void;
@@ -211,9 +253,15 @@ unsafe extern "C" {
     ) -> *mut GtkClipboard;
     pub fn gtk_clipboard_set_text(cb: *mut GtkClipboard, text: *const c_char, len: c_int);
     pub fn gtk_clipboard_wait_for_text(cb: *mut GtkClipboard) -> *mut c_char;
+    pub fn gtk_clipboard_store(cb: *mut GtkClipboard);
 
     pub fn gtk_file_chooser_widget_new(action: c_int) -> *mut GtkWidget;
     pub fn gtk_file_chooser_get_filename(chooser: *mut GtkFileChooser) -> *mut c_char;
+    pub fn gtk_file_chooser_set_current_name(chooser: *mut GtkFileChooser, name: *const c_char);
+    pub fn gtk_file_chooser_set_do_overwrite_confirmation(
+        chooser: *mut GtkFileChooser,
+        do_conf: c_int,
+    );
     pub fn gtk_widget_destroy(w: *mut GtkWidget);
 }
 

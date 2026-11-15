@@ -176,12 +176,19 @@ fn trigger_ve_toggle(
     notify_hwnd: &mut HWND,
     should_beep: &mut bool,
     should_save: &mut bool,
+    osd_next: &mut Option<bool>,
 ) {
     let cfg = st.engine.config().clone();
     st.set_user_vietnamese(next);
+    if cfg.smart_app_switch && !st.fg_process.is_empty() {
+        crate::platform_extra::record_app_ve_memory(&st.fg_process, next);
+    }
     *notify_hwnd = st.main_window();
     *should_beep = cfg.beep_on_switch;
     *should_save = true;
+    if cfg.show_switch_osd {
+        *osd_next = Some(next);
+    }
 }
 
 fn check_hotkey_decision(
@@ -192,8 +199,21 @@ fn check_hotkey_decision(
     notify_hwnd: &mut HWND,
     should_beep: &mut bool,
     should_save: &mut bool,
+    osd_next: &mut Option<bool>,
 ) -> Option<KeyDecision> {
     let cfg = st.engine.config().clone();
+    let double_shift = crate::platform_extra::update_shift_tap_state(
+        vk,
+        is_down,
+        is_up,
+        st.ctrl_down,
+        st.alt_down,
+        st.win_down,
+    );
+    if cfg.switch_preset == SwitchPreset::ShiftShift && double_shift {
+        trigger_ve_toggle(st, !cfg.vietnamese_enabled, notify_hwnd, should_beep, should_save, osd_next);
+        return Some(KeyDecision::Pass);
+    }
     if cfg.switch_preset == SwitchPreset::CtrlShift {
         if is_down && is_modifier_vk(vk) && st.ctrl_down && st.shift_down && !st.alt_down && !st.win_down {
             st.pending_ctrl_shift = true;
@@ -201,12 +221,24 @@ fn check_hotkey_decision(
             st.pending_ctrl_shift = false;
         } else if is_up && st.pending_ctrl_shift && is_modifier_vk(vk) {
             st.pending_ctrl_shift = false;
-            trigger_ve_toggle(st, !cfg.vietnamese_enabled, notify_hwnd, should_beep, should_save);
+            trigger_ve_toggle(st, !cfg.vietnamese_enabled, notify_hwnd, should_beep, should_save, osd_next);
             return Some(KeyDecision::Pass);
         }
     }
     if !is_down {
         return Some(KeyDecision::Pass);
+    }
+    let ctrl_space = cfg.switch_preset == SwitchPreset::CtrlSpace
+        && st.ctrl_down
+        && !st.alt_down
+        && !st.shift_down
+        && !st.win_down
+        && vk == 0x20;
+    if ctrl_space {
+        if crate::platform_extra::take_fresh_ctrl_space_press() {
+            trigger_ve_toggle(st, !cfg.vietnamese_enabled, notify_hwnd, should_beep, should_save, osd_next);
+        }
+        return Some(KeyDecision::Consume);
     }
     let alt_z = cfg.switch_preset == SwitchPreset::AltZ
         && st.alt_down
@@ -217,7 +249,7 @@ fn check_hotkey_decision(
     let custom_sw = cfg.switch_preset == SwitchPreset::Custom
         && combo_matches(&cfg.custom_switch_hotkey, st.ctrl_down, st.alt_down, st.shift_down, st.win_down, vk as u32);
     if alt_z || custom_sw {
-        trigger_ve_toggle(st, !cfg.vietnamese_enabled, notify_hwnd, should_beep, should_save);
+        trigger_ve_toggle(st, !cfg.vietnamese_enabled, notify_hwnd, should_beep, should_save, osd_next);
         return Some(KeyDecision::Consume);
     }
     if combo_matches(&cfg.clipboard_convert_hotkey, st.ctrl_down, st.alt_down, st.shift_down, st.win_down, vk as u32) {
@@ -230,13 +262,24 @@ fn check_hotkey_decision(
 
 fn dispatch_typing_key(st: &mut AppState, vk: u16, scan: u32) -> KeyDecision {
     let cfg = st.engine.config().clone();
-    if st.is_blacklisted() || (cfg.disable_on_non_us_layout && !st.fg_is_us) {
+    let us_layout = if cfg.disable_on_non_us_layout {
+        let live = crate::platform_extra::is_foreground_layout_us();
+        st.fg_is_us = live;
+        live
+    } else {
+        true
+    };
+    if st.is_blacklisted() || (cfg.disable_on_non_us_layout && !us_layout) {
         return KeyDecision::Pass;
     }
     if st.ctrl_down || st.alt_down || st.win_down {
         if !is_modifier_vk(vk) {
             st.engine.reset_word();
         }
+        return KeyDecision::Pass;
+    }
+    if crate::platform_extra::is_focused_password_field() {
+        st.engine.reset_all();
         return KeyDecision::Pass;
     }
     if vk == VK_BACK {
@@ -267,11 +310,39 @@ fn handle_key_event(vk: u16, scan: u32, is_down: bool, is_up: bool) -> KeyDecisi
     let cached_fg = with_state(|st| st.fg_hwnd);
     if fg_now != 0 && fg_now != cached_fg {
         refresh_foreground();
+        let sync_hw = with_state(|st| {
+            let cfg = st.engine.config().clone();
+            if cfg.smart_app_switch
+                && !st.fg_process.is_empty()
+                && cfg.behavior_for_app(&st.fg_process)
+                    == cfg.behavior_for_app("__mskey_no_rule__")
+            {
+                if let Some(mem_ve) =
+                    crate::platform_extra::recalled_app_ve_memory(&st.fg_process)
+                {
+                    if cfg.vietnamese_enabled != mem_ve {
+                        let mut next_cfg = cfg;
+                        next_cfg.vietnamese_enabled = mem_ve;
+                        st.engine.update_config(next_cfg);
+                        return Some(st.main_window());
+                    }
+                }
+            }
+            None
+        });
+        if let Some(hw) = sync_hw {
+            if !hw.is_null() {
+                unsafe {
+                    PostMessageW(hw, WM_APP_SYNC_UI, 0, 0);
+                }
+            }
+        }
     }
 
     let mut notify_hwnd: HWND = ptr::null_mut();
     let mut should_beep = false;
     let mut should_save = false;
+    let mut osd_next: Option<bool> = None;
 
     let decision = with_state(|st| {
         update_modifier_flags(st, vk, is_down);
@@ -286,6 +357,7 @@ fn handle_key_event(vk: u16, scan: u32, is_down: bool, is_up: bool) -> KeyDecisi
             &mut notify_hwnd,
             &mut should_beep,
             &mut should_save,
+            &mut osd_next,
         ) {
             return d;
         }
@@ -301,6 +373,14 @@ fn handle_key_event(vk: u16, scan: u32, is_down: bool, is_up: bool) -> KeyDecisi
     if !notify_hwnd.is_null() {
         unsafe {
             PostMessageW(notify_hwnd, WM_APP_SYNC_UI, 0, 0);
+            if let Some(is_vi) = osd_next {
+                PostMessageW(
+                    notify_hwnd,
+                    crate::state::WM_APP_SHOW_OSD,
+                    if is_vi { 1 } else { 0 },
+                    0,
+                );
+            }
         }
     }
     decision
@@ -330,43 +410,15 @@ fn is_reset_navigation_vk(vk: u16) -> bool {
     ) || (vk >= VK_F1 && vk <= VK_F24)
 }
 
-fn is_browser_class(class_name: &str) -> bool {
-    class_name.starts_with("Chrome_WidgetWin")
-        || class_name == "MozillaWindowClass"
-        || class_name == "ApplicationFrameWindow"
-}
-
 fn map_action(
     act: EngineAction,
     trailing_vk: Option<u16>,
     cfg: &mskey_core::Config,
     fg_class: &str,
 ) -> KeyDecision {
-    match act {
-        EngineAction::PassThrough => KeyDecision::Pass,
-        EngineAction::Replace { backspaces, mut text } => {
-            let mut send_trailing_vk = None;
-            if let Some(vk) = trailing_vk {
-                let delim_char = match vk {
-                    VK_RETURN => '\n',
-                    VK_TAB => '\t',
-                    _ => ' ',
-                };
-                if text.ends_with(delim_char) {
-                    text.pop();
-                    send_trailing_vk = Some(vk);
-                }
-            }
-            let browser = is_browser_class(fg_class);
-            KeyDecision::Inject(ReplacePayload {
-                backspaces,
-                text,
-                trailing_vk: send_trailing_vk,
-                browser_suggest_1: browser && cfg.fix_browser_suggest_1,
-                browser_suggest_2: browser && cfg.fix_browser_suggest_2,
-                use_clipboard: cfg.use_clipboard_send,
-            })
-        }
+    match crate::hook_send::build_replace_payload(act, trailing_vk, cfg, fg_class) {
+        Some(p) => KeyDecision::Inject(p),
+        None => KeyDecision::Pass,
     }
 }
 

@@ -35,6 +35,7 @@ public final class RustEngine: @unchecked Sendable {
         } else {
             self.handle = mskey_create(nil)
         }
+        syncClockOffset()
     }
 
     deinit {
@@ -76,7 +77,24 @@ public final class RustEngine: @unchecked Sendable {
         lock.lock()
         defer { lock.unlock() }
         guard let h = handle else { return false }
-        return json.withCString { mskey_set_config_json(h, $0) }
+        let ok = json.withCString { mskey_set_config_json(h, $0) }
+        mskey_set_clock_offset(h, Int64(TimeZone.current.secondsFromGMT()))
+        return ok
+    }
+
+    public func syncClockOffset() {
+        lock.lock()
+        defer { lock.unlock() }
+        if let h = handle {
+            mskey_set_clock_offset(h, Int64(TimeZone.current.secondsFromGMT()))
+        }
+    }
+
+    public func isActiveDelimiter(scalar: UInt32) -> Bool {
+        lock.lock()
+        defer { lock.unlock() }
+        guard let h = handle else { return false }
+        return mskey_is_active_delimiter(h, scalar)
     }
 
     public func setEnabled(_ enabled: Bool) {
@@ -160,6 +178,51 @@ public final class RustEngine: @unchecked Sendable {
             }
             defer { mskey_free_string(out) }
             return String(cString: out)
+        }
+    }
+
+    public static func detectCharset(_ input: String) -> ConvertEncodingKind {
+        let code = input.withCString { mskey_detect_charset($0) }
+        return ConvertEncodingKind(rawValue: code) ?? .unicode
+    }
+
+    public static func convertWithEncoding(
+        _ input: String,
+        from: ConvertEncodingKind,
+        to: ConvertEncodingKind,
+        caseMode: UInt8 = 0
+    ) -> String {
+        let src = from == .auto ? detectCharset(input) : from
+        let dst = to == .auto ? .unicode : to
+        return input.withCString { ptr in
+            guard let out = mskey_convert_with_encoding(ptr, src.rawValue, dst.rawValue, caseMode) else {
+                return input
+            }
+            defer { mskey_free_string(out) }
+            return String(cString: out)
+        }
+    }
+
+    public static func formatMacroText(config: MSKeyConfig) -> String {
+        let enc = JSONEncoder()
+        guard let data = try? enc.encode(config),
+              let json = String(data: data, encoding: .utf8) else {
+            return ""
+        }
+        return json.withCString { ptr in
+            guard let out = mskey_format_macro_text(ptr) else { return "" }
+            defer { mskey_free_string(out) }
+            return String(cString: out)
+        }
+    }
+
+    public static func parseMacroText(_ rawText: String) -> [MacroItem] {
+        rawText.withCString { ptr in
+            guard let out = mskey_parse_macro_text(ptr) else { return [] }
+            defer { mskey_free_string(out) }
+            let jsonStr = String(cString: out)
+            guard let data = jsonStr.data(using: .utf8) else { return [] }
+            return (try? JSONDecoder().decode([MacroItem].self, from: data)) ?? []
         }
     }
 

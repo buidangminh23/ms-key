@@ -183,11 +183,18 @@ pub fn is_valid_complete_syllable(syllable: &ParsedSyllable, allow_fjwz: bool) -
         if !rule.open_allowed {
             return false;
         }
+    } else if syllable.onset == "qu" && bases == [BaseVowel::Y] {
+        if !CODAS_QU_Y.contains(&syllable.coda.as_str()) {
+            return false;
+        }
+    } else if syllable.onset == "gi" && bases == [BaseVowel::ECircumflex] {
+        if !rule.codas.contains(&syllable.coda.as_str())
+            && !matches!(syllable.coda.as_str(), "c" | "ng")
+        {
+            return false;
+        }
     } else if !rule.codas.contains(&syllable.coda.as_str()) {
         return false;
-    }
-    if syllable.onset == "qu" && !syllable.coda.is_empty() && bases == [BaseVowel::Y] {
-        return CODAS_QU_Y.contains(&syllable.coda.as_str());
     }
     if is_checked_coda(&syllable.coda)
         && !matches!(syllable.active_tone, Tone::Acute | Tone::DotBelow)
@@ -218,6 +225,12 @@ pub fn is_valid_typing_prefix(syllable: &ParsedSyllable, allow_fjwz: bool) -> bo
         return false;
     };
     if syllable.coda.is_empty() {
+        return true;
+    }
+    if syllable.onset == "gi"
+        && matches!(bases.as_slice(), [BaseVowel::E] | [BaseVowel::ECircumflex])
+        && matches!(syllable.coda.as_str(), "c" | "n" | "ng")
+    {
         return true;
     }
     rule.codas

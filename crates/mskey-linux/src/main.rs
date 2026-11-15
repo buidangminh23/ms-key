@@ -15,6 +15,9 @@ fn run_platform(args: &[String]) -> i32 {
         let out = args.get(pos + 1).map(|s| s.as_str()).unwrap_or("smoke_linux.txt");
         return mskey_linux::gtk_ui::run_setup_ui(Some(out));
     }
+    if args.iter().any(|a| a == "--autostart") && !mskey_linux::config_store::load_config().show_on_startup {
+        return 0;
+    }
     mskey_linux::gtk_ui::run_setup_ui(None)
 }
 

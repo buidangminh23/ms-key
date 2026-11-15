@@ -68,13 +68,18 @@ public struct SettingsTabsView: View {
         VStack(alignment: .leading, spacing: 12) {
             GroupBox("Phím chuyển V/E") {
                 VStack(alignment: .leading, spacing: 8) {
-                    Picker("Chuyển V/E", selection: binding(\.switch_preset)) {
-                        Text("Ctrl + Shift").tag(SwitchPresetKind.ctrlShift)
-                        Text("Alt / Option + Z").tag(SwitchPresetKind.altZ)
-                        Text("Phím tùy chọn").tag(SwitchPresetKind.custom)
+                    Grid(alignment: .leading, horizontalSpacing: 16, verticalSpacing: 6) {
+                        GridRow {
+                            presetOption("Ctrl + Shift", .ctrlShift)
+                            presetOption("Alt / Option + Z", .altZ)
+                            presetOption("Ctrl + Space", .ctrlSpace)
+                        }
+                        GridRow {
+                            presetOption("Shift + Shift", .shiftShift)
+                            presetOption("Phím tùy chọn", .custom)
+                            Color.clear.frame(width: 1, height: 1)
+                        }
                     }
-                    .pickerStyle(.radioGroup)
-                    .horizontalRadioGroupLayout()
 
                     HStack(spacing: 8) {
                         Text("Tổ hợp tùy chọn: \(store.config.custom_switch_hotkey.displayText)")
@@ -92,6 +97,7 @@ public struct SettingsTabsView: View {
 
             Toggle("Phím Esc khôi phục từ gốc", isOn: binding(\.esc_restore))
             Toggle("Âm thanh báo khi chuyển V/E", isOn: binding(\.beep_on_switch))
+            Toggle("Hiện OSD nổi khi chuyển V/E", isOn: binding(\.show_switch_osd))
 
             GroupBox("Chuyển mã & Nhập EVKey") {
                 VStack(alignment: .leading, spacing: 8) {
@@ -176,9 +182,36 @@ public struct SettingsTabsView: View {
                 }
                 .padding(8)
             }
+
+            HStack(spacing: 8) {
+                Button("Mở rộng & Gõ thử...") {
+                    store.openSheet(.extras)
+                }
+                .frame(height: 28)
+                Button("Từ điển cá nhân...") {
+                    store.openSheet(.userDict)
+                }
+                .frame(height: 28)
+                Spacer()
+            }
             Spacer(minLength: 0)
         }
         .padding(12)
+    }
+
+    private func presetOption(_ title: String, _ preset: SwitchPresetKind) -> some View {
+        Button {
+            store.updateConfig { $0.switch_preset = preset }
+        } label: {
+            HStack(spacing: 6) {
+                Image(systemName: store.config.switch_preset == preset ? "largecircle.fill.circle" : "circle")
+                    .foregroundStyle(store.config.switch_preset == preset ? Color.accentColor : Color.secondary)
+                Text(title)
+                    .foregroundStyle(.primary)
+            }
+            .contentShape(Rectangle())
+        }
+        .buttonStyle(.plain)
     }
 
     private func binding<T>(_ keyPath: WritableKeyPath<MSKeyConfig, T>) -> Binding<T> {

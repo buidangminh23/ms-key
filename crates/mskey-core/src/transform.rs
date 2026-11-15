@@ -12,11 +12,12 @@ pub enum KeyRole {
     RemoveTone,
     Circumflex(Option<VowelFamily>),
     Breve,
-    Horn,
-    HornOrBreve,
+    Horn(Option<VowelFamily>),
+    HornOrBreve(Option<VowelFamily>),
     DStroke,
     QuickOHornBracket,
     QuickUHornBracket,
+    QuickUHornStandalone,
 }
 
 pub fn classify_key(ch: char, config: &Config) -> KeyRole {
@@ -49,7 +50,7 @@ fn classify_telex(ch: char, lower: char, quick_brackets: bool) -> KeyRole {
         'a' => KeyRole::Circumflex(Some(VowelFamily::A)),
         'e' => KeyRole::Circumflex(Some(VowelFamily::E)),
         'o' => KeyRole::Circumflex(Some(VowelFamily::O)),
-        'w' => KeyRole::HornOrBreve,
+        'w' => KeyRole::HornOrBreve(None),
         'd' => KeyRole::DStroke,
         _ => KeyRole::Normal,
     }
@@ -66,7 +67,7 @@ fn classify_simple_telex(lower: char) -> KeyRole {
         'a' => KeyRole::Circumflex(Some(VowelFamily::A)),
         'e' => KeyRole::Circumflex(Some(VowelFamily::E)),
         'o' => KeyRole::Circumflex(Some(VowelFamily::O)),
-        'w' => KeyRole::HornOrBreve,
+        'w' => KeyRole::HornOrBreve(None),
         'd' => KeyRole::DStroke,
         _ => KeyRole::Normal,
     }
@@ -81,7 +82,7 @@ fn classify_vni(ch: char) -> KeyRole {
         '5' => KeyRole::Tone(Tone::DotBelow),
         '0' => KeyRole::RemoveTone,
         '6' => KeyRole::Circumflex(None),
-        '7' => KeyRole::Horn,
+        '7' => KeyRole::Horn(None),
         '8' => KeyRole::Breve,
         '9' => KeyRole::DStroke,
         _ => KeyRole::Normal,
@@ -97,7 +98,7 @@ fn classify_viqr(ch: char, lower: char) -> KeyRole {
         '.' => KeyRole::Tone(Tone::DotBelow),
         '-' => KeyRole::RemoveTone,
         '^' => KeyRole::Circumflex(None),
-        '+' => KeyRole::Horn,
+        '+' => KeyRole::Horn(None),
         '(' => KeyRole::Breve,
         _ if lower == 'd' => KeyRole::DStroke,
         _ => KeyRole::Normal,
@@ -107,41 +108,53 @@ fn classify_viqr(ch: char, lower: char) -> KeyRole {
 fn classify_custom(ch: char, lower: char, config: &Config) -> KeyRole {
     let map = &config.custom_keymap;
     if config.quick_brackets {
-        if ch == map.quick_o_horn_key {
+        if ch == map.quick_o_horn_key || (map.quick_o_horn_key == '[' && ch == '{') {
             return KeyRole::QuickOHornBracket;
         }
-        if ch == map.quick_u_horn_key {
+        if ch == map.quick_u_horn_key || (map.quick_u_horn_key == ']' && ch == '}') {
             return KeyRole::QuickUHornBracket;
         }
     }
     if lower == map.acute.to_ascii_lowercase() {
-        KeyRole::Tone(Tone::Acute)
+        return KeyRole::Tone(Tone::Acute);
     } else if lower == map.grave.to_ascii_lowercase() {
-        KeyRole::Tone(Tone::Grave)
+        return KeyRole::Tone(Tone::Grave);
     } else if lower == map.hook.to_ascii_lowercase() {
-        KeyRole::Tone(Tone::HookAbove)
+        return KeyRole::Tone(Tone::HookAbove);
     } else if lower == map.tilde.to_ascii_lowercase() {
-        KeyRole::Tone(Tone::Tilde)
+        return KeyRole::Tone(Tone::Tilde);
     } else if lower == map.dot.to_ascii_lowercase() {
-        KeyRole::Tone(Tone::DotBelow)
+        return KeyRole::Tone(Tone::DotBelow);
     } else if lower == map.remove_tone.to_ascii_lowercase() {
-        KeyRole::RemoveTone
+        return KeyRole::RemoveTone;
     } else if lower == map.circumflex_a.to_ascii_lowercase() {
-        KeyRole::Circumflex(Some(VowelFamily::A))
+        return KeyRole::Circumflex(Some(VowelFamily::A));
     } else if lower == map.circumflex_e.to_ascii_lowercase() {
-        KeyRole::Circumflex(Some(VowelFamily::E))
+        return KeyRole::Circumflex(Some(VowelFamily::E));
     } else if lower == map.circumflex_o.to_ascii_lowercase() {
-        KeyRole::Circumflex(Some(VowelFamily::O))
-    } else if lower == map.horn_o.to_ascii_lowercase()
-        && lower == map.breve_a.to_ascii_lowercase()
-    {
-        KeyRole::HornOrBreve
-    } else if lower == map.horn_o.to_ascii_lowercase() || lower == map.horn_u.to_ascii_lowercase() {
-        KeyRole::Horn
-    } else if lower == map.breve_a.to_ascii_lowercase() {
-        KeyRole::Breve
+        return KeyRole::Circumflex(Some(VowelFamily::O));
     } else if lower == map.d_stroke.to_ascii_lowercase() {
-        KeyRole::DStroke
+        return KeyRole::DStroke;
+    }
+    let is_ho = lower == map.horn_o.to_ascii_lowercase();
+    let is_hu = lower == map.horn_u.to_ascii_lowercase();
+    let is_ba = lower == map.breve_a.to_ascii_lowercase();
+    if is_ho && is_hu && is_ba {
+        KeyRole::HornOrBreve(None)
+    } else if is_ho && is_ba {
+        KeyRole::HornOrBreve(Some(VowelFamily::O))
+    } else if is_hu && is_ba {
+        KeyRole::HornOrBreve(Some(VowelFamily::U))
+    } else if is_ho && is_hu {
+        KeyRole::Horn(None)
+    } else if is_ho {
+        KeyRole::Horn(Some(VowelFamily::O))
+    } else if is_hu {
+        KeyRole::Horn(Some(VowelFamily::U))
+    } else if is_ba {
+        KeyRole::Breve
+    } else if config.quick_w_to_u_horn && lower == map.quick_u_horn.to_ascii_lowercase() {
+        KeyRole::QuickUHornStandalone
     } else {
         KeyRole::Normal
     }
@@ -257,7 +270,15 @@ pub fn try_apply_breve(chars: &mut Vec<char>, config: &Config) -> TransformOutco
 }
 
 pub fn try_apply_horn(chars: &mut Vec<char>, config: &Config) -> TransformOutcome {
-    if let Some(outcome) = try_apply_uo_compound_horn(chars, config) {
+    try_apply_horn_family(chars, None, config)
+}
+
+pub fn try_apply_horn_family(
+    chars: &mut Vec<char>,
+    family_filter: Option<VowelFamily>,
+    config: &Config,
+) -> TransformOutcome {
+    if let Some(outcome) = try_apply_uo_compound_horn(chars, family_filter, config) {
         return outcome;
     }
     let mut candidate = chars.clone();
@@ -270,10 +291,15 @@ pub fn try_apply_horn(chars: &mut Vec<char>, config: &Config) -> TransformOutcom
         let Some((base, tone, upper)) = decode_vowel(candidate[idx]) else {
             continue;
         };
-        if !matches!(base_family(base), VowelFamily::O | VowelFamily::U) {
+        let fam = base_family(base);
+        if let Some(target_fam) = family_filter {
+            if fam != target_fam {
+                continue;
+            }
+        } else if !matches!(fam, VowelFamily::O | VowelFamily::U) {
             continue;
         }
-        if idx == 1 && candidate[0].eq_ignore_ascii_case(&'q') && base_family(base) == VowelFamily::U {
+        if idx == 1 && candidate[0].eq_ignore_ascii_case(&'q') && fam == VowelFamily::U {
             continue;
         }
         let Some((next_base, applied)) = toggle_horn(base) else {
@@ -295,7 +321,11 @@ pub fn try_apply_horn(chars: &mut Vec<char>, config: &Config) -> TransformOutcom
     TransformOutcome::Ignored
 }
 
-fn try_apply_uo_compound_horn(chars: &mut Vec<char>, config: &Config) -> Option<TransformOutcome> {
+fn try_apply_uo_compound_horn(
+    chars: &mut Vec<char>,
+    family_filter: Option<VowelFamily>,
+    config: &Config,
+) -> Option<TransformOutcome> {
     let parsed = parse_syllable(chars, config.allow_fjwz)?;
     if parsed.vowels.len() < 2 {
         return None;
@@ -304,26 +334,50 @@ fn try_apply_uo_compound_horn(chars: &mut Vec<char>, config: &Config) -> Option<
     for pos in 0..parsed.vowels.len() - 1 {
         let (b0, t0, u0) = parsed.vowels[pos];
         let (b1, t1, u1) = parsed.vowels[pos + 1];
-        if base_family(b0) == VowelFamily::U && base_family(b1) == VowelFamily::O {
-            let i0 = vs + pos;
-            let i1 = vs + pos + 1;
-            if !config.free_tone && i1 + 1 < chars.len() {
-                continue;
-            }
-            let mut candidate = chars.clone();
-            if b0 == BaseVowel::UHorn && b1 == BaseVowel::OHorn {
-                candidate[i0] = encode_vowel(BaseVowel::U, t0, u0);
+        if base_family(b0) != VowelFamily::U || base_family(b1) != VowelFamily::O {
+            continue;
+        }
+        let i0 = vs + pos;
+        let i1 = vs + pos + 1;
+        if !config.free_tone && i1 + 1 < chars.len() {
+            continue;
+        }
+        let mut candidate = chars.clone();
+        if b0 == BaseVowel::UHorn && b1 == BaseVowel::OHorn {
+            candidate[i0] = encode_vowel(BaseVowel::U, t0, u0);
+            candidate[i1] = encode_vowel(BaseVowel::O, t1, u1);
+            *chars = candidate;
+            return Some(TransformOutcome::Reverted);
+        }
+        if b0 == BaseVowel::U && b1 == BaseVowel::OHorn {
+            if family_filter == Some(VowelFamily::U) {
+                candidate[i0] = encode_vowel(BaseVowel::UHorn, t0, u0);
+                if validate_candidate(&candidate, config) {
+                    reanchor_tone(&mut candidate, config);
+                    *chars = candidate;
+                    return Some(TransformOutcome::Applied);
+                }
+            } else {
                 candidate[i1] = encode_vowel(BaseVowel::O, t1, u1);
                 *chars = candidate;
                 return Some(TransformOutcome::Reverted);
             }
-            candidate[i0] = encode_vowel(BaseVowel::UHorn, t0, u0);
+        }
+        if i1 + 1 == chars.len() && family_filter != Some(VowelFamily::U) {
             candidate[i1] = encode_vowel(BaseVowel::OHorn, t1, u1);
             if validate_candidate(&candidate, config) {
                 reanchor_tone(&mut candidate, config);
                 *chars = candidate;
                 return Some(TransformOutcome::Applied);
             }
+            candidate[i1] = chars[i1];
+        }
+        candidate[i0] = encode_vowel(BaseVowel::UHorn, t0, u0);
+        candidate[i1] = encode_vowel(BaseVowel::OHorn, t1, u1);
+        if validate_candidate(&candidate, config) {
+            reanchor_tone(&mut candidate, config);
+            *chars = candidate;
+            return Some(TransformOutcome::Applied);
         }
     }
     None

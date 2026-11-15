@@ -1,12 +1,17 @@
-use mskey_core::{AppBehavior, Config, HotkeyCombo, Mechanism, SwitchPreset};
-use mskey_linux::config_store::{parse_ibus_bus_file, render_ibus_component_xml};
+use mskey_core::{AppBehavior, Config, HotkeyCombo, InputMethod, Mechanism, SwitchPreset};
+use mskey_linux::config_store::{parse_ibus_bus_file, parse_tz_offset, render_ibus_component_xml};
 use mskey_linux::ibus_logic::{
     IBUS_CAP_PREEDIT_TEXT, IBUS_CAP_SURROUNDING_TEXT, IbusOp, IbusSession,
 };
 use mskey_linux::keyval::{
     HotkeySignal, HotkeyTracker, IBUS_CONTROL_MASK, IBUS_MOD1_MASK, IBUS_RELEASE_MASK,
-    IBUS_SHIFT_MASK, KEY_BACKSPACE, KEY_CONTROL_L, KEY_ESCAPE, KEY_RETURN, KEY_SHIFT_L,
-    format_hotkey_linux, gdk_keyval_matches_vk, gdk_keyval_to_vk, keyval_to_char,
+    IBUS_SHIFT_MASK, KEY_BACKSPACE, KEY_CONTROL_L, KEY_ESCAPE, KEY_KP_SPACE, KEY_RETURN,
+    KEY_RIGHT, KEY_SHIFT_L, format_hotkey_linux, gdk_keyval_matches_vk, gdk_keyval_to_vk,
+    keyval_to_char,
+};
+use mskey_linux::linux_extra::{
+    is_browser_app, is_terminal_app, is_us_xkb_layout, parse_gnome_eval_class,
+    parse_gnome_mru_xkb, parse_hypr_active_class, parse_setxkbmap_layout, parse_sway_focused_app,
 };
 
 fn type_preedit_string(sess: &mut IbusSession, s: &str) -> Vec<String> {
@@ -32,12 +37,12 @@ fn preedit_typing_tieng_viet_and_english_restore() {
     let committed = type_preedit_string(&mut sess, "tieengs Vieejt ");
     assert_eq!(committed.concat(), "tiếng Việt ");
 
-    let res_t = sess.process_key('t' as u32, 0, 0);
-    assert!(res_t.handled);
-    assert_eq!(res_t.ops, vec![IbusOp::UpdatePreedit("t".to_string())]);
+    let res_w = sess.process_key('w' as u32, 0, 0);
+    assert!(res_w.handled);
+    assert_eq!(res_w.ops, vec![IbusOp::UpdatePreedit("ư".to_string())]);
 
-    let eng = type_preedit_string(&mut sess, "esst ");
-    assert_eq!(eng.concat(), "tesst ");
+    let eng = type_preedit_string(&mut sess, "indow ");
+    assert_eq!(eng.concat(), "window ");
 }
 
 #[test]
@@ -65,6 +70,7 @@ fn preedit_backspace_and_escape_restore() {
 fn direct_surrounding_and_forward_key_fallback() {
     let mut cfg = Config::default();
     cfg.mechanism = Mechanism::CompatibleHook;
+    cfg.send_delay_ms = 0;
     let mut sess = IbusSession::new(cfg.clone());
     sess.set_capabilities(IBUS_CAP_SURROUNDING_TEXT);
 
@@ -157,4 +163,142 @@ fn focus_in_app_rules_and_bus_xml_parsing() {
     assert!(xml.contains("<name>mskey</name>"));
     assert!(xml.contains("<rank>99</rank>"));
     assert!(!xml.contains("AppData"));
+}
+
+#[test]
+fn hotkey_tracker_ctrl_space_shift_shift_and_punctuation() {
+    let mut tracker = HotkeyTracker::default();
+    let custom = HotkeyCombo::default();
+    let conv = HotkeyCombo::default();
+
+    assert_eq!(
+        tracker.process_key(SwitchPreset::CtrlSpace, custom, conv, b' ' as u32, IBUS_CONTROL_MASK),
+        HotkeySignal::ToggleVe
+    );
+    assert_eq!(
+        tracker.process_key(SwitchPreset::CtrlSpace, custom, conv, KEY_KP_SPACE, IBUS_CONTROL_MASK),
+        HotkeySignal::ToggleVe
+    );
+    assert_eq!(
+        tracker.process_key(
+            SwitchPreset::CtrlSpace,
+            custom,
+            conv,
+            b' ' as u32,
+            IBUS_CONTROL_MASK | IBUS_MOD1_MASK
+        ),
+        HotkeySignal::None
+    );
+
+    assert_eq!(tracker.process_key(SwitchPreset::ShiftShift, custom, conv, KEY_SHIFT_L, 0), HotkeySignal::None);
+    assert_eq!(
+        tracker.process_key(
+            SwitchPreset::ShiftShift,
+            custom,
+            conv,
+            KEY_SHIFT_L,
+            IBUS_SHIFT_MASK | IBUS_RELEASE_MASK
+        ),
+        HotkeySignal::None
+    );
+    assert_eq!(tracker.process_key(SwitchPreset::ShiftShift, custom, conv, KEY_SHIFT_L, 0), HotkeySignal::None);
+    assert_eq!(
+        tracker.process_key(
+            SwitchPreset::ShiftShift,
+            custom,
+            conv,
+            KEY_SHIFT_L,
+            IBUS_SHIFT_MASK | IBUS_RELEASE_MASK
+        ),
+        HotkeySignal::ToggleVe
+    );
+
+    assert_eq!(tracker.process_key(SwitchPreset::ShiftShift, custom, conv, KEY_SHIFT_L, 0), HotkeySignal::None);
+    assert_eq!(
+        tracker.process_key(SwitchPreset::ShiftShift, custom, conv, b'A' as u32, IBUS_SHIFT_MASK),
+        HotkeySignal::None
+    );
+    assert_eq!(
+        tracker.process_key(
+            SwitchPreset::ShiftShift,
+            custom,
+            conv,
+            KEY_SHIFT_L,
+            IBUS_SHIFT_MASK | IBUS_RELEASE_MASK
+        ),
+        HotkeySignal::None
+    );
+
+    assert_eq!(gdk_keyval_to_vk(b'[' as u32), 0xDB);
+    assert!(gdk_keyval_matches_vk(0xBA, b';' as u32));
+    assert_eq!(keyval_to_char(KEY_KP_SPACE), Some(' '));
+    let semi = HotkeyCombo { ctrl: true, shift: false, alt: false, win_cmd: false, key_code: 0xBA };
+    assert_eq!(format_hotkey_linux(semi), "Ctrl + ;");
+}
+
+#[test]
+fn config_store_tz_and_wayland_parsers() {
+    assert_eq!(parse_tz_offset("+0700"), Some(25_200));
+    assert_eq!(parse_tz_offset("-05:30"), Some(-19_800));
+    assert_eq!(parse_tz_offset("bad"), None);
+
+    assert_eq!(parse_hypr_active_class(r#"{"class":"firefox","title":"Docs"}"#).as_deref(), Some("firefox"));
+    assert_eq!(
+        parse_sway_focused_app(r#"{"nodes":[{"focused":false,"nodes":[{"focused":true,"app_id":"foot"}]}]}"#).as_deref(),
+        Some("foot")
+    );
+    assert_eq!(parse_gnome_eval_class(r#"(true, '"Alacritty"')"#).as_deref(), Some("Alacritty"));
+    assert_eq!(parse_setxkbmap_layout("rules: evdev\nlayout: us,vn\n").as_deref(), Some("us"));
+    assert_eq!(parse_gnome_mru_xkb("[('xkb', 'vn'), ('ibus', 'mskey')]").as_deref(), Some("vn"));
+    assert!(is_us_xkb_layout("us"));
+    assert!(!is_us_xkb_layout("vn"));
+    assert!(is_browser_app("firefox"));
+    assert!(is_terminal_app("Alacritty"));
+}
+
+#[test]
+fn preedit_active_delimiter_and_direct_ops() {
+    let mut cfg = Config::default();
+    cfg.quick_brackets = true;
+    let mut pre = IbusSession::new(cfg.clone());
+    pre.set_capabilities(IBUS_CAP_PREEDIT_TEXT);
+    assert!(pre.process_key('[' as u32, 0, 0).ops.contains(&IbusOp::UpdatePreedit("ơ".to_string())));
+
+    cfg.input_method = InputMethod::Viqr;
+    cfg.quick_brackets = false;
+    let mut viqr = IbusSession::new(cfg.clone());
+    viqr.set_capabilities(IBUS_CAP_PREEDIT_TEXT);
+    let _ = viqr.process_key('a' as u32, 0, 0);
+    assert!(viqr.process_key('^' as u32, 0, 0).ops.contains(&IbusOp::UpdatePreedit("â".to_string())));
+
+    let mut dcfg = Config::default();
+    dcfg.mechanism = Mechanism::CompatibleHook;
+    dcfg.disable_on_non_us_layout = true;
+    dcfg.fix_browser_suggest_1 = true;
+    dcfg.fix_browser_suggest_2 = true;
+    dcfg.use_clipboard_send = true;
+    dcfg.show_switch_osd = true;
+
+    let mut sess = IbusSession::new(dcfg);
+    sess.set_capabilities(IBUS_CAP_SURROUNDING_TEXT);
+    sess.set_us_layout(false);
+    let _ = sess.process_key('a' as u32, 0, 0);
+    assert!(!sess.process_key('s' as u32, 0, 0).handled);
+
+    sess.set_us_layout(true);
+    let _ = sess.focus_in("firefox");
+    let _ = sess.process_key('a' as u32, 0, 0);
+    let r = sess.process_key('s' as u32, 0, 0);
+    assert!(r.handled);
+    assert!(r.ops.contains(&IbusOp::CommitText("\u{200B}".to_string())));
+    assert!(r.ops.contains(&IbusOp::ForwardKey(KEY_RIGHT, 114, 0)));
+    assert!(r.ops.contains(&IbusOp::PasteViaClipboard("á".to_string(), false)));
+    assert!(r.ops.contains(&IbusOp::Delay(2)));
+
+    let mut osd_cfg = Config::default();
+    osd_cfg.switch_preset = SwitchPreset::AltZ;
+    osd_cfg.show_switch_osd = true;
+    let mut osd_sess = IbusSession::new(osd_cfg);
+    let t2 = osd_sess.process_key(b'z' as u32, 0, IBUS_MOD1_MASK);
+    assert!(t2.ops.contains(&IbusOp::ShowOsd(false)));
 }

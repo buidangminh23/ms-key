@@ -3,10 +3,85 @@ use std::ptr;
 use mskey_core::{Charset, Config, InputMethod, Mechanism};
 
 use crate::gio_ffi::{
-    GDBusConnection, GVariant, cstr, g_dbus_connection_emit_signal, g_variant_new_array,
-    g_variant_new_boolean, g_variant_new_int32, g_variant_new_string, g_variant_new_tuple,
-    g_variant_new_uint32, g_variant_new_variant, g_variant_type_free, g_variant_type_new,
+    GDBusConnection, GVariant, cstr, from_cstr, g_dbus_connection_emit_signal,
+    g_variant_get_child_value, g_variant_get_int32, g_variant_get_string, g_variant_get_uint32,
+    g_variant_get_variant, g_variant_n_children, g_variant_new_array, g_variant_new_boolean,
+    g_variant_new_int32, g_variant_new_string, g_variant_new_tuple, g_variant_new_uint32,
+    g_variant_new_variant, g_variant_type_free, g_variant_type_new, g_variant_unref,
 };
+
+pub unsafe fn extract_u32_arg(params: *mut GVariant, idx: usize) -> Option<u32> {
+    if unsafe { g_variant_n_children(params) } <= idx {
+        return None;
+    }
+    unsafe {
+        let v = g_variant_get_child_value(params, idx);
+        let val = g_variant_get_uint32(v);
+        g_variant_unref(v);
+        Some(val)
+    }
+}
+
+pub unsafe fn extract_str_arg(params: *mut GVariant, idx: usize) -> Option<String> {
+    if unsafe { g_variant_n_children(params) } <= idx {
+        return None;
+    }
+    unsafe {
+        let v = g_variant_get_child_value(params, idx);
+        let s = from_cstr(g_variant_get_string(v, ptr::null_mut()));
+        g_variant_unref(v);
+        Some(s)
+    }
+}
+
+pub unsafe fn extract_cursor_rect(params: *mut GVariant) -> Option<(i32, i32, i32, i32)> {
+    if unsafe { g_variant_n_children(params) } < 4 {
+        return None;
+    }
+    unsafe {
+        let v0 = g_variant_get_child_value(params, 0);
+        let v1 = g_variant_get_child_value(params, 1);
+        let v2 = g_variant_get_child_value(params, 2);
+        let v3 = g_variant_get_child_value(params, 3);
+        let r = (
+            g_variant_get_int32(v0),
+            g_variant_get_int32(v1),
+            g_variant_get_int32(v2),
+            g_variant_get_int32(v3),
+        );
+        g_variant_unref(v0);
+        g_variant_unref(v1);
+        g_variant_unref(v2);
+        g_variant_unref(v3);
+        Some(r)
+    }
+}
+
+pub unsafe fn extract_surrounding_args(params: *mut GVariant) -> Option<(String, u32)> {
+    if unsafe { g_variant_n_children(params) } < 2 {
+        return None;
+    }
+    unsafe {
+        let v0 = g_variant_get_child_value(params, 0);
+        let v1 = g_variant_get_child_value(params, 1);
+        let inner = g_variant_get_variant(v0);
+        let cursor = g_variant_get_uint32(v1);
+        let text = if !inner.is_null() && g_variant_n_children(inner) >= 3 {
+            let s_val = g_variant_get_child_value(inner, 2);
+            let s = from_cstr(g_variant_get_string(s_val, ptr::null_mut()));
+            g_variant_unref(s_val);
+            s
+        } else {
+            String::new()
+        };
+        if !inner.is_null() {
+            g_variant_unref(inner);
+        }
+        g_variant_unref(v0);
+        g_variant_unref(v1);
+        Some((text, cursor))
+    }
+}
 
 pub fn emit_signal(conn: *mut GDBusConnection, path: &str, name: &str, params: *mut GVariant) {
     let c_path = cstr(path);
@@ -82,10 +157,12 @@ pub fn register_panel_properties(conn: *mut GDBusConnection, path: &str, cfg: &C
             build_property("Method.Vni", 2, "VNI", "", cfg.input_method == InputMethod::Vni, build_prop_list(&[])),
             build_property("Method.Viqr", 2, "VIQR", "", cfg.input_method == InputMethod::Viqr, build_prop_list(&[])),
             build_property("Method.Simple", 2, "Simple Telex", "", cfg.input_method == InputMethod::SimpleTelex, build_prop_list(&[])),
+            build_property("Method.Custom", 2, "Tự định nghĩa", "", cfg.input_method == InputMethod::Custom, build_prop_list(&[])),
             build_property("Sep1", 4, "", "", false, build_prop_list(&[])),
             build_property("Charset.Unicode", 2, "Bảng mã: Unicode", "", cfg.charset == Charset::Unicode, build_prop_list(&[])),
             build_property("Charset.Tcvn3", 2, "Bảng mã: TCVN3 (ABC)", "", cfg.charset == Charset::Tcvn3, build_prop_list(&[])),
             build_property("Charset.Vni", 2, "Bảng mã: VNI Windows", "", cfg.charset == Charset::VniWindows, build_prop_list(&[])),
+            build_property("Charset.Comp", 2, "Bảng mã: Unicode tổ hợp", "", cfg.charset == Charset::UnicodeComposite, build_prop_list(&[])),
             build_property("Sep2", 4, "", "", false, build_prop_list(&[])),
             build_property("Mech.Preedit", 2, "Cơ chế: Preedit (Wayland/GTK)", "", cfg.mechanism == Mechanism::KeyboardHook, build_prop_list(&[])),
             build_property("Mech.Direct", 2, "Cơ chế: Tương thích trực tiếp", "", cfg.mechanism == Mechanism::CompatibleHook, build_prop_list(&[])),

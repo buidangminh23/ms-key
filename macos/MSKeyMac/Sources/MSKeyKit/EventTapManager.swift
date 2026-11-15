@@ -3,78 +3,6 @@ import ApplicationServices
 import Carbon
 import Foundation
 
-public enum MacKeycode {
-    public static func toPortableVK(_ keyCode: UInt16) -> UInt32 {
-        switch Int(keyCode) {
-        case kVK_ANSI_A: return 0x41
-        case kVK_ANSI_B: return 0x42
-        case kVK_ANSI_C: return 0x43
-        case kVK_ANSI_D: return 0x44
-        case kVK_ANSI_E: return 0x45
-        case kVK_ANSI_F: return 0x46
-        case kVK_ANSI_G: return 0x47
-        case kVK_ANSI_H: return 0x48
-        case kVK_ANSI_I: return 0x49
-        case kVK_ANSI_J: return 0x4A
-        case kVK_ANSI_K: return 0x4B
-        case kVK_ANSI_L: return 0x4C
-        case kVK_ANSI_M: return 0x4D
-        case kVK_ANSI_N: return 0x4E
-        case kVK_ANSI_O: return 0x4F
-        case kVK_ANSI_P: return 0x50
-        case kVK_ANSI_Q: return 0x51
-        case kVK_ANSI_R: return 0x52
-        case kVK_ANSI_S: return 0x53
-        case kVK_ANSI_T: return 0x54
-        case kVK_ANSI_U: return 0x55
-        case kVK_ANSI_V: return 0x56
-        case kVK_ANSI_W: return 0x57
-        case kVK_ANSI_X: return 0x58
-        case kVK_ANSI_Y: return 0x59
-        case kVK_ANSI_Z: return 0x5A
-        case kVK_ANSI_0: return 0x30
-        case kVK_ANSI_1: return 0x31
-        case kVK_ANSI_2: return 0x32
-        case kVK_ANSI_3: return 0x33
-        case kVK_ANSI_4: return 0x34
-        case kVK_ANSI_5: return 0x35
-        case kVK_ANSI_6: return 0x36
-        case kVK_ANSI_7: return 0x37
-        case kVK_ANSI_8: return 0x38
-        case kVK_ANSI_9: return 0x39
-        case kVK_F1: return 0x70
-        case kVK_F2: return 0x71
-        case kVK_F3: return 0x72
-        case kVK_F4: return 0x73
-        case kVK_F5: return 0x74
-        case kVK_F6: return 0x75
-        case kVK_F7: return 0x76
-        case kVK_F8: return 0x77
-        case kVK_F9: return 0x78
-        case kVK_F10: return 0x79
-        case kVK_F11: return 0x7A
-        case kVK_F12: return 0x7B
-        case kVK_Space: return 0x20
-        case kVK_Return, kVK_ANSI_KeypadEnter: return 0x0D
-        case kVK_Tab: return 0x09
-        case kVK_ANSI_Grave: return 0xC0
-        default: return UInt32(keyCode)
-        }
-    }
-
-    public static func isNavigationKey(_ keyCode: UInt16) -> Bool {
-        switch Int(keyCode) {
-        case kVK_LeftArrow, kVK_RightArrow, kVK_DownArrow, kVK_UpArrow,
-             kVK_Home, kVK_End, kVK_PageUp, kVK_PageDown, kVK_ForwardDelete:
-            return true
-        default:
-            return false
-        }
-    }
-}
-
-private let mskeyEventTag: Int64 = 0x4D53_4B59
-
 private func cgEventTapCallback(
     proxy: CGEventTapProxy,
     type: CGEventType,
@@ -90,17 +18,26 @@ public final class EventTapManager: @unchecked Sendable {
     private let lock = NSLock()
     private let rust: RustEngine
     private var config: MSKeyConfig
+    private var effectiveVE: Bool
     private var hotkeys = MacHotkeyTracker()
     private var session: SmartAppSessionMemory
     private var eventTap: CFMachPort?
     private var runLoopSource: CFRunLoopSource?
-    public var onSyncUI: (@Sendable (Bool, String) -> Void)?
+    private var tapRunLoop: CFRunLoop?
+    private var tapThread: Thread?
+    private var sandboxFocused = false
+    private var pasteGeneration: UInt64 = 0
+    private var pendingSavedPasteboard: [[(String, Data)]]?
+    public var onSyncUI: (@Sendable (Bool, String, Bool) -> Void)?
     public var onConvertClipboard: (@Sendable () -> Void)?
 
     public init(rust: RustEngine, config: MSKeyConfig) {
         self.rust = rust
         self.config = config
-        self.session = SmartAppSessionMemory(initialVE: config.vietnamese_enabled)
+        self.effectiveVE = config.vietnamese_enabled
+        var mem = SmartAppSessionMemory(initialVE: config.vietnamese_enabled)
+        mem.loadMemory(MacConfigStore.loadAppState())
+        self.session = mem
     }
 
     public static func hasAccessibilityPermission(prompt: Bool) -> Bool {
@@ -114,8 +51,34 @@ public final class EventTapManager: @unchecked Sendable {
 
     @discardableResult
     public func start() -> Bool {
-        if eventTap != nil { return true }
+        lock.lock()
+        let alreadyRunning = eventTap != nil || tapThread != nil
+        lock.unlock()
+        if alreadyRunning { return true }
         guard Self.hasAccessibilityPermission(prompt: false) else { return false }
+
+        let ready = DispatchSemaphore(value: 0)
+        let thread = Thread { [weak self] in
+            self?.runTapLoop(ready: ready)
+        }
+        thread.name = "mskey.event-tap"
+        thread.qualityOfService = .userInteractive
+        lock.lock()
+        tapThread = thread
+        lock.unlock()
+        thread.start()
+        _ = ready.wait(timeout: .now() + 2.0)
+
+        lock.lock()
+        let started = eventTap != nil
+        if !started {
+            tapThread = nil
+        }
+        lock.unlock()
+        return started
+    }
+
+    private func runTapLoop(ready: DispatchSemaphore) {
         let mask = (1 << CGEventType.keyDown.rawValue)
             | (1 << CGEventType.flagsChanged.rawValue)
             | (1 << CGEventType.leftMouseDown.rawValue)
@@ -129,50 +92,99 @@ public final class EventTapManager: @unchecked Sendable {
             callback: cgEventTapCallback,
             userInfo: refcon
         ) else {
-            return false
+            ready.signal()
+            return
         }
         let source = CFMachPortCreateRunLoopSource(kCFAllocatorDefault, tap, 0)
-        CFRunLoopAddSource(CFRunLoopGetMain(), source, .commonModes)
-        CGEvent.tapEnable(tap: tap, enable: true)
+        let rl = CFRunLoopGetCurrent()
+        lock.lock()
         eventTap = tap
         runLoopSource = source
-        return true
+        tapRunLoop = rl
+        lock.unlock()
+
+        CFRunLoopAddSource(rl, source, .commonModes)
+        CGEvent.tapEnable(tap: tap, enable: true)
+        ready.signal()
+        CFRunLoopRun()
+
+        CFRunLoopRemoveSource(rl, source, .commonModes)
+        CGEvent.tapEnable(tap: tap, enable: false)
+        CFMachPortInvalidate(tap)
+        lock.lock()
+        if let cur = eventTap, CFEqual(cur, tap) {
+            eventTap = nil
+            runLoopSource = nil
+            tapRunLoop = nil
+            tapThread = nil
+        }
+        lock.unlock()
     }
 
     public func stop() {
-        if let tap = eventTap {
+        lock.lock()
+        let tap = eventTap
+        let src = runLoopSource
+        let rl = tapRunLoop
+        eventTap = nil
+        runLoopSource = nil
+        tapRunLoop = nil
+        tapThread = nil
+        lock.unlock()
+        if let tap {
             CGEvent.tapEnable(tap: tap, enable: false)
         }
-        if let src = runLoopSource {
-            CFRunLoopRemoveSource(CFRunLoopGetMain(), src, .commonModes)
+        if let rl {
+            if let src {
+                CFRunLoopRemoveSource(rl, src, .commonModes)
+            }
+            CFRunLoopStop(rl)
         }
-        runLoopSource = nil
-        eventTap = nil
     }
 
     public func updateConfig(_ cfg: MSKeyConfig) {
         lock.lock()
         config = cfg
+        effectiveVE = cfg.vietnamese_enabled
         rust.setConfig(cfg)
         session.setUserVE(cfg.vietnamese_enabled, smartSwitch: cfg.smart_app_switch)
+        let saveSmart = cfg.smart_app_switch
+        let state = session.exportMemory()
+        lock.unlock()
+        if saveSmart {
+            MacConfigStore.saveAppState(state)
+        }
+    }
+
+    public func setSandboxFocused(_ focused: Bool) {
+        lock.lock()
+        sandboxFocused = focused
+        if focused {
+            rust.resetAll()
+        }
         lock.unlock()
     }
 
     public func notifyAppActivated(_ appName: String) {
         lock.lock()
+        let sync = applyAppSwitchInsideLock(appName)
+        lock.unlock()
+        if let sync {
+            onSyncUI?(sync.0, sync.1, false)
+        }
+    }
+
+    private func applyAppSwitchInsideLock(_ appName: String) -> (Bool, String)? {
         let smart = config.smart_app_switch
         let behavior = rust.behavior(for: appName)
         let switched = session.switchApp(appName, behavior: behavior, smartSwitch: smart)
         if let nextVE = switched {
-            config.vietnamese_enabled = nextVE
+            effectiveVE = nextVE
             rust.setEnabled(nextVE)
         }
         rust.resetAll()
         hotkeys.reset()
-        let ve = config.vietnamese_enabled
-        let active = session.activeApp
-        lock.unlock()
-        onSyncUI?(ve, active)
+        return (effectiveVE, session.activeApp)
     }
 
     fileprivate func handleEvent(
@@ -181,9 +193,10 @@ public final class EventTapManager: @unchecked Sendable {
         event: CGEvent
     ) -> Unmanaged<CGEvent>? {
         if type == .tapDisabledByTimeout || type == .tapDisabledByUserInput {
-            if let tap = eventTap {
-                CGEvent.tapEnable(tap: tap, enable: true)
-            }
+            lock.lock()
+            let tap = eventTap
+            lock.unlock()
+            if let tap { CGEvent.tapEnable(tap: tap, enable: true) }
             return Unmanaged.passUnretained(event)
         }
         if event.getIntegerValueField(.eventSourceUserData) == mskeyEventTag {
@@ -208,10 +221,11 @@ public final class EventTapManager: @unchecked Sendable {
     private func handleFlagsChanged(_ event: CGEvent) -> Unmanaged<CGEvent>? {
         lock.lock()
         let sig = hotkeys.handleFlagsChanged(preset: config.switch_preset, flags: event.flags.rawValue)
-        if sig == .toggleVE {
-            toggleVEInsideLock()
-        }
+        let uiSync = sig == .toggleVE ? toggleVEInsideLock() : nil
         lock.unlock()
+        if let uiSync {
+            dispatchSyncUI(ve: uiSync.0, app: uiSync.1, beep: uiSync.2, userInitiated: true)
+        }
         return Unmanaged.passUnretained(event)
     }
 
@@ -219,8 +233,13 @@ public final class EventTapManager: @unchecked Sendable {
         let keyCode = UInt16(event.getIntegerValueField(.keyboardEventKeycode))
         let vk = MacKeycode.toPortableVK(keyCode)
         let flags = event.flags.rawValue
+        let detectedApp = MacAppDetector.frontmostAppIdentifier()
 
         lock.lock()
+        var pendingAppSync: (Bool, String)?
+        if !detectedApp.isEmpty && detectedApp.lowercased() != session.activeApp {
+            pendingAppSync = applyAppSwitchInsideLock(detectedApp)
+        }
         let sig = hotkeys.handleKeyDown(
             preset: config.switch_preset,
             customSwitch: config.custom_switch_hotkey,
@@ -228,83 +247,111 @@ public final class EventTapManager: @unchecked Sendable {
             vk: vk,
             flags: flags
         )
-        switch sig {
-        case .toggleVE:
-            toggleVEInsideLock()
+        if sig == .toggleVE {
+            let uiSync = toggleVEInsideLock()
             lock.unlock()
+            dispatchSyncUI(ve: uiSync.0, app: uiSync.1, beep: uiSync.2, userInitiated: true)
             return nil
-        case .convertClipboard:
+        }
+        if sig == .convertClipboard {
             lock.unlock()
-            onConvertClipboard?()
+            if let s = pendingAppSync {
+                DispatchQueue.main.async { self.onSyncUI?(s.0, s.1, false) }
+            }
+            DispatchQueue.main.async { self.onConvertClipboard?() }
             return nil
-        case .none:
-            break
         }
 
         let activeApp = session.activeApp
-        if !activeApp.isEmpty && rust.behavior(for: activeApp) == .blacklist {
-            lock.unlock()
-            return Unmanaged.passUnretained(event)
-        }
         let modMask = CGEventFlags.maskCommand.rawValue | CGEventFlags.maskControl.rawValue | CGEventFlags.maskAlternate.rawValue
-        if (flags & modMask) != 0 {
-            rust.resetWord()
+        let hasAccelMod = (flags & modMask) != 0
+        if sandboxFocused || hasAccelMod || (!activeApp.isEmpty && rust.behavior(for: activeApp) == .blacklist) {
+            if hasAccelMod {
+                rust.resetWord()
+                pasteGeneration &+= 1
+                pendingSavedPasteboard = nil
+            }
             lock.unlock()
+            if let s = pendingAppSync {
+                DispatchQueue.main.async { self.onSyncUI?(s.0, s.1, false) }
+            }
             return Unmanaged.passUnretained(event)
         }
-        if config.disable_on_non_us_layout && !MacAppDetector.isUSKeyboardLayout() {
-            lock.unlock()
-            return Unmanaged.passUnretained(event)
-        }
-        let useClip = config.use_clipboard_send || config.mechanism == .compatibleHook
-        let browserFix = config.fix_browser_suggest_1 && MacAppDetector.isBrowserOrSpotlight(activeApp)
 
-        if Int(keyCode) == kVK_Escape {
-            let act = rust.processEscape()
-            lock.unlock()
-            return applyAction(act, original: event, useClipboard: useClip, browserFix: browserFix)
-        }
-        if Int(keyCode) == kVK_Delete {
-            let act = rust.processBackspace()
-            lock.unlock()
-            return applyAction(act, original: event, useClipboard: useClip, browserFix: browserFix)
-        }
-        if MacKeycode.isNavigationKey(keyCode) {
-            rust.resetWord()
-            lock.unlock()
-            return Unmanaged.passUnretained(event)
-        }
-        guard let scalar = extractScalar(from: event, keyCode: keyCode) else {
-            rust.resetWord()
-            lock.unlock()
-            return Unmanaged.passUnretained(event)
-        }
-        let act = rust.processKey(scalar: scalar)
+        let disableNonUS = config.disable_on_non_us_layout
+        let delayMs = config.send_delay_ms > 0
+            ? min(Int(config.send_delay_ms), 25)
+            : (config.mechanism == .compatibleHook ? 1 : 0)
+        let opts = SendOptions(
+            useClipboard: config.use_clipboard_send || config.mechanism == .compatibleHook,
+            pasteShiftInsert: config.paste_via_shift_insert,
+            standardMode: config.standard_key_send || MacAppDetector.isTerminalApp(activeApp),
+            delayMs: delayMs,
+            browserFix1: config.fix_browser_suggest_1 && MacAppDetector.isBrowserOrSpotlight(activeApp),
+            browserFix2: config.fix_browser_suggest_2 && MacAppDetector.isBrowserOrSpotlight(activeApp)
+        )
         lock.unlock()
-        return applyAction(act, original: event, useClipboard: useClip, browserFix: browserFix)
+
+        if let s = pendingAppSync {
+            DispatchQueue.main.async { self.onSyncUI?(s.0, s.1, false) }
+        }
+        if disableNonUS && !MacAppDetector.isUSKeyboardLayout() {
+            return Unmanaged.passUnretained(event)
+        }
+        if MacAppDetector.isSecureInputOrPasswordFocused() {
+            lock.lock()
+            rust.resetWord()
+            lock.unlock()
+            return Unmanaged.passUnretained(event)
+        }
+        return processKeyAction(event: event, keyCode: keyCode, opts: opts)
     }
 
-    private func toggleVEInsideLock() {
-        let next = !config.vietnamese_enabled
+    private func processKeyAction(event: CGEvent, keyCode: UInt16, opts: SendOptions) -> Unmanaged<CGEvent>? {
+        lock.lock()
+        let act: KeyActionResult
+        if Int(keyCode) == kVK_Escape {
+            act = rust.processEscape()
+        } else if Int(keyCode) == kVK_Delete {
+            act = rust.processBackspace()
+        } else if MacKeycode.isNavigationKey(keyCode) {
+            rust.resetWord()
+            lock.unlock()
+            return Unmanaged.passUnretained(event)
+        } else if let scalar = extractScalar(from: event, keyCode: keyCode) {
+            act = rust.processKey(scalar: scalar)
+        } else {
+            rust.resetWord()
+            lock.unlock()
+            return Unmanaged.passUnretained(event)
+        }
+        lock.unlock()
+        return applyAction(act, original: event, triggerKeyCode: keyCode, opts: opts)
+    }
+
+    private func toggleVEInsideLock() -> (Bool, String, Bool) {
+        let next = !effectiveVE
+        effectiveVE = next
         config.vietnamese_enabled = next
         session.setUserVE(next, smartSwitch: config.smart_app_switch)
         rust.setEnabled(next)
         rust.resetAll()
-        let beep = config.beep_on_switch
-        let active = session.activeApp
+        if config.smart_app_switch {
+            MacConfigStore.saveAppState(session.exportMemory())
+        }
+        return (next, session.activeApp, config.beep_on_switch)
+    }
+
+    private func dispatchSyncUI(ve: Bool, app: String, beep: Bool, userInitiated: Bool) {
         DispatchQueue.main.async {
             if beep { NSSound.beep() }
-            self.onSyncUI?(next, active)
+            self.onSyncUI?(ve, app, userInitiated)
         }
     }
 
     private func extractScalar(from event: CGEvent, keyCode: UInt16) -> UInt32? {
-        if Int(keyCode) == kVK_Return || Int(keyCode) == kVK_ANSI_KeypadEnter {
-            return 10
-        }
-        if Int(keyCode) == kVK_Tab {
-            return 9
-        }
+        if Int(keyCode) == kVK_Return || Int(keyCode) == kVK_ANSI_KeypadEnter { return 10 }
+        if Int(keyCode) == kVK_Tab { return 9 }
         var length = 0
         var chars = [UniChar](repeating: 0, count: 4)
         event.keyboardGetUnicodeString(maxStringLength: 4, actualStringLength: &length, unicodeString: &chars)
@@ -316,84 +363,96 @@ public final class EventTapManager: @unchecked Sendable {
     private func applyAction(
         _ act: KeyActionResult,
         original: CGEvent,
-        useClipboard: Bool,
-        browserFix: Bool
+        triggerKeyCode: UInt16,
+        opts: SendOptions
     ) -> Unmanaged<CGEvent>? {
         guard act.replace else {
             return Unmanaged.passUnretained(original)
         }
-        if act.backspaces > 0 && browserFix {
-            emitUnicodeText("\u{200B}")
-            emitBackspaceCount(1)
+        var body = act.text
+        var trailingVK: CGKeyCode?
+        if (Int(triggerKeyCode) == kVK_Return || Int(triggerKeyCode) == kVK_ANSI_KeypadEnter), body.hasSuffix("\n") {
+            body.removeLast()
+            trailingVK = CGKeyCode(kVK_Return)
+        } else if Int(triggerKeyCode) == kVK_Tab, body.hasSuffix("\t") {
+            body.removeLast()
+            trailingVK = CGKeyCode(kVK_Tab)
         }
+
         if act.backspaces > 0 {
-            emitBackspaceCount(act.backspaces)
-        }
-        if !act.text.isEmpty {
-            if useClipboard && act.text.count > 1 {
-                emitViaPasteboard(act.text)
-            } else {
-                emitUnicodeText(act.text)
+            if opts.browserFix1 {
+                CGEventEmitter.postUnicodeText("\u{200B}", singleChar: true, delayMs: opts.delayMs)
+                CGEventEmitter.postBackspaces(1, delayMs: opts.delayMs)
             }
+            if opts.browserFix2 {
+                CGEventEmitter.postVirtualKey(CGKeyCode(kVK_RightArrow), flags: [], delayMs: opts.delayMs)
+            }
+            CGEventEmitter.postBackspaces(act.backspaces, delayMs: opts.delayMs)
+        }
+        if !body.isEmpty {
+            if opts.useClipboard && body.count > 1 {
+                emitViaPasteboard(body, pasteShiftInsert: opts.pasteShiftInsert, delayMs: opts.delayMs)
+            } else {
+                CGEventEmitter.postUnicodeText(body, singleChar: opts.standardMode, delayMs: opts.delayMs)
+            }
+        }
+        if let trailingVK {
+            if opts.useClipboard && body.count > 1 { usleep(8000) }
+            CGEventEmitter.postVirtualKey(trailingVK, flags: [], delayMs: opts.delayMs)
         }
         return nil
     }
 
-    private func emitBackspaceCount(_ count: Int) {
-        let src = CGEventSource(stateID: .privateState)
-        for _ in 0..<count {
-            if let down = CGEvent(keyboardEventSource: src, virtualKey: CGKeyCode(kVK_Delete), keyDown: true),
-               let up = CGEvent(keyboardEventSource: src, virtualKey: CGKeyCode(kVK_Delete), keyDown: false) {
-                down.setIntegerValueField(.eventSourceUserData, value: mskeyEventTag)
-                up.setIntegerValueField(.eventSourceUserData, value: mskeyEventTag)
-                down.post(tap: .cghidEventTap)
-                up.post(tap: .cghidEventTap)
-            }
-        }
-    }
-
-    private func emitUnicodeText(_ text: String) {
-        let src = CGEventSource(stateID: .privateState)
-        let units = Array(text.utf16)
-        var offset = 0
-        while offset < units.count {
-            let end = min(offset + 16, units.count)
-            var slice = Array(units[offset..<end])
-            if let down = CGEvent(keyboardEventSource: src, virtualKey: 0, keyDown: true),
-               let up = CGEvent(keyboardEventSource: src, virtualKey: 0, keyDown: false) {
-                down.setIntegerValueField(.eventSourceUserData, value: mskeyEventTag)
-                up.setIntegerValueField(.eventSourceUserData, value: mskeyEventTag)
-                down.keyboardSetUnicodeString(stringLength: slice.count, unicodeString: &slice)
-                up.keyboardSetUnicodeString(stringLength: slice.count, unicodeString: &slice)
-                down.post(tap: .cghidEventTap)
-                up.post(tap: .cghidEventTap)
-            }
-            offset = end
-        }
-    }
-
-    private func emitViaPasteboard(_ text: String) {
-        DispatchQueue.main.async {
+    private func emitViaPasteboard(_ text: String, pasteShiftInsert: Bool, delayMs: Int) {
+        let result = runOnMainSync { () -> (UInt64, Int) in
             let pb = NSPasteboard.general
-            let prev = pb.string(forType: .string)
+            self.lock.lock()
+            let needSnapshot = self.pendingSavedPasteboard == nil
+            self.pasteGeneration &+= 1
+            let gen = self.pasteGeneration
+            self.lock.unlock()
+
+            let snapshot = needSnapshot ? PasteboardSnapshot.capture(pb) : nil
+            if let snapshot {
+                self.lock.lock()
+                if self.pendingSavedPasteboard == nil {
+                    self.pendingSavedPasteboard = snapshot
+                }
+                self.lock.unlock()
+            }
             pb.clearContents()
             pb.setString(text, forType: .string)
-            let src = CGEventSource(stateID: .privateState)
-            if let down = CGEvent(keyboardEventSource: src, virtualKey: CGKeyCode(kVK_ANSI_V), keyDown: true),
-               let up = CGEvent(keyboardEventSource: src, virtualKey: CGKeyCode(kVK_ANSI_V), keyDown: false) {
-                down.flags = .maskCommand
-                up.flags = .maskCommand
-                down.setIntegerValueField(.eventSourceUserData, value: mskeyEventTag)
-                up.setIntegerValueField(.eventSourceUserData, value: mskeyEventTag)
-                down.post(tap: .cghidEventTap)
-                up.post(tap: .cghidEventTap)
-            }
-            if let prev {
-                DispatchQueue.main.asyncAfter(deadline: .now() + 0.08) {
-                    pb.clearContents()
-                    pb.setString(prev, forType: .string)
-                }
-            }
+            return (gen, pb.changeCount)
         }
+        if delayMs > 0 {
+            usleep(UInt32(min(delayMs, 10)) * 1000)
+        }
+        if pasteShiftInsert {
+            CGEventEmitter.postVirtualKey(CGKeyCode(kVK_Help), flags: .maskShift, delayMs: 0)
+        } else {
+            CGEventEmitter.postVirtualKey(CGKeyCode(kVK_ANSI_V), flags: .maskCommand, delayMs: 0)
+        }
+        let gen = result.0
+        let expectedCount = result.1
+        DispatchQueue.main.asyncAfter(deadline: .now() + .milliseconds(95 + delayMs)) {
+            let pb = NSPasteboard.general
+            self.lock.lock()
+            guard self.pasteGeneration == gen else {
+                self.lock.unlock()
+                return
+            }
+            let saved = self.pendingSavedPasteboard
+            self.pendingSavedPasteboard = nil
+            self.lock.unlock()
+            guard pb.changeCount == expectedCount, let saved else { return }
+            PasteboardSnapshot.restore(saved, to: pb)
+        }
+    }
+
+    private func runOnMainSync<T: Sendable>(_ work: @Sendable () -> T) -> T {
+        if Thread.isMainThread {
+            return work()
+        }
+        return DispatchQueue.main.sync(execute: work)
     }
 }

@@ -43,6 +43,8 @@ pub struct UiState {
     pub chk_quick_brk: *mut GtkWidget,
     pub rad_ctrl_shift: *mut GtkWidget,
     pub rad_alt_z: *mut GtkWidget,
+    pub rad_ctrl_space: *mut GtkWidget,
+    pub rad_shift_shift: *mut GtkWidget,
     pub rad_custom: *mut GtkWidget,
     pub chk_esc: *mut GtkWidget,
     pub chk_beep: *mut GtkWidget,
@@ -54,6 +56,8 @@ pub struct UiState {
     pub btn_close: *mut GtkWidget,
     pub btn_exit: *mut GtkWidget,
     pub btn_macro: *mut GtkWidget,
+    pub btn_extras: *mut GtkWidget,
+    pub btn_user_dict: *mut GtkWidget,
     pub btn_cap_sw: *mut GtkWidget,
     pub btn_cap_conv: *mut GtkWidget,
     pub btn_import: *mut GtkWidget,
@@ -156,19 +160,25 @@ pub fn build_tab_hotkey(st: &mut UiState) -> *mut GtkWidget {
     let page = make_vbox(8);
     add_css_class(page, "card-box");
     let (sf, sb) = make_frame("Phím chuyển V/E");
-    let rrow = make_hbox(12);
+    let rgrid = make_grid(4, 12);
     st.rad_ctrl_shift = make_radio(ptr::null_mut(), "Ctrl + Shift");
     st.rad_alt_z = make_radio(st.rad_ctrl_shift, "Alt + Z");
+    st.rad_ctrl_space = make_radio(st.rad_ctrl_shift, "Ctrl + Space");
+    st.rad_shift_shift = make_radio(st.rad_ctrl_shift, "Shift + Shift");
     st.rad_custom = make_radio(st.rad_ctrl_shift, "Phím tùy chọn");
-    pack(rrow, st.rad_ctrl_shift, false, false, 0);
-    pack(rrow, st.rad_alt_z, false, false, 0);
-    pack(rrow, st.rad_custom, false, false, 0);
+    unsafe {
+        gtk_grid_attach(rgrid, st.rad_ctrl_shift, 0, 0, 1, 1);
+        gtk_grid_attach(rgrid, st.rad_alt_z, 1, 0, 1, 1);
+        gtk_grid_attach(rgrid, st.rad_ctrl_space, 2, 0, 1, 1);
+        gtk_grid_attach(rgrid, st.rad_shift_shift, 0, 1, 1, 1);
+        gtk_grid_attach(rgrid, st.rad_custom, 1, 1, 1, 1);
+    }
     let crow = make_hbox(8);
     st.lbl_switch_custom = make_label("Tổ hợp tùy chọn: -", false);
     st.btn_cap_sw = make_button("Đặt phím tùy chọn", false);
     pack(crow, st.lbl_switch_custom, true, true, 0);
     pack(crow, st.btn_cap_sw, false, false, 0);
-    pack(sb, rrow, false, false, 0);
+    pack(sb, rgrid, false, false, 0);
     pack(sb, crow, false, false, 0);
     pack(page, sf, false, false, 0);
 
@@ -221,6 +231,13 @@ pub fn build_tab_system(st: &mut UiState) -> *mut GtkWidget {
     pack(ab, brow, false, false, 0);
     pack(ab, hint, false, false, 0);
     pack(page, af, false, false, 0);
+
+    let erow = make_hbox(8);
+    st.btn_extras = make_button("Mở rộng & Gõ thử...", false);
+    st.btn_user_dict = make_button("Từ điển cá nhân...", false);
+    pack(erow, st.btn_extras, true, true, 0);
+    pack(erow, st.btn_user_dict, true, true, 0);
+    pack(page, erow, false, false, 0);
     page
 }
 
@@ -257,6 +274,8 @@ impl UiState {
             chk_quick_brk: n,
             rad_ctrl_shift: n,
             rad_alt_z: n,
+            rad_ctrl_space: n,
+            rad_shift_shift: n,
             rad_custom: n,
             chk_esc: n,
             chk_beep: n,
@@ -268,6 +287,8 @@ impl UiState {
             btn_close: n,
             btn_exit: n,
             btn_macro: n,
+            btn_extras: n,
+            btn_user_dict: n,
             btn_cap_sw: n,
             btn_cap_conv: n,
             btn_import: n,
@@ -350,6 +371,8 @@ impl UiState {
         set_toggle(self.chk_quick_brk, c.quick_brackets);
         set_toggle(self.rad_ctrl_shift, c.switch_preset == SwitchPreset::CtrlShift);
         set_toggle(self.rad_alt_z, c.switch_preset == SwitchPreset::AltZ);
+        set_toggle(self.rad_ctrl_space, c.switch_preset == SwitchPreset::CtrlSpace);
+        set_toggle(self.rad_shift_shift, c.switch_preset == SwitchPreset::ShiftShift);
         set_toggle(self.rad_custom, c.switch_preset == SwitchPreset::Custom);
         set_toggle(self.chk_esc, c.esc_restore);
         set_toggle(self.chk_beep, c.beep_on_switch);
@@ -403,6 +426,10 @@ impl UiState {
         self.cfg.quick_brackets = get_toggle(self.chk_quick_brk);
         self.cfg.switch_preset = if get_toggle(self.rad_alt_z) {
             SwitchPreset::AltZ
+        } else if get_toggle(self.rad_ctrl_space) {
+            SwitchPreset::CtrlSpace
+        } else if get_toggle(self.rad_shift_shift) {
+            SwitchPreset::ShiftShift
         } else if get_toggle(self.rad_custom) {
             SwitchPreset::Custom
         } else {

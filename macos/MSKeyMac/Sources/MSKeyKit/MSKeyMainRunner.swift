@@ -7,6 +7,8 @@ public enum ActiveSheetKind: String, Identifiable, Sendable {
     case customKeymap
     case appRules
     case converter
+    case extras
+    case userDict
     case captureSwitchHotkey
     case captureConvertHotkey
 
@@ -16,6 +18,7 @@ public enum ActiveSheetKind: String, Identifiable, Sendable {
 @MainActor
 public final class MSKeyStore: ObservableObject {
     @Published public var config: MSKeyConfig
+    @Published public var effectiveVE: Bool
     @Published public var lastActiveApp: String = ""
     @Published public var activeSheet: ActiveSheetKind?
     @Published public var accessibilityGranted: Bool
@@ -30,18 +33,25 @@ public final class MSKeyStore: ObservableObject {
     public init() {
         let loaded = MacConfigStore.load()
         self.config = loaded
+        self.effectiveVE = loaded.vietnamese_enabled
         self.accessibilityGranted = EventTapManager.hasAccessibilityPermission(prompt: false)
         let enc = JSONEncoder()
         let initialJSON = (try? enc.encode(loaded)).flatMap { String(data: $0, encoding: .utf8) }
         self.rust = RustEngine(configJSON: initialJSON)
         self.tapManager = EventTapManager(rust: self.rust, config: loaded)
-        self.tapManager.onSyncUI = { [weak self] ve, app in
+        self.tapManager.onSyncUI = { [weak self] ve, app, userInitiated in
             DispatchQueue.main.async {
                 guard let self else { return }
-                self.config.vietnamese_enabled = ve
+                self.effectiveVE = ve
                 if !app.isEmpty { self.lastActiveApp = app }
+                if userInitiated {
+                    self.config.vietnamese_enabled = ve
+                    MacConfigStore.save(self.config)
+                    if self.config.show_switch_osd {
+                        MacOSDHud.shared.show(vietnamese: ve)
+                    }
+                }
                 self.menuBar?.updateStatusIcon(vietnamese: ve)
-                MacConfigStore.save(self.config)
             }
         }
         self.tapManager.onConvertClipboard = { [weak self] in
@@ -104,18 +114,24 @@ public final class MSKeyStore: ObservableObject {
     }
 
     public func toggleVE() {
-        updateConfig { $0.vietnamese_enabled.toggle() }
+        let next = !effectiveVE
+        effectiveVE = next
+        updateConfig { $0.vietnamese_enabled = next }
         if config.beep_on_switch {
             NSSound.beep()
+        }
+        if config.show_switch_osd {
+            MacOSDHud.shared.show(vietnamese: next)
         }
     }
 
     public func updateConfig(_ mutate: (inout MSKeyConfig) -> Void) {
         let prevAuto = config.auto_start
         mutate(&config)
+        effectiveVE = config.vietnamese_enabled
         tapManager.updateConfig(config)
         MacConfigStore.save(config)
-        menuBar?.updateStatusIcon(vietnamese: config.vietnamese_enabled)
+        menuBar?.updateStatusIcon(vietnamese: effectiveVE)
         applyTheme(config.theme)
         if config.auto_start != prevAuto {
             MacConfigStore.syncAutoStart(enable: config.auto_start)
@@ -127,9 +143,12 @@ public final class MSKeyStore: ObservableObject {
     }
 
     public func saveNow() {
+        rust.syncClockOffset()
+        effectiveVE = config.vietnamese_enabled
         tapManager.updateConfig(config)
         MacConfigStore.save(config)
         MacConfigStore.syncAutoStart(enable: config.auto_start)
+        menuBar?.updateStatusIcon(vietnamese: effectiveVE)
     }
 
     public func addLastAppForceEnglish() {
@@ -147,7 +166,7 @@ public final class MSKeyStore: ObservableObject {
     public func quickConvertPasteboard() {
         let pb = NSPasteboard.general
         guard let raw = pb.string(forType: .string), !raw.isEmpty else { return }
-        let out = RustEngine.convertText(raw, from: config.charset, to: .unicode, caseMode: 0)
+        let out = RustEngine.convertWithEncoding(raw, from: .auto, to: .unicode, caseMode: 0)
         pb.clearContents()
         pb.setString(out, forType: .string)
     }

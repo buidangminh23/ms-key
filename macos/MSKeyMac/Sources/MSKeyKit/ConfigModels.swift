@@ -46,6 +46,32 @@ public enum CharsetKind: String, Codable, CaseIterable, Sendable, Identifiable {
     }
 }
 
+public enum ConvertEncodingKind: UInt8, CaseIterable, Sendable, Identifiable {
+    case auto = 255
+    case unicode = 0
+    case tcvn3 = 1
+    case vniWindows = 2
+    case unicodeComposite = 3
+    case viqr = 4
+
+    public var id: UInt8 { rawValue }
+
+    public var label: String {
+        switch self {
+        case .auto: return "Tự động (Auto)"
+        case .unicode: return "Unicode"
+        case .tcvn3: return "TCVN3 (ABC)"
+        case .vniWindows: return "VNI Windows"
+        case .unicodeComposite: return "Unicode tổ hợp"
+        case .viqr: return "VIQR"
+        }
+    }
+
+    public static var targetCases: [ConvertEncodingKind] {
+        [.unicode, .tcvn3, .vniWindows, .unicodeComposite, .viqr]
+    }
+}
+
 public enum MechanismKind: String, Codable, CaseIterable, Sendable, Identifiable {
     case keyboardHook = "KeyboardHook"
     case compatibleHook = "CompatibleHook"
@@ -77,6 +103,8 @@ public enum ThemeModeKind: String, Codable, CaseIterable, Sendable, Identifiable
 public enum SwitchPresetKind: String, Codable, CaseIterable, Sendable, Identifiable {
     case ctrlShift = "CtrlShift"
     case altZ = "AltZ"
+    case ctrlSpace = "CtrlSpace"
+    case shiftShift = "ShiftShift"
     case custom = "Custom"
 
     public var id: String { rawValue }
@@ -120,25 +148,32 @@ public struct HotkeyComboModel: Codable, Equatable, Sendable {
         if alt { parts.append("Option") }
         if shift { parts.append("Shift") }
         if win_cmd { parts.append("Cmd") }
-        let key: String
-        switch key_code {
-        case 0x70...0x7B:
-            key = "F\(key_code - 0x6F)"
-        case 0x30...0x5A:
-            if let scalar = UnicodeScalar(key_code) {
-                key = String(scalar)
-            } else {
-                key = String(format: "0x%X", key_code)
-            }
-        case 0x20:
-            key = "Space"
-        case 0xC0:
-            key = "`"
-        default:
-            key = String(format: "0x%X", key_code)
-        }
-        parts.append(key)
+        parts.append(Self.keyName(for: key_code))
         return parts.joined(separator: " + ")
+    }
+
+    private static func keyName(for vk: UInt32) -> String {
+        switch vk {
+        case 0x70...0x7B: return "F\(vk - 0x6F)"
+        case 0x30...0x5A:
+            if let scalar = UnicodeScalar(vk) { return String(scalar) }
+            return String(format: "0x%X", vk)
+        case 0x20: return "Space"
+        case 0x0D: return "Return"
+        case 0x09: return "Tab"
+        case 0xBA: return ";"
+        case 0xBB: return "="
+        case 0xBC: return ","
+        case 0xBD: return "-"
+        case 0xBE: return "."
+        case 0xBF: return "/"
+        case 0xC0: return "`"
+        case 0xDB: return "["
+        case 0xDC: return "\\"
+        case 0xDD: return "]"
+        case 0xDE: return "'"
+        default: return String(format: "0x%X", vk)
+        }
     }
 }
 
@@ -187,6 +222,27 @@ public struct CustomKeyMapModel: Codable, Equatable, Sendable {
     public var quick_u_horn_key: String = "]"
 
     public init() {}
+
+    public init(from decoder: Decoder) throws {
+        let c = try decoder.container(keyedBy: CodingKeys.self)
+        let d = CustomKeyMapModel()
+        acute = try c.decodeIfPresent(String.self, forKey: .acute) ?? d.acute
+        grave = try c.decodeIfPresent(String.self, forKey: .grave) ?? d.grave
+        hook = try c.decodeIfPresent(String.self, forKey: .hook) ?? d.hook
+        tilde = try c.decodeIfPresent(String.self, forKey: .tilde) ?? d.tilde
+        dot = try c.decodeIfPresent(String.self, forKey: .dot) ?? d.dot
+        remove_tone = try c.decodeIfPresent(String.self, forKey: .remove_tone) ?? d.remove_tone
+        circumflex_a = try c.decodeIfPresent(String.self, forKey: .circumflex_a) ?? d.circumflex_a
+        circumflex_e = try c.decodeIfPresent(String.self, forKey: .circumflex_e) ?? d.circumflex_e
+        circumflex_o = try c.decodeIfPresent(String.self, forKey: .circumflex_o) ?? d.circumflex_o
+        horn_o = try c.decodeIfPresent(String.self, forKey: .horn_o) ?? d.horn_o
+        horn_u = try c.decodeIfPresent(String.self, forKey: .horn_u) ?? d.horn_u
+        breve_a = try c.decodeIfPresent(String.self, forKey: .breve_a) ?? d.breve_a
+        d_stroke = try c.decodeIfPresent(String.self, forKey: .d_stroke) ?? d.d_stroke
+        quick_u_horn = try c.decodeIfPresent(String.self, forKey: .quick_u_horn) ?? d.quick_u_horn
+        quick_o_horn_key = try c.decodeIfPresent(String.self, forKey: .quick_o_horn_key) ?? d.quick_o_horn_key
+        quick_u_horn_key = try c.decodeIfPresent(String.self, forKey: .quick_u_horn_key) ?? d.quick_u_horn_key
+    }
 }
 
 public struct MSKeyConfig: Codable, Equatable, Sendable {
@@ -209,21 +265,72 @@ public struct MSKeyConfig: Codable, Equatable, Sendable {
     public var macro_when_english: Bool = false
     public var quick_w_to_u_horn: Bool = true
     public var quick_brackets: Bool = true
+    public var quick_telex: Bool = false
+    public var quick_start_consonant: Bool = false
+    public var quick_end_consonant: Bool = false
     public var esc_restore: Bool = true
     public var switch_preset: SwitchPresetKind = .ctrlShift
     public var custom_switch_hotkey: HotkeyComboModel = HotkeyComboModel(ctrl: true, alt: true, shift: false, win_cmd: false, key_code: 0x56)
     public var clipboard_convert_hotkey: HotkeyComboModel = HotkeyComboModel()
     public var beep_on_switch: Bool = false
-    public var auto_start: Bool = false
+    public var show_switch_osd: Bool = true
+    public var paste_via_shift_insert: Bool = false
+    public var send_delay_ms: UInt8 = 2
+    public var auto_start: Bool = true
     public var run_as_admin: Bool = false
-    public var show_on_startup: Bool = true
+    public var show_on_startup: Bool = false
     public var theme: ThemeModeKind = .system
     public var smart_app_switch: Bool = true
     public var app_rules: [AppRuleItem] = []
     public var macros: [MacroItem] = []
+    public var user_dict_words: [String] = []
     public var custom_keymap: CustomKeyMapModel = CustomKeyMapModel()
 
     public init() {}
+
+    public init(from decoder: Decoder) throws {
+        let c = try decoder.container(keyedBy: CodingKeys.self)
+        let d = MSKeyConfig()
+        vietnamese_enabled = try c.decodeIfPresent(Bool.self, forKey: .vietnamese_enabled) ?? d.vietnamese_enabled
+        charset = try c.decodeIfPresent(CharsetKind.self, forKey: .charset) ?? d.charset
+        input_method = try c.decodeIfPresent(InputMethodKind.self, forKey: .input_method) ?? d.input_method
+        mechanism = try c.decodeIfPresent(MechanismKind.self, forKey: .mechanism) ?? d.mechanism
+        modern_tone = try c.decodeIfPresent(Bool.self, forKey: .modern_tone) ?? d.modern_tone
+        free_tone = try c.decodeIfPresent(Bool.self, forKey: .free_tone) ?? d.free_tone
+        allow_fjwz = try c.decodeIfPresent(Bool.self, forKey: .allow_fjwz) ?? d.allow_fjwz
+        auto_capitalize_sentence = try c.decodeIfPresent(Bool.self, forKey: .auto_capitalize_sentence) ?? d.auto_capitalize_sentence
+        use_clipboard_send = try c.decodeIfPresent(Bool.self, forKey: .use_clipboard_send) ?? d.use_clipboard_send
+        standard_key_send = try c.decodeIfPresent(Bool.self, forKey: .standard_key_send) ?? d.standard_key_send
+        spelling_check = try c.decodeIfPresent(Bool.self, forKey: .spelling_check) ?? d.spelling_check
+        auto_restore_wrong_word = try c.decodeIfPresent(Bool.self, forKey: .auto_restore_wrong_word) ?? d.auto_restore_wrong_word
+        disable_on_non_us_layout = try c.decodeIfPresent(Bool.self, forKey: .disable_on_non_us_layout) ?? d.disable_on_non_us_layout
+        fix_browser_suggest_1 = try c.decodeIfPresent(Bool.self, forKey: .fix_browser_suggest_1) ?? d.fix_browser_suggest_1
+        fix_browser_suggest_2 = try c.decodeIfPresent(Bool.self, forKey: .fix_browser_suggest_2) ?? d.fix_browser_suggest_2
+        macro_enabled = try c.decodeIfPresent(Bool.self, forKey: .macro_enabled) ?? d.macro_enabled
+        macro_when_english = try c.decodeIfPresent(Bool.self, forKey: .macro_when_english) ?? d.macro_when_english
+        quick_w_to_u_horn = try c.decodeIfPresent(Bool.self, forKey: .quick_w_to_u_horn) ?? d.quick_w_to_u_horn
+        quick_brackets = try c.decodeIfPresent(Bool.self, forKey: .quick_brackets) ?? d.quick_brackets
+        quick_telex = try c.decodeIfPresent(Bool.self, forKey: .quick_telex) ?? d.quick_telex
+        quick_start_consonant = try c.decodeIfPresent(Bool.self, forKey: .quick_start_consonant) ?? d.quick_start_consonant
+        quick_end_consonant = try c.decodeIfPresent(Bool.self, forKey: .quick_end_consonant) ?? d.quick_end_consonant
+        esc_restore = try c.decodeIfPresent(Bool.self, forKey: .esc_restore) ?? d.esc_restore
+        switch_preset = try c.decodeIfPresent(SwitchPresetKind.self, forKey: .switch_preset) ?? d.switch_preset
+        custom_switch_hotkey = try c.decodeIfPresent(HotkeyComboModel.self, forKey: .custom_switch_hotkey) ?? d.custom_switch_hotkey
+        clipboard_convert_hotkey = try c.decodeIfPresent(HotkeyComboModel.self, forKey: .clipboard_convert_hotkey) ?? d.clipboard_convert_hotkey
+        beep_on_switch = try c.decodeIfPresent(Bool.self, forKey: .beep_on_switch) ?? d.beep_on_switch
+        show_switch_osd = try c.decodeIfPresent(Bool.self, forKey: .show_switch_osd) ?? d.show_switch_osd
+        paste_via_shift_insert = try c.decodeIfPresent(Bool.self, forKey: .paste_via_shift_insert) ?? d.paste_via_shift_insert
+        send_delay_ms = try c.decodeIfPresent(UInt8.self, forKey: .send_delay_ms) ?? d.send_delay_ms
+        auto_start = try c.decodeIfPresent(Bool.self, forKey: .auto_start) ?? d.auto_start
+        run_as_admin = try c.decodeIfPresent(Bool.self, forKey: .run_as_admin) ?? d.run_as_admin
+        show_on_startup = try c.decodeIfPresent(Bool.self, forKey: .show_on_startup) ?? d.show_on_startup
+        theme = try c.decodeIfPresent(ThemeModeKind.self, forKey: .theme) ?? d.theme
+        smart_app_switch = try c.decodeIfPresent(Bool.self, forKey: .smart_app_switch) ?? d.smart_app_switch
+        app_rules = try c.decodeIfPresent([AppRuleItem].self, forKey: .app_rules) ?? d.app_rules
+        macros = try c.decodeIfPresent([MacroItem].self, forKey: .macros) ?? d.macros
+        user_dict_words = try c.decodeIfPresent([String].self, forKey: .user_dict_words) ?? d.user_dict_words
+        custom_keymap = try c.decodeIfPresent(CustomKeyMapModel.self, forKey: .custom_keymap) ?? d.custom_keymap
+    }
 }
 
 public enum MacConfigStore {
@@ -234,6 +341,10 @@ public enum MacConfigStore {
 
     public static var configFile: URL {
         configDirectory.appendingPathComponent("config.json")
+    }
+
+    public static var appStateFile: URL {
+        configDirectory.appendingPathComponent("app_state.json")
     }
 
     public static func load() -> MSKeyConfig {
@@ -251,6 +362,35 @@ public enum MacConfigStore {
         if let data = try? enc.encode(config) {
             try? data.write(to: configFile, options: .atomic)
         }
+    }
+
+    public static func loadAppState() -> [String: Bool] {
+        guard let data = try? Data(contentsOf: appStateFile),
+              let map = try? JSONDecoder().decode([String: Bool].self, from: data) else {
+            return [:]
+        }
+        return map
+    }
+
+    public static func saveAppState(_ state: [String: Bool]) {
+        try? FileManager.default.createDirectory(at: configDirectory, withIntermediateDirectories: true)
+        let enc = JSONEncoder()
+        enc.outputFormatting = [.prettyPrinted, .sortedKeys]
+        if let data = try? enc.encode(state) {
+            try? data.write(to: appStateFile, options: .atomic)
+        }
+    }
+
+    public static func exportJSON(to url: URL, config: MSKeyConfig) -> Bool {
+        let enc = JSONEncoder()
+        enc.outputFormatting = [.prettyPrinted, .sortedKeys]
+        guard let data = try? enc.encode(config) else { return false }
+        return (try? data.write(to: url, options: .atomic)) != nil
+    }
+
+    public static func importJSON(from url: URL) -> MSKeyConfig? {
+        guard let data = try? Data(contentsOf: url) else { return nil }
+        return try? JSONDecoder().decode(MSKeyConfig.self, from: data)
     }
 
     public static func syncAutoStart(enable: Bool) {

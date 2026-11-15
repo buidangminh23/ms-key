@@ -8,6 +8,7 @@ pub enum CaseTransform {
     Lower,
     Sentence,
     Title,
+    StripDiacritics,
 }
 
 const COMBINING_TONE: [Option<char>; 6] = [
@@ -19,7 +20,7 @@ const COMBINING_TONE: [Option<char>; 6] = [
     Some('\u{0323}'),
 ];
 
-const TCVN3_LOWER: &[(&str, char)] = &[
+pub(crate) const TCVN3_LOWER: &[(&str, char)] = &[
     ("a", 'a'),
     ("á", '¸'),
     ("à", 'µ'),
@@ -102,7 +103,7 @@ const TCVN3_LOWER: &[(&str, char)] = &[
     ("Ư", '¦'),
 ];
 
-const VNI_TABLE: &[(&str, &str)] = &[
+pub(crate) const VNI_TABLE: &[(&str, &str)] = &[
     ("a", "a"),
     ("á", "aù"),
     ("à", "aø"),
@@ -282,6 +283,7 @@ pub fn apply_case_transform(input: &str, mode: CaseTransform) -> String {
         CaseTransform::Lower => input.to_lowercase(),
         CaseTransform::Sentence => to_sentence_case(input),
         CaseTransform::Title => to_title_case(input),
+        CaseTransform::StripDiacritics => crate::converter_extra::strip_vietnamese_diacritics(input),
     }
 }
 
@@ -309,7 +311,9 @@ fn to_sentence_case(input: &str) -> String {
 fn to_title_case(input: &str) -> String {
     let mut out = String::with_capacity(input.len());
     let mut cap_next = true;
-    for ch in input.chars() {
+    let mut prev_alpha = false;
+    let mut chars = input.chars().peekable();
+    while let Some(ch) = chars.next() {
         if ch.is_alphabetic() {
             if cap_next {
                 for u in ch.to_uppercase() {
@@ -321,9 +325,16 @@ fn to_title_case(input: &str) -> String {
                     out.push(l);
                 }
             }
+            prev_alpha = true;
         } else {
             out.push(ch);
-            cap_next = true;
+            let keep_joined = prev_alpha
+                && matches!(ch, '\'' | '\u{2019}')
+                && chars.peek().is_some_and(|n| n.is_alphabetic());
+            if !keep_joined {
+                cap_next = true;
+            }
+            prev_alpha = false;
         }
     }
     out
@@ -394,7 +405,7 @@ fn to_tcvn3_char(ch: char) -> String {
     ch.to_string()
 }
 
-fn from_tcvn3(input: &str) -> String {
+pub(crate) fn from_tcvn3(input: &str) -> String {
     let mut out = String::with_capacity(input.len());
     for ch in input.chars() {
         let mut matched = None;
@@ -424,7 +435,7 @@ fn to_vni_char(ch: char) -> String {
     ch.to_string()
 }
 
-fn from_vni(input: &str) -> String {
+pub(crate) fn from_vni(input: &str) -> String {
     let mut out = String::with_capacity(input.len());
     let chars: Vec<char> = input.chars().collect();
     let mut i = 0;

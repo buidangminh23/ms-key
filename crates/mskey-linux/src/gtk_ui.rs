@@ -6,12 +6,11 @@ use std::ptr;
 
 use mskey_core::{AppBehavior, Config, SwitchPreset};
 
-use crate::config_store::{
-    config_dir, detect_active_x11_app, load_config, save_config, sync_linux_autostart,
-};
-use crate::gio_ffi::cstr;
+use crate::config_store::{config_dir, load_config, save_config, sync_linux_autostart};
+use crate::gio_ffi::{cstr, gdk_beep};
 use crate::gtk_dialogs::{capture_hotkey_dialog, pick_and_import_evkey_tree, show_converter_dialog};
 use crate::gtk_dialogs_edit::{show_app_rules_dialog, show_custom_keymap_dialog, show_macro_dialog};
+use crate::gtk_extras::{show_extras_sandbox_dialog, show_user_dict_dialog};
 use crate::gtk_ffi::{
     GTK_WIN_POS_CENTER, GTK_WINDOW_TOPLEVEL, GtkAllocation, GtkWidget, connect_signal,
     gtk_container_add, gtk_container_set_border_width, gtk_init_check, gtk_main, gtk_main_quit,
@@ -22,6 +21,7 @@ use crate::gtk_ffi::{
 use crate::gtk_helpers::{make_button, make_hbox, make_label, make_vbox, pack};
 use crate::gtk_theme::apply_gtk_theme;
 use crate::gtk_ui_tabs::{UiState, build_header_box, build_tab_basic, build_tab_hotkey, build_tab_system};
+use crate::linux_extra::{acquire_setup_lock, detect_active_app, show_linux_switch_osd};
 
 thread_local! {
     static UI: RefCell<Option<UiState>> = const { RefCell::new(None) };
@@ -53,6 +53,14 @@ pub fn run_converter_only() -> i32 {
 }
 
 pub fn run_setup_ui(smoke_out: Option<&str>) -> i32 {
+    let _lock = if smoke_out.is_none() {
+        let Some(lock) = acquire_setup_lock() else {
+            return 0;
+        };
+        Some(lock)
+    } else {
+        None
+    };
     if !ensure_gtk_init() {
         if let Some(p) = smoke_out {
             let _ = fs::write(p, "client=560x568\nheadless=no_display\n");
@@ -62,7 +70,7 @@ pub fn run_setup_ui(smoke_out: Option<&str>) -> i32 {
     }
     let cfg = load_config();
     apply_gtk_theme(cfg.theme);
-    LAST_APP.with(|c| *c.borrow_mut() = detect_active_x11_app().unwrap_or_else(|| "-".to_string()));
+    LAST_APP.with(|c| *c.borrow_mut() = detect_active_app().unwrap_or_else(|| "-".to_string()));
     let st = build_main_window(cfg);
     let win = st.win;
     UI.with(|c| {
@@ -133,7 +141,7 @@ fn connect_main_signals(st: &UiState) {
         st.chk_std_send, st.chk_spell, st.chk_restore, st.chk_non_us, st.chk_suggest1,
         st.chk_suggest2, st.chk_macro, st.chk_macro_en, st.chk_quick_w, st.chk_quick_brk,
         st.chk_esc, st.chk_beep, st.chk_autostart, st.chk_show_start, st.chk_smart_app,
-        st.rad_ctrl_shift, st.rad_alt_z, st.rad_custom,
+        st.rad_ctrl_shift, st.rad_alt_z, st.rad_ctrl_space, st.rad_shift_shift, st.rad_custom,
     ];
     for &w in &toggles {
         connect_signal(w, "toggled", on_widget_changed as *const c_void, 0);
@@ -151,6 +159,8 @@ fn connect_main_signals(st: &UiState) {
     connect_signal(st.btn_dir, "clicked", on_open_dir as *const c_void, 0);
     connect_signal(st.btn_apps, "clicked", on_open_apps as *const c_void, 0);
     connect_signal(st.btn_add_app, "clicked", on_add_cur_app as *const c_void, 0);
+    connect_signal(st.btn_extras, "clicked", on_open_extras as *const c_void, 0);
+    connect_signal(st.btn_user_dict, "clicked", on_open_user_dict as *const c_void, 0);
     connect_signal(st.btn_default, "clicked", on_reset_default as *const c_void, 0);
     connect_signal(st.btn_save, "clicked", on_save_cfg as *const c_void, 0);
     connect_signal(st.btn_close, "clicked", on_close_win as *const c_void, 0);
@@ -191,13 +201,53 @@ unsafe extern "C" fn on_widget_changed(_: *mut GtkWidget, _: *mut c_void) {
 }
 
 unsafe extern "C" fn on_toggle_ve(_: *mut GtkWidget, _: *mut c_void) {
-    UI.with(|c| {
+    let flags = UI.with(|c| {
         if let Some(st) = c.borrow_mut().as_mut() {
             st.cfg.vietnamese_enabled = !st.cfg.vietnamese_enabled;
             save_config(&st.cfg);
+            return Some((st.cfg.vietnamese_enabled, st.cfg.beep_on_switch, st.cfg.show_switch_osd));
         }
+        None
     });
     sync_widgets_from_config();
+    if let Some((next, beep, osd)) = flags {
+        if beep {
+            unsafe { gdk_beep() };
+        }
+        if osd {
+            show_linux_switch_osd(next, None);
+        }
+    }
+}
+
+unsafe extern "C" fn on_open_extras(_: *mut GtkWidget, _: *mut c_void) {
+    let pair = UI.with(|c| c.borrow().as_ref().map(|s| (s.win, s.cfg.clone())));
+    if let Some((win, mut cfg)) = pair {
+        if show_extras_sandbox_dialog(win, &mut cfg) {
+            save_config(&cfg);
+            apply_gtk_theme(cfg.theme);
+            UI.with(|c| {
+                if let Some(st) = c.borrow_mut().as_mut() {
+                    st.cfg = cfg;
+                }
+            });
+            sync_widgets_from_config();
+        }
+    }
+}
+
+unsafe extern "C" fn on_open_user_dict(_: *mut GtkWidget, _: *mut c_void) {
+    let pair = UI.with(|c| c.borrow().as_ref().map(|s| (s.win, s.cfg.clone())));
+    if let Some((win, mut cfg)) = pair {
+        if show_user_dict_dialog(win, &mut cfg) {
+            save_config(&cfg);
+            UI.with(|c| {
+                if let Some(st) = c.borrow_mut().as_mut() {
+                    st.cfg = cfg;
+                }
+            });
+        }
+    }
 }
 
 unsafe extern "C" fn on_open_convert(_: *mut GtkWidget, _: *mut c_void) {

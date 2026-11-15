@@ -9,6 +9,7 @@ pub const WM_APP_SYNC_UI: u32 = 0x8002;
 pub const WM_APP_TOGGLE_VE: u32 = 0x8003;
 pub const WM_APP_OPEN_CONVERT: u32 = 0x8004;
 pub const WM_APP_OPEN_MAIN: u32 = 0x8005;
+pub const WM_APP_SHOW_OSD: u32 = 0x8006;
 
 pub struct AppState {
     pub engine: Engine,
@@ -31,8 +32,10 @@ static STATE: OnceLock<Mutex<AppState>> = OnceLock::new();
 
 pub fn init_state(config: Config) {
     let pref = config.vietnamese_enabled;
+    let mut engine = Engine::new(config);
+    engine.set_clock_offset_secs(crate::platform_extra::local_utc_offset_secs());
     let _ = STATE.set(Mutex::new(AppState {
-        engine: Engine::new(config),
+        engine,
         main_hwnd: 0,
         fg_process: String::new(),
         fg_class: String::new(),

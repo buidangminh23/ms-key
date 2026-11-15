@@ -4,7 +4,8 @@ use std::ptr;
 use std::sync::Mutex;
 
 use mskey_core::{
-    AppBehavior, CaseTransform, Charset, Config, Engine, EngineAction, convert_text,
+    AppBehavior, CaseTransform, Charset, Config, ConvertEncoding, Engine, EngineAction,
+    convert_text, convert_with_encoding, detect_convert_encoding,
 };
 
 pub struct MsKeyHandle {
@@ -75,7 +76,28 @@ fn parse_case(code: u8) -> CaseTransform {
         2 => CaseTransform::Lower,
         3 => CaseTransform::Sentence,
         4 => CaseTransform::Title,
+        5 => CaseTransform::StripDiacritics,
         _ => CaseTransform::None,
+    }
+}
+
+fn parse_convert_encoding(code: u8) -> ConvertEncoding {
+    match code {
+        1 => ConvertEncoding::Tcvn3,
+        2 => ConvertEncoding::VniWindows,
+        3 => ConvertEncoding::UnicodeComposite,
+        4 => ConvertEncoding::Viqr,
+        _ => ConvertEncoding::Unicode,
+    }
+}
+
+fn encode_convert_encoding(enc: ConvertEncoding) -> u8 {
+    match enc {
+        ConvertEncoding::Unicode => 0,
+        ConvertEncoding::Tcvn3 => 1,
+        ConvertEncoding::VniWindows => 2,
+        ConvertEncoding::UnicodeComposite => 3,
+        ConvertEncoding::Viqr => 4,
     }
 }
 
@@ -290,6 +312,92 @@ pub extern "C" fn mskey_convert_text(
         to_c_string(&out)
     })
     .unwrap_or(ptr::null_mut())
+}
+
+#[unsafe(no_mangle)]
+pub extern "C" fn mskey_convert_with_encoding(
+    input: *const c_char,
+    from_enc: u8,
+    to_enc: u8,
+    case_mode: u8,
+) -> *mut c_char {
+    catch_unwind(|| {
+        let Some(text) = from_c_str(input) else {
+            return ptr::null_mut();
+        };
+        let out = convert_with_encoding(
+            &text,
+            parse_convert_encoding(from_enc),
+            parse_convert_encoding(to_enc),
+            parse_case(case_mode),
+        );
+        to_c_string(&out)
+    })
+    .unwrap_or(ptr::null_mut())
+}
+
+#[unsafe(no_mangle)]
+pub extern "C" fn mskey_detect_charset(input: *const c_char) -> u8 {
+    catch_unwind(|| {
+        let Some(text) = from_c_str(input) else {
+            return 0;
+        };
+        encode_convert_encoding(detect_convert_encoding(&text))
+    })
+    .unwrap_or(0)
+}
+
+#[unsafe(no_mangle)]
+pub extern "C" fn mskey_format_macro_text(config_json: *const c_char) -> *mut c_char {
+    catch_unwind(|| {
+        let Some(raw) = from_c_str(config_json) else {
+            return ptr::null_mut();
+        };
+        let Ok(cfg) = Config::from_json_str(&raw) else {
+            return ptr::null_mut();
+        };
+        to_c_string(&cfg.format_macro_text())
+    })
+    .unwrap_or(ptr::null_mut())
+}
+
+#[unsafe(no_mangle)]
+pub extern "C" fn mskey_parse_macro_text(raw_text: *const c_char) -> *mut c_char {
+    catch_unwind(|| {
+        let Some(raw) = from_c_str(raw_text) else {
+            return ptr::null_mut();
+        };
+        let entries = Config::parse_macro_text(&raw);
+        serde_json::to_string(&entries)
+            .map(|s| to_c_string(&s))
+            .unwrap_or(ptr::null_mut())
+    })
+    .unwrap_or(ptr::null_mut())
+}
+
+#[unsafe(no_mangle)]
+pub extern "C" fn mskey_is_active_delimiter(handle: *mut MsKeyHandle, codepoint: u32) -> bool {
+    catch_unwind(|| {
+        let Some(h) = (unsafe { handle.as_ref() }) else {
+            return false;
+        };
+        let Some(ch) = char::from_u32(codepoint) else {
+            return false;
+        };
+        let guard = h.engine.lock().unwrap_or_else(|e| e.into_inner());
+        guard.is_active_delimiter(ch)
+    })
+    .unwrap_or(false)
+}
+
+#[unsafe(no_mangle)]
+pub extern "C" fn mskey_set_clock_offset(handle: *mut MsKeyHandle, offset_secs: i64) {
+    let _ = catch_unwind(|| {
+        if let Some(h) = unsafe { handle.as_ref() } {
+            let mut guard = h.engine.lock().unwrap_or_else(|e| e.into_inner());
+            guard.set_clock_offset_secs(offset_secs);
+        }
+    });
 }
 
 #[unsafe(no_mangle)]

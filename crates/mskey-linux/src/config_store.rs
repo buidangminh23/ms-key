@@ -1,3 +1,4 @@
+use std::collections::HashMap;
 use std::env;
 use std::fs;
 use std::path::{Path, PathBuf};
@@ -27,14 +28,82 @@ pub fn load_config() -> Config {
         .unwrap_or_default()
 }
 
-pub fn save_config(cfg: &Config) {
-    let path = config_file_path();
+fn write_atomic(path: &Path, body: &str) -> Result<(), String> {
     if let Some(parent) = path.parent() {
-        let _ = fs::create_dir_all(parent);
+        fs::create_dir_all(parent).map_err(|e| e.to_string())?;
     }
+    let tmp = path.with_extension("json.tmp");
+    fs::write(&tmp, body).map_err(|e| e.to_string())?;
+    fs::rename(&tmp, path).map_err(|e| {
+        let _ = fs::remove_file(&tmp);
+        e.to_string()
+    })
+}
+
+pub fn save_config(cfg: &Config) {
     if let Ok(json) = cfg.to_json_pretty() {
-        let _ = fs::write(path, json);
+        let _ = write_atomic(&config_file_path(), &json);
     }
+}
+
+pub fn app_state_file_path() -> PathBuf {
+    config_dir().join("app_state.json")
+}
+
+pub fn load_app_state() -> HashMap<String, bool> {
+    fs::read_to_string(app_state_file_path())
+        .ok()
+        .and_then(|raw| serde_json::from_str::<HashMap<String, bool>>(&raw).ok())
+        .unwrap_or_default()
+}
+
+pub fn save_app_state(map: &HashMap<String, bool>) {
+    if let Ok(json) = serde_json::to_string_pretty(map) {
+        let _ = write_atomic(&app_state_file_path(), &json);
+    }
+}
+
+pub fn export_config_json(path: &Path, cfg: &Config) -> Result<(), String> {
+    let json = cfg.to_json_pretty().map_err(|e| e.to_string())?;
+    fs::write(path, json).map_err(|e| e.to_string())
+}
+
+pub fn import_config_json(path: &Path) -> Result<Config, String> {
+    let raw = fs::read_to_string(path).map_err(|e| e.to_string())?;
+    Config::from_json_str(&raw).map_err(|e| e.to_string())
+}
+
+pub fn parse_tz_offset(raw: &str) -> Option<i32> {
+    let t = raw.trim();
+    let (sign, rest) = if let Some(r) = t.strip_prefix('+') {
+        (1i32, r)
+    } else if let Some(r) = t.strip_prefix('-') {
+        (-1i32, r)
+    } else {
+        return None;
+    };
+    let clean: String = rest.chars().filter(|c| *c != ':').collect();
+    if clean.len() != 4 || !clean.bytes().all(|b| b.is_ascii_digit()) {
+        return None;
+    }
+    let hours: i32 = clean[0..2].parse().ok()?;
+    let mins: i32 = clean[2..4].parse().ok()?;
+    if hours > 23 || mins > 59 {
+        return None;
+    }
+    Some(sign * (hours * 3600 + mins * 60))
+}
+
+pub fn local_utc_offset_secs() -> i32 {
+    if let Ok(out) = Command::new("date").arg("+%z").output() {
+        if out.status.success() {
+            let s = String::from_utf8_lossy(&out.stdout);
+            if let Some(secs) = parse_tz_offset(&s) {
+                return secs;
+            }
+        }
+    }
+    0
 }
 
 pub fn config_mtime_nanos() -> u128 {
@@ -65,7 +134,7 @@ pub fn sync_linux_autostart(enable: bool) {
         .unwrap_or_else(|| "mskey-linux".to_string());
     let _ = fs::create_dir_all(&autostart_dir);
     let body = format!(
-        "[Desktop Entry]\nType=Application\nName=MS Key\nExec=\"{exe}\"\nHidden=false\nNoDisplay=false\nX-GNOME-Autostart-enabled=true\n"
+        "[Desktop Entry]\nType=Application\nName=MS Key\nExec=\"{exe}\" --autostart\nHidden=false\nNoDisplay=false\nX-GNOME-Autostart-enabled=true\n"
     );
     let _ = fs::write(file, body);
 }

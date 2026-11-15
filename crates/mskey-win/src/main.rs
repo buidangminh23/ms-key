@@ -7,12 +7,15 @@ mod dialogs;
 mod hook;
 mod hook_send;
 mod platform;
+mod platform_extra;
 mod state;
 mod theme;
 mod tray;
 mod ui;
 mod ui_actions;
 mod ui_controls;
+mod ui_extras;
+mod ui_osd;
 mod ui_paint;
 
 use std::env;

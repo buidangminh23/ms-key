@@ -2,11 +2,13 @@ use std::collections::HashMap;
 
 use mskey_core::{AppBehavior, Config, Engine, EngineAction, Mechanism};
 
+use crate::config_store::{load_app_state, local_utc_offset_secs, save_app_state};
 use crate::keyval::{
     HotkeySignal, HotkeyTracker, IBUS_CONTROL_MASK, IBUS_MOD1_MASK, IBUS_MOD4_MASK,
-    IBUS_RELEASE_MASK, KEY_BACKSPACE, KEY_ESCAPE, is_modifier_keyval, is_navigation_keyval,
-    keyval_to_char,
+    IBUS_RELEASE_MASK, KEY_BACKSPACE, KEY_ESCAPE, KEY_RETURN, KEY_RIGHT, KEY_TAB,
+    is_modifier_keyval, is_navigation_keyval, keyval_to_char,
 };
+use crate::linux_extra::{is_browser_app, is_terminal_app};
 
 pub const IBUS_CAP_PREEDIT_TEXT: u32 = 1 << 0;
 pub const IBUS_CAP_SURROUNDING_TEXT: u32 = 1 << 5;
@@ -21,6 +23,9 @@ pub enum IbusOp {
     SyncProperties,
     TriggerClipboardConvert,
     Beep,
+    ShowOsd(bool),
+    Delay(u32),
+    PasteViaClipboard(String, bool),
 }
 
 #[derive(Debug, Clone)]
@@ -37,20 +42,50 @@ pub struct IbusSession {
     pub app_ve_memory: HashMap<String, bool>,
     pub preedit: String,
     pub caps: u32,
+    pub us_layout: bool,
+    pub persist_app_state: bool,
+    pub cursor_rect: (i32, i32, i32, i32),
+    pub surrounding_text: String,
+    pub surrounding_cursor: u32,
 }
 
 impl IbusSession {
     pub fn new(config: Config) -> Self {
         let pref = config.vietnamese_enabled;
+        let mut engine = Engine::new(config);
+        engine.set_clock_offset_secs(local_utc_offset_secs() as i64);
         Self {
-            engine: Engine::new(config),
+            engine,
             hotkeys: HotkeyTracker::default(),
             user_preferred_ve: pref,
             active_app: String::new(),
             app_ve_memory: HashMap::new(),
             preedit: String::new(),
             caps: IBUS_CAP_PREEDIT_TEXT,
+            us_layout: true,
+            persist_app_state: false,
+            cursor_rect: (0, 0, 0, 0),
+            surrounding_text: String::new(),
+            surrounding_cursor: 0,
         }
+    }
+
+    pub fn load_persisted_app_memory(&mut self) {
+        self.app_ve_memory = load_app_state();
+        self.persist_app_state = true;
+    }
+
+    pub fn set_us_layout(&mut self, us: bool) {
+        self.us_layout = us;
+    }
+
+    pub fn set_cursor_location(&mut self, x: i32, y: i32, w: i32, h: i32) {
+        self.cursor_rect = (x, y, w, h);
+    }
+
+    pub fn set_surrounding_text(&mut self, text: String, cursor: u32) {
+        self.surrounding_text = text;
+        self.surrounding_cursor = cursor;
     }
 
     pub fn update_config(&mut self, cfg: Config) {
@@ -63,6 +98,9 @@ impl IbusSession {
         self.user_preferred_ve = enabled;
         if !self.active_app.is_empty() && self.engine.config().smart_app_switch {
             self.app_ve_memory.insert(self.active_app.clone(), enabled);
+            if self.persist_app_state {
+                save_app_state(&self.app_ve_memory);
+            }
         }
         self.engine.set_vietnamese_enabled(enabled);
         self.preedit.clear();
@@ -157,6 +195,9 @@ impl IbusSession {
                 if self.engine.config().beep_on_switch {
                     ops.push(IbusOp::Beep);
                 }
+                if self.engine.config().show_switch_osd {
+                    ops.push(IbusOp::ShowOsd(next));
+                }
                 return IbusProcessResult { handled: true, ops };
             }
             HotkeySignal::ConvertClipboard => {
@@ -174,6 +215,9 @@ impl IbusSession {
         if !self.active_app.is_empty()
             && self.engine.config().behavior_for_app(&self.active_app) == AppBehavior::Blacklist
         {
+            return IbusProcessResult { handled: false, ops: Vec::new() };
+        }
+        if self.engine.config().disable_on_non_us_layout && !self.us_layout {
             return IbusProcessResult { handled: false, ops: Vec::new() };
         }
 
@@ -243,7 +287,7 @@ impl IbusSession {
             return IbusProcessResult { handled: false, ops };
         }
 
-        if Engine::is_word_delimiter(ch) {
+        if self.engine.is_active_delimiter(ch) {
             let had_preedit = !self.preedit.is_empty();
             let act = self.engine.process_key(ch);
             match act {
@@ -325,22 +369,51 @@ impl IbusSession {
         state: u32,
         ops: &mut Vec<IbusOp>,
     ) {
+        let cfg = self.engine.config();
+        let browser = is_browser_app(&self.active_app);
+        let terminal = is_terminal_app(&self.active_app);
+        let force_forward = cfg.standard_key_send || terminal;
+        let use_clip = cfg.use_clipboard_send;
+        let shift_insert = cfg.paste_via_shift_insert || terminal;
+        let delay = cfg.send_delay_ms.min(25) as u32;
+        let push_delay = |ops: &mut Vec<IbusOp>| {
+            if delay > 0 {
+                ops.push(IbusOp::Delay(delay));
+            }
+        };
+
         if backspaces > 0 {
-            if (self.caps & IBUS_CAP_SURROUNDING_TEXT) != 0 {
+            if browser && cfg.fix_browser_suggest_1 {
+                ops.push(IbusOp::CommitText("\u{200B}".to_string()));
+                ops.push(IbusOp::ForwardKey(KEY_BACKSPACE, 14, 0));
+                push_delay(ops);
+            }
+            if browser && cfg.fix_browser_suggest_2 {
+                ops.push(IbusOp::ForwardKey(KEY_RIGHT, 114, 0));
+                push_delay(ops);
+            }
+            if (self.caps & IBUS_CAP_SURROUNDING_TEXT) != 0 && !force_forward && !use_clip {
                 ops.push(IbusOp::DeleteSurrounding(-(backspaces as i32), backspaces as u32));
+                push_delay(ops);
             } else {
                 for _ in 0..backspaces {
                     ops.push(IbusOp::ForwardKey(KEY_BACKSPACE, 14, 0));
+                    push_delay(ops);
                 }
             }
         }
         let trailing = text.chars().last().filter(|c| *c == '\n' || *c == '\t');
         let body = if trailing.is_some() { &text[..text.len() - 1] } else { text };
         if !body.is_empty() {
-            ops.push(IbusOp::CommitText(body.to_string()));
+            if use_clip {
+                ops.push(IbusOp::PasteViaClipboard(body.to_string(), shift_insert));
+            } else {
+                ops.push(IbusOp::CommitText(body.to_string()));
+            }
+            push_delay(ops);
         }
         if let Some(ch) = trailing {
-            let kv = if ch == '\n' { 0xff0d } else { 0xff09 };
+            let kv = if ch == '\n' { KEY_RETURN } else { KEY_TAB };
             ops.push(IbusOp::ForwardKey(kv, keycode, state & !IBUS_RELEASE_MASK));
         }
     }

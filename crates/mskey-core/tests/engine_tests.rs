@@ -8,10 +8,11 @@ fn simulate(engine: &mut Engine, input: &str) -> String {
     for ch in input.chars() {
         match ch {
             '\x08' => {
-                if matches!(engine.process_backspace(), EngineAction::PassThrough) {
+                let act = engine.process_backspace();
+                if matches!(act, EngineAction::PassThrough) {
                     screen.pop();
                 } else {
-                    apply_action(&mut screen, engine.process_backspace(), None);
+                    apply_action(&mut screen, act, None);
                 }
             }
             '\x1B' => {

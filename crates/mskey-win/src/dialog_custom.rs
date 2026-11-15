@@ -160,7 +160,9 @@ unsafe extern "system" fn custom_wnd_proc(
                         };
                         with_state(|app| {
                             let mut cfg = app.engine.config().clone();
-                            cfg.custom_keymap = updated;
+                            let mut kept = updated;
+                            kept.quick_u_horn = cfg.custom_keymap.quick_u_horn;
+                            cfg.custom_keymap = kept;
                             save_config(&cfg);
                             app.engine.update_config(cfg);
                         });

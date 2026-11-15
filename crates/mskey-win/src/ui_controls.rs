@@ -41,10 +41,13 @@ pub const IDC_BTN_MACRO: usize = 1121;
 pub const IDC_CHK_MACRO_EN: usize = 1122;
 pub const IDC_CHK_QUICK_W: usize = 1123;
 pub const IDC_CHK_QUICK_BRK: usize = 1124;
+pub const IDC_BTN_EXTRAS: usize = 1125;
 
 pub const IDC_RAD_CTRL_SHIFT: usize = 1201;
 pub const IDC_RAD_ALT_Z: usize = 1202;
 pub const IDC_RAD_CUSTOM_KEY: usize = 1203;
+pub const IDC_RAD_CTRL_SPACE: usize = 1212;
+pub const IDC_RAD_SHIFT_SHIFT: usize = 1213;
 pub const IDC_LBL_SWITCH_CUSTOM: usize = 1204;
 pub const IDC_BTN_CAP_SWITCH: usize = 1205;
 pub const IDC_CHK_ESC_RESTORE: usize = 1206;
@@ -65,6 +68,7 @@ pub const IDC_LBL_CUR_APP: usize = 1308;
 pub const IDC_BTN_APPS: usize = 1309;
 pub const IDC_BTN_ADD_CUR_EN: usize = 1310;
 pub const IDC_LBL_APP_HINT: usize = 1311;
+pub const IDC_BTN_USER_DICT: usize = 1312;
 
 pub const IDC_BTN_DEFAULT: usize = 1401;
 pub const IDC_BTN_SAVE: usize = 1402;
@@ -190,6 +194,8 @@ impl MainUiCtrls {
         Some(match id as usize {
             IDC_RAD_CTRL_SHIFT => cfg.switch_preset == SwitchPreset::CtrlShift,
             IDC_RAD_ALT_Z => cfg.switch_preset == SwitchPreset::AltZ,
+            IDC_RAD_CTRL_SPACE => cfg.switch_preset == SwitchPreset::CtrlSpace,
+            IDC_RAD_SHIFT_SHIFT => cfg.switch_preset == SwitchPreset::ShiftShift,
             IDC_RAD_CUSTOM_KEY => cfg.switch_preset == SwitchPreset::Custom,
             _ => return None,
         })
@@ -220,6 +226,8 @@ impl MainUiCtrls {
             IDC_CHK_SMART_APP => cfg.smart_app_switch = !cfg.smart_app_switch,
             IDC_RAD_CTRL_SHIFT => cfg.switch_preset = SwitchPreset::CtrlShift,
             IDC_RAD_ALT_Z => cfg.switch_preset = SwitchPreset::AltZ,
+            IDC_RAD_CTRL_SPACE => cfg.switch_preset = SwitchPreset::CtrlSpace,
+            IDC_RAD_SHIFT_SHIFT => cfg.switch_preset = SwitchPreset::ShiftShift,
             IDC_RAD_CUSTOM_KEY => cfg.switch_preset = SwitchPreset::Custom,
             _ => return false,
         }
@@ -410,21 +418,24 @@ fn build_tab0(hwnd: HWND, font: HFONT, dpi: i32) -> Vec<HWND> {
         make_child(hwnd, "STATIC", "Tối ưu Chrome/Edge/Terminal", 0, 284, 340, 244, 24, IDC_LBL_SUGGEST_TIP, font, dpi),
         make_owner_button(hwnd, "Cho phép gõ tắt", 44, 400, 236, 24, IDC_CHK_MACRO, font, dpi),
         make_owner_button(hwnd, "Bảng gõ tắt...", 348, 396, 168, 28, IDC_BTN_MACRO, font, dpi),
-        make_owner_button(hwnd, "Vẫn gõ tắt khi tắt Tiếng Việt", 44, 432, 360, 24, IDC_CHK_MACRO_EN, font, dpi),
+        make_owner_button(hwnd, "Vẫn gõ tắt khi tắt Tiếng Việt", 44, 432, 288, 24, IDC_CHK_MACRO_EN, font, dpi),
+        make_owner_button(hwnd, "Mở rộng & Gõ thử...", 348, 428, 168, 28, IDC_BTN_EXTRAS, font, dpi),
         make_owner_button(hwnd, "Gõ w thành ư", 44, 464, 216, 24, IDC_CHK_QUICK_W, font, dpi),
         make_owner_button(hwnd, "Gõ [ thành ơ, ] thành ư", 276, 464, 236, 24, IDC_CHK_QUICK_BRK, font, dpi),
     ]
 }
 
 fn build_tab1(hwnd: HWND, font: HFONT, dpi: i32) -> (Vec<HWND>, HWND, HWND) {
-    let lbl_switch_custom = make_child(hwnd, "STATIC", "Tổ hợp: -", 0, 44, 268, 284, 24, IDC_LBL_SWITCH_CUSTOM, font, dpi);
+    let lbl_switch_custom = make_child(hwnd, "STATIC", "Tổ hợp: -", 0, 44, 274, 290, 24, IDC_LBL_SWITCH_CUSTOM, font, dpi);
     let lbl_conv_hotkey = make_child(hwnd, "STATIC", "Chuyển mã: Ctrl + Shift + F6", 0, 44, 416, 284, 24, IDC_LBL_CONV_HOTKEY, font, dpi);
     let ctrls = vec![
-        make_owner_button(hwnd, "Ctrl + Shift", 44, 228, 132, 24, IDC_RAD_CTRL_SHIFT, font, dpi),
-        make_owner_button(hwnd, "Alt + Z", 184, 228, 112, 24, IDC_RAD_ALT_Z, font, dpi),
-        make_owner_button(hwnd, "Phím tùy chọn", 308, 228, 160, 24, IDC_RAD_CUSTOM_KEY, font, dpi),
+        make_owner_button(hwnd, "Ctrl + Shift", 44, 218, 128, 22, IDC_RAD_CTRL_SHIFT, font, dpi),
+        make_owner_button(hwnd, "Alt + Z", 184, 218, 100, 22, IDC_RAD_ALT_Z, font, dpi),
+        make_owner_button(hwnd, "Ctrl + Space", 296, 218, 132, 22, IDC_RAD_CTRL_SPACE, font, dpi),
+        make_owner_button(hwnd, "Shift + Shift", 44, 244, 128, 22, IDC_RAD_SHIFT_SHIFT, font, dpi),
+        make_owner_button(hwnd, "Phím tùy chọn", 184, 244, 152, 22, IDC_RAD_CUSTOM_KEY, font, dpi),
         lbl_switch_custom,
-        make_owner_button(hwnd, "Đặt phím tùy chọn", 348, 264, 168, 28, IDC_BTN_CAP_SWITCH, font, dpi),
+        make_owner_button(hwnd, "Đặt phím tùy chọn", 348, 270, 168, 28, IDC_BTN_CAP_SWITCH, font, dpi),
         make_owner_button(hwnd, "Phím Esc khôi phục từ gốc", 32, 320, 360, 24, IDC_CHK_ESC_RESTORE, font, dpi),
         make_owner_button(hwnd, "Âm thanh báo khi chuyển V/E", 32, 348, 360, 24, IDC_CHK_BEEP, font, dpi),
         lbl_conv_hotkey,
@@ -457,6 +468,7 @@ fn build_tab2(hwnd: HWND, font: HFONT, dpi: i32) -> (Vec<HWND>, HWND, HWND) {
         make_owner_button(hwnd, "Hiện bảng điều khiển khi mở", 32, 256, 300, 24, IDC_CHK_SHOW_START, font, dpi),
         make_child(hwnd, "STATIC", "Giao diện", 0, 32, 292, 88, 24, IDC_LBL_THEME, font, dpi),
         cb_theme,
+        make_owner_button(hwnd, "Từ điển cá nhân...", 348, 288, 168, 28, IDC_BTN_USER_DICT, font, dpi),
         make_owner_button(hwnd, "Tự động nhớ V/E theo ứng dụng", 44, 356, 420, 24, IDC_CHK_SMART_APP, font, dpi),
         lbl_cur_app,
         make_owner_button(hwnd, "Danh sách ứng dụng...", 44, 420, 224, 32, IDC_BTN_APPS, font, dpi),

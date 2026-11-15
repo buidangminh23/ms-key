@@ -37,6 +37,10 @@ public struct SettingsView: View {
                 AppRulesView(store: store)
             case .converter:
                 ConverterView(store: store)
+            case .extras:
+                ExtrasSandboxView(store: store)
+            case .userDict:
+                UserDictView(store: store)
             case .captureSwitchHotkey:
                 HotkeyCaptureView(store: store, target: .switchHotkey)
             case .captureConvertHotkey:
@@ -60,12 +64,12 @@ public struct SettingsView: View {
                         .gridCellColumns(2)
 
                         Button(action: { store.toggleVE() }) {
-                            Text(store.config.vietnamese_enabled ? "Tiếng Việt (V)" : "Tiếng Anh (E)")
+                            Text(store.effectiveVE ? "Tiếng Việt (V)" : "Tiếng Anh (E)")
                                 .fontWeight(.semibold)
                                 .frame(maxWidth: .infinity)
                         }
                         .buttonStyle(.borderedProminent)
-                        .tint(store.config.vietnamese_enabled ? .red : .blue)
+                        .tint(store.effectiveVE ? .red : .blue)
                         .frame(width: 132, height: 28)
                     }
 

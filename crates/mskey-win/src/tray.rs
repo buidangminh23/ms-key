@@ -34,6 +34,10 @@ pub const ID_TRAY_TYPE_CUSTOM: usize = 4024;
 pub const ID_TRAY_MACROS: usize = 4030;
 pub const ID_TRAY_CONVERT: usize = 4031;
 pub const ID_TRAY_APPS: usize = 4032;
+pub const ID_TRAY_EXTRAS: usize = 4033;
+pub const ID_TRAY_USER_DICT: usize = 4034;
+pub const ID_TRAY_QUICK_TELEX: usize = 4035;
+pub const ID_TRAY_SHOW_OSD: usize = 4036;
 pub const ID_TRAY_EXIT: usize = 4099;
 
 pub struct TrayController {
@@ -153,9 +157,18 @@ pub fn show_tray_menu(hwnd: HWND, vietnamese: bool, charset: Charset, method: In
         AppendMenuW(menu, MF_POPUP, method_menu as usize, m_lbl.as_ptr());
 
         AppendMenuW(menu, MF_SEPARATOR, 0, ptr::null());
+        let (qt, osd) = crate::state::with_state(|st| {
+            let c = st.engine.config();
+            (c.quick_telex, c.show_switch_osd)
+        });
         append_item(menu, ID_TRAY_MACROS, "Bảng gõ tắt...", false);
         append_item(menu, ID_TRAY_CONVERT, "Chuyển mã Clipboard...", false);
         append_item(menu, ID_TRAY_APPS, "Danh sách ứng dụng...", false);
+        append_item(menu, ID_TRAY_USER_DICT, "Từ điển cá nhân...", false);
+        append_item(menu, ID_TRAY_EXTRAS, "Mở rộng & Gõ thử...", false);
+        AppendMenuW(menu, MF_SEPARATOR, 0, ptr::null());
+        append_item(menu, ID_TRAY_QUICK_TELEX, "Gõ nhanh (Quick Telex)", qt);
+        append_item(menu, ID_TRAY_SHOW_OSD, "Hiện OSD khi chuyển V/E", osd);
         AppendMenuW(menu, MF_SEPARATOR, 0, ptr::null());
         append_item(menu, ID_TRAY_EXIT, "Thoát MS Key", false);
 

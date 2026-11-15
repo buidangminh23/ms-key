@@ -4,22 +4,25 @@ use std::fs;
 use std::os::raw::c_int;
 use std::ptr;
 
-use mskey_core::{CaseTransform, Charset, Config, HotkeyCombo, convert_text};
+use mskey_core::{
+    CaseTransform, Config, ConvertEncoding, HotkeyCombo, convert_with_encoding,
+    detect_convert_encoding,
+};
 
-use crate::gio_ffi::from_cstr;
+use crate::gio_ffi::{from_cstr, g_free};
 use crate::gtk_ffi::{
-    GTK_FILE_CHOOSER_ACTION_OPEN, GTK_POLICY_AUTOMATIC, GTK_POLICY_NEVER, GdkEventKey, GtkWidget,
-    GtkWindow, connect_signal, gtk_container_add, gtk_file_chooser_get_filename,
-    gtk_file_chooser_widget_new, gtk_grid_attach, gtk_scrolled_window_new,
-    gtk_scrolled_window_set_policy, gtk_text_view_new, gtk_widget_destroy, gtk_widget_set_hexpand,
-    gtk_widget_set_vexpand,
+    GTK_FILE_CHOOSER_ACTION_OPEN, GTK_FILE_CHOOSER_ACTION_SAVE, GTK_POLICY_AUTOMATIC,
+    GTK_POLICY_NEVER, GdkEventKey, GtkWidget, GtkWindow, connect_signal, gtk_container_add,
+    gtk_file_chooser_get_filename, gtk_file_chooser_set_current_name,
+    gtk_file_chooser_set_do_overwrite_confirmation, gtk_file_chooser_widget_new, gtk_grid_attach,
+    gtk_scrolled_window_new, gtk_scrolled_window_set_policy, gtk_text_view_new, gtk_widget_destroy,
+    gtk_widget_set_hexpand, gtk_widget_set_vexpand,
 };
 use crate::gtk_helpers::{
     create_modal_gtk, get_combo, make_button, make_combo, make_grid, make_hbox, make_label,
     make_vbox, pack, read_clipboard_gtk, read_textview, run_modal_gtk, write_clipboard_gtk,
     write_textview,
 };
-use crate::gio_ffi::g_free;
 use crate::keyval::{
     IBUS_CONTROL_MASK, IBUS_MOD1_MASK, IBUS_MOD4_MASK, IBUS_SHIFT_MASK, format_hotkey_linux,
     gdk_keyval_to_vk, is_modifier_keyval,
@@ -50,10 +53,18 @@ pub fn show_converter_dialog(parent: *mut GtkWindow) {
     let dlg = create_modal_gtk(parent, "Chuyển mã Clipboard & Văn bản", 464, 340);
     let root = make_vbox(8);
     let grid = make_grid(8, 8);
-    let cs = &["Unicode", "TCVN3 (ABC)", "VNI Windows", "Unicode tổ hợp"];
-    let cases = &["Giữ nguyên chữ", "CHỮ HOA", "chữ thường", "Hoa đầu câu", "Hoa Mỗi Từ"];
-    let from_cb = make_combo(cs);
-    let to_cb = make_combo(cs);
+    let src_cs = &["Tự động (Auto)", "Unicode", "TCVN3 (ABC)", "VNI Windows", "Unicode tổ hợp", "VIQR"];
+    let dst_cs = &["Unicode", "TCVN3 (ABC)", "VNI Windows", "Unicode tổ hợp", "VIQR"];
+    let cases = &[
+        "Giữ nguyên chữ",
+        "CHỮ HOA",
+        "chữ thường",
+        "Hoa đầu câu",
+        "Hoa Mỗi Từ",
+        "Bỏ dấu tiếng Việt",
+    ];
+    let from_cb = make_combo(src_cs);
+    let to_cb = make_combo(dst_cs);
     let case_cb = make_combo(cases);
     unsafe {
         gtk_grid_attach(grid, make_label("Bảng mã nguồn", false), 0, 0, 1, 1);
@@ -113,20 +124,32 @@ unsafe extern "C" fn on_conv_run(_: *mut GtkWidget, _: *mut c_void) {
             .map(|w| (get_combo(w.from_cb), get_combo(w.to_cb), get_combo(w.case_cb), w.tv))
     });
     if let Some((f, t, ca, tv)) = data {
-        let map_cs = |idx: usize| match idx {
-            1 => Charset::Tcvn3,
-            2 => Charset::VniWindows,
-            3 => Charset::UnicodeComposite,
-            _ => Charset::Unicode,
+        let src = read_textview(tv);
+        let from_enc = match f {
+            0 => detect_convert_encoding(&src),
+            1 => ConvertEncoding::Unicode,
+            2 => ConvertEncoding::Tcvn3,
+            3 => ConvertEncoding::VniWindows,
+            4 => ConvertEncoding::UnicodeComposite,
+            5 => ConvertEncoding::Viqr,
+            _ => ConvertEncoding::Unicode,
         };
-        let map_case = |idx: usize| match idx {
+        let to_enc = match t {
+            1 => ConvertEncoding::Tcvn3,
+            2 => ConvertEncoding::VniWindows,
+            3 => ConvertEncoding::UnicodeComposite,
+            4 => ConvertEncoding::Viqr,
+            _ => ConvertEncoding::Unicode,
+        };
+        let case_tf = match ca {
             1 => CaseTransform::Upper,
             2 => CaseTransform::Lower,
             3 => CaseTransform::Sentence,
             4 => CaseTransform::Title,
+            5 => CaseTransform::StripDiacritics,
             _ => CaseTransform::None,
         };
-        let out = convert_text(&read_textview(tv), map_cs(f), map_cs(t), map_case(ca));
+        let out = convert_with_encoding(&src, from_enc, to_enc, case_tf);
         write_textview(tv, &out);
         write_clipboard_gtk(&out);
     }
@@ -191,31 +214,48 @@ unsafe extern "C" fn on_cap_cancel(_: *mut GtkWidget, _: *mut c_void) {
     }
 }
 
-pub fn pick_and_import_evkey_tree(parent: *mut GtkWindow) -> Option<Config> {
-    let dlg = create_modal_gtk(parent, "Chọn tệp setting.tree của EVKey", 600, 420);
+pub fn pick_file_path(
+    parent: *mut GtkWindow,
+    title: &str,
+    save: bool,
+    default_name: &str,
+) -> Option<String> {
+    let dlg = create_modal_gtk(parent, title, 600, 420);
     let root = make_vbox(8);
-    let chooser = unsafe { gtk_file_chooser_widget_new(GTK_FILE_CHOOSER_ACTION_OPEN) };
+    let action = if save { GTK_FILE_CHOOSER_ACTION_SAVE } else { GTK_FILE_CHOOSER_ACTION_OPEN };
+    let chooser = unsafe { gtk_file_chooser_widget_new(action) };
     unsafe {
         gtk_widget_set_hexpand(chooser, 1);
         gtk_widget_set_vexpand(chooser, 1);
+        if save {
+            gtk_file_chooser_set_do_overwrite_confirmation(chooser, 1);
+            if !default_name.is_empty() {
+                let cn = crate::gio_ffi::cstr(default_name);
+                gtk_file_chooser_set_current_name(chooser, cn.as_ptr());
+            }
+        }
     }
     pack(root, chooser, true, true, 0);
     let bar = make_hbox(8);
-    let b_open = make_button("Nhập tệp này", true);
+    let b_ok = make_button(if save { "Lưu tệp này" } else { "Mở tệp này" }, true);
     let b_cancel = make_button("Hủy", false);
     pack(bar, make_label("", false), true, true, 0);
     pack(bar, b_cancel, false, false, 0);
-    pack(bar, b_open, false, false, 0);
+    pack(bar, b_ok, false, false, 0);
     pack(root, bar, false, false, 0);
     unsafe { gtk_container_add(dlg, root) };
 
     TREE_DLG.with(|c| {
         *c.borrow_mut() = Some(TreeChooser { dlg, chooser, path: None });
     });
-    connect_signal(b_open, "clicked", on_tree_open as *const c_void, 0);
+    connect_signal(b_ok, "clicked", on_tree_open as *const c_void, 0);
     connect_signal(b_cancel, "clicked", on_tree_cancel as *const c_void, 0);
     run_modal_gtk(dlg);
-    let path = TREE_DLG.with(|c| c.borrow_mut().take().and_then(|s| s.path))?;
+    TREE_DLG.with(|c| c.borrow_mut().take().and_then(|s| s.path))
+}
+
+pub fn pick_and_import_evkey_tree(parent: *mut GtkWindow) -> Option<Config> {
+    let path = pick_file_path(parent, "Chọn tệp setting.tree của EVKey", false, "")?;
     let raw = fs::read_to_string(path).ok()?;
     Some(Config::import_evkey_tree(&raw))
 }

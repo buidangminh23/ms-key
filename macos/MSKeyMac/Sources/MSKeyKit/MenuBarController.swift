@@ -11,7 +11,7 @@ public final class MenuBarController: NSObject {
         super.init()
         let item = NSStatusBar.system.statusItem(withLength: NSStatusItem.squareLength)
         self.statusItem = item
-        updateStatusIcon(vietnamese: store.config.vietnamese_enabled)
+        updateStatusIcon(vietnamese: store.effectiveVE)
         rebuildMenu()
     }
 
@@ -25,7 +25,7 @@ public final class MenuBarController: NSObject {
     public func rebuildMenu() {
         guard let store else { return }
         let menu = NSMenu()
-        let toggleTitle = store.config.vietnamese_enabled ? "Chuyển sang Tiếng Anh (E)" : "Chuyển sang Tiếng Việt (V)"
+        let toggleTitle = store.effectiveVE ? "Chuyển sang Tiếng Anh (E)" : "Chuyển sang Tiếng Việt (V)"
         menu.addItem(makeItem(toggleTitle, action: #selector(onToggleVE)))
         menu.addItem(makeItem("Mở Bảng điều khiển...", action: #selector(onOpenSettings)))
         menu.addItem(.separator())
@@ -54,6 +54,11 @@ public final class MenuBarController: NSObject {
         menu.addItem(makeItem("Chuyển mã nhanh Clipboard", action: #selector(onQuickConvertClipboard)))
         menu.addItem(makeItem("Công cụ chuyển mã...", action: #selector(onOpenConverter)))
         menu.addItem(makeItem("Bảng gõ tắt...", action: #selector(onOpenMacros)))
+        menu.addItem(makeItem("Bảng từ điển cá nhân...", action: #selector(onOpenUserDict)))
+        menu.addItem(makeItem("Mở rộng & Gõ thử...", action: #selector(onOpenExtras)))
+        let osdItem = makeItem("Hiện OSD chuyển V/E", action: #selector(onToggleOsd))
+        osdItem.state = store.config.show_switch_osd ? .on : .off
+        menu.addItem(osdItem)
         menu.addItem(.separator())
         menu.addItem(makeItem("Thoát MS Key", action: #selector(onQuit), key: "q"))
         statusItem?.menu = menu
@@ -94,6 +99,9 @@ public final class MenuBarController: NSObject {
     @objc private func onOpenSettings() { store?.showMainWindow() }
     @objc private func onOpenConverter() { store?.openSheet(.converter) }
     @objc private func onOpenMacros() { store?.openSheet(.macros) }
+    @objc private func onOpenUserDict() { store?.openSheet(.userDict) }
+    @objc private func onOpenExtras() { store?.openSheet(.extras) }
+    @objc private func onToggleOsd() { store?.updateConfig { $0.show_switch_osd.toggle() } }
     @objc private func onQuickConvertClipboard() { store?.quickConvertPasteboard() }
     @objc private func onQuit() { NSApp.terminate(nil) }
 

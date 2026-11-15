@@ -4,11 +4,12 @@ use std::ffi::c_void;
 use std::os::raw::{c_char, c_int};
 use std::process::Command;
 use std::ptr;
+use std::time::Duration;
 
 use mskey_core::{Charset, Config, InputMethod, Mechanism};
 
 use crate::config_store::{
-    config_mtime_nanos, detect_active_x11_app, load_config, resolve_ibus_address, save_config,
+    config_mtime_nanos, load_config, resolve_ibus_address, save_config,
 };
 use crate::gio_ffi::{
     G_DBUS_CONNECTION_FLAGS_AUTHENTICATION_CLIENT, G_DBUS_CONNECTION_FLAGS_MESSAGE_BUS_CONNECTION,
@@ -17,56 +18,38 @@ use crate::gio_ffi::{
     g_dbus_connection_register_object, g_dbus_method_invocation_return_value,
     g_dbus_node_info_lookup_interface, g_dbus_node_info_new_for_xml, g_dbus_node_info_unref,
     g_error_free, g_main_loop_new, g_main_loop_quit, g_main_loop_run, g_main_loop_unref,
-    g_timeout_add, g_variant_get_child_value, g_variant_get_string, g_variant_get_uint32,
-    g_variant_new_boolean, g_variant_new_object_path, g_variant_new_string, g_variant_new_tuple,
-    g_variant_new_uint32, g_variant_unref, gdk_beep,
+    g_timeout_add, g_variant_get_child_value, g_variant_get_uint32, g_variant_new_boolean,
+    g_variant_new_object_path, g_variant_new_string, g_variant_new_tuple, g_variant_new_uint32,
+    g_variant_unref, gdk_beep,
 };
 use crate::ibus_logic::{IbusOp, IbusSession};
 use crate::ibus_variant::{
     emit_commit_text, emit_delete_surrounding, emit_forward_key, emit_no_args, emit_preedit,
+    extract_cursor_rect, extract_str_arg, extract_surrounding_args, extract_u32_arg,
     register_panel_properties,
 };
+use crate::linux_extra::{
+    apply_clipboard_paste_linux, detect_active_app, ensure_gtk_init, is_us_keyboard_layout,
+    show_linux_switch_osd,
+};
 
-const FACTORY_XML: &str = "\
-<node>\
-  <interface name='org.freedesktop.IBus.Factory'>\
-    <method name='CreateEngine'>\
-      <arg direction='in' type='s' name='name'/>\
-      <arg direction='out' type='o'/>\
-    </method>\
-    <method name='Destroy'/>\
-  </interface>\
-</node>";
+const FACTORY_XML: &str = "<node><interface name='org.freedesktop.IBus.Factory'><method name='CreateEngine'><arg direction='in' type='s' name='name'/><arg direction='out' type='o'/></method><method name='Destroy'/></interface></node>";
 
 const ENGINE_XML: &str = "\
-<node>\
-  <interface name='org.freedesktop.IBus.Engine'>\
-    <method name='ProcessKeyEvent'>\
-      <arg direction='in' type='u' name='keyval'/>\
-      <arg direction='in' type='u' name='keycode'/>\
-      <arg direction='in' type='u' name='state'/>\
-      <arg direction='out' type='b'/>\
-    </method>\
-    <method name='SetCapabilities'><arg direction='in' type='u' name='caps'/></method>\
-    <method name='PropertyActivate'><arg direction='in' type='s' name='name'/><arg direction='in' type='u' name='state'/></method>\
-    <method name='PropertyShow'><arg direction='in' type='s' name='name'/></method>\
-    <method name='PropertyHide'><arg direction='in' type='s' name='name'/></method>\
-    <method name='SetCursorLocation'><arg direction='in' type='i' name='x'/><arg direction='in' type='i' name='y'/><arg direction='in' type='i' name='w'/><arg direction='in' type='i' name='h'/></method>\
-    <method name='SetSurroundingText'><arg direction='in' type='v' name='text'/><arg direction='in' type='u' name='cursor'/><arg direction='in' type='u' name='anchor'/></method>\
-    <method name='FocusIn'/>\
-    <method name='FocusInId'><arg direction='in' type='s' name='object_path'/><arg direction='in' type='s' name='client'/></method>\
-    <method name='FocusOut'/>\
-    <method name='FocusOutId'><arg direction='in' type='s' name='object_path'/></method>\
-    <method name='Reset'/>\
-    <method name='Enable'/>\
-    <method name='Disable'/>\
-    <method name='PageUp'/>\
-    <method name='PageDown'/>\
-    <method name='CursorUp'/>\
-    <method name='CursorDown'/>\
-    <method name='CandidateClicked'><arg direction='in' type='u' name='index'/><arg direction='in' type='u' name='button'/><arg direction='in' type='u' name='state'/></method>\
-  </interface>\
-</node>";
+<node><interface name='org.freedesktop.IBus.Engine'>\
+<method name='ProcessKeyEvent'><arg direction='in' type='u' name='keyval'/><arg direction='in' type='u' name='keycode'/><arg direction='in' type='u' name='state'/><arg direction='out' type='b'/></method>\
+<method name='SetCapabilities'><arg direction='in' type='u' name='caps'/></method>\
+<method name='PropertyActivate'><arg direction='in' type='s' name='name'/><arg direction='in' type='u' name='state'/></method>\
+<method name='PropertyShow'><arg direction='in' type='s' name='name'/></method>\
+<method name='PropertyHide'><arg direction='in' type='s' name='name'/></method>\
+<method name='SetCursorLocation'><arg direction='in' type='i' name='x'/><arg direction='in' type='i' name='y'/><arg direction='in' type='i' name='w'/><arg direction='in' type='i' name='h'/></method>\
+<method name='SetSurroundingText'><arg direction='in' type='v' name='text'/><arg direction='in' type='u' name='cursor'/><arg direction='in' type='u' name='anchor'/></method>\
+<method name='FocusIn'/><method name='FocusInId'><arg direction='in' type='s' name='object_path'/><arg direction='in' type='s' name='client'/></method>\
+<method name='FocusOut'/><method name='FocusOutId'><arg direction='in' type='s' name='object_path'/></method>\
+<method name='Reset'/><method name='Enable'/><method name='Disable'/>\
+<method name='PageUp'/><method name='PageDown'/><method name='CursorUp'/><method name='CursorDown'/>\
+<method name='CandidateClicked'><arg direction='in' type='u' name='index'/><arg direction='in' type='u' name='button'/><arg direction='in' type='u' name='state'/></method>\
+</interface></node>";
 
 struct DaemonState {
     conn: *mut GDBusConnection,
@@ -108,6 +91,7 @@ pub fn run_ibus_service() -> i32 {
     }
 
     request_ibus_name(conn);
+    let _ = ensure_gtk_init();
     let f_xml = cstr(FACTORY_XML);
     let f_node = unsafe { g_dbus_node_info_new_for_xml(f_xml.as_ptr(), ptr::null_mut()) };
     let f_name = cstr("org.freedesktop.IBus.Factory");
@@ -118,13 +102,16 @@ pub fn run_ibus_service() -> i32 {
     let e_name = cstr("org.freedesktop.IBus.Engine");
     let e_iface = unsafe { g_dbus_node_info_lookup_interface(e_node, e_name.as_ptr()) };
 
+    let mut session = IbusSession::new(load_config());
+    session.load_persisted_app_memory();
+    session.set_us_layout(is_us_keyboard_layout());
     DAEMON.with(|d| {
         *d.borrow_mut() = Some(DaemonState {
             conn,
             engine_iface: e_iface,
             engine_seq: 0,
             active_path: String::new(),
-            session: IbusSession::new(load_config()),
+            session,
             last_mtime: config_mtime_nanos(),
         });
     });
@@ -195,8 +182,11 @@ unsafe extern "C" fn poll_config_reload(_: *mut c_void) -> c_int {
         if let Some(st) = b.as_mut() {
             if cur > 0 && cur != st.last_mtime {
                 st.last_mtime = cur;
-                st.session.update_config(load_config());
-                return Some((st.conn, st.active_path.clone(), st.session.engine.config().clone()));
+                let fresh = load_config();
+                if fresh.to_json_pretty().ok() != st.session.engine.config().to_json_pretty().ok() {
+                    st.session.update_config(fresh);
+                    return Some((st.conn, st.active_path.clone(), st.session.engine.config().clone()));
+                }
             }
         }
         None
@@ -318,34 +308,45 @@ fn dispatch_non_key_method(
 ) {
     match method {
         "SetCapabilities" => {
-            let caps = unsafe {
-                let v0 = g_variant_get_child_value(parameters, 0);
-                let c = g_variant_get_uint32(v0);
-                g_variant_unref(v0);
-                c
-            };
-            DAEMON.with(|d| {
-                if let Some(st) = d.borrow_mut().as_mut() {
-                    st.session.set_capabilities(caps);
-                }
-            });
+            if let Some(caps) = unsafe { extract_u32_arg(parameters, 0) } {
+                DAEMON.with(|d| {
+                    if let Some(st) = d.borrow_mut().as_mut() {
+                        st.session.set_capabilities(caps);
+                    }
+                });
+            }
+        }
+        "SetCursorLocation" => {
+            if let Some(rect) = unsafe { extract_cursor_rect(parameters) } {
+                DAEMON.with(|d| {
+                    if let Some(st) = d.borrow_mut().as_mut() {
+                        st.session.set_cursor_location(rect.0, rect.1, rect.2, rect.3);
+                    }
+                });
+            }
+        }
+        "SetSurroundingText" => {
+            if let Some((txt, cur)) = unsafe { extract_surrounding_args(parameters) } {
+                DAEMON.with(|d| {
+                    if let Some(st) = d.borrow_mut().as_mut() {
+                        st.session.set_surrounding_text(txt, cur);
+                    }
+                });
+            }
         }
         "FocusIn" | "FocusInId" => {
             let client = if method == "FocusInId" {
-                unsafe {
-                    let v1 = g_variant_get_child_value(parameters, 1);
-                    let s = from_cstr(g_variant_get_string(v1, ptr::null_mut()));
-                    g_variant_unref(v1);
-                    s
-                }
+                unsafe { extract_str_arg(parameters, 1) }.unwrap_or_default()
             } else {
                 String::new()
             };
-            let app = detect_active_x11_app().unwrap_or(client);
+            let app = detect_active_app().unwrap_or(client);
+            let us = is_us_keyboard_layout();
             let ops = DAEMON.with(|d| {
                 let mut b = d.borrow_mut();
                 let st = b.as_mut().expect("daemon state");
                 st.active_path = path.to_string();
+                st.session.set_us_layout(us);
                 st.session.focus_in(&app)
             });
             for op in ops {
@@ -365,23 +366,22 @@ fn dispatch_non_key_method(
             }
         }
         "Enable" => {
+            let us = is_us_keyboard_layout();
             let cfg = DAEMON.with(|d| {
                 let mut b = d.borrow_mut();
                 let st = b.as_mut().expect("daemon state");
                 st.active_path = path.to_string();
+                st.last_mtime = config_mtime_nanos();
+                st.session.set_us_layout(us);
                 st.session.update_config(load_config());
                 st.session.engine.config().clone()
             });
             register_panel_properties(conn, path, &cfg);
         }
         "PropertyActivate" => {
-            let name = unsafe {
-                let v0 = g_variant_get_child_value(parameters, 0);
-                let s = from_cstr(g_variant_get_string(v0, ptr::null_mut()));
-                g_variant_unref(v0);
-                s
-            };
-            handle_property_activate(conn, path, &name);
+            if let Some(name) = unsafe { extract_str_arg(parameters, 0) } {
+                handle_property_activate(conn, path, &name);
+            }
         }
         _ => {}
     }
@@ -396,7 +396,7 @@ fn handle_property_activate(conn: *mut GDBusConnection, path: &str, name: &str) 
         spawn_self_arg("--convert");
         return;
     }
-    let updated: Option<Config> = DAEMON.with(|d| {
+    let updated: Option<(Config, Option<(bool, (i32, i32))>)> = DAEMON.with(|d| {
         let mut b = d.borrow_mut();
         let st = b.as_mut()?;
         let mut cfg = st.session.engine.config().clone();
@@ -406,25 +406,38 @@ fn handle_property_activate(conn: *mut GDBusConnection, path: &str, name: &str) 
                 st.session.set_user_vietnamese(next);
                 let c = st.session.engine.config().clone();
                 save_config(&c);
-                return Some(c);
+                st.last_mtime = config_mtime_nanos();
+                let rect = st.session.cursor_rect;
+                return Some((c, Some((next, (rect.0, rect.1)))));
             }
             "Method.Telex" => cfg.input_method = InputMethod::Telex,
             "Method.Vni" => cfg.input_method = InputMethod::Vni,
             "Method.Viqr" => cfg.input_method = InputMethod::Viqr,
             "Method.Simple" => cfg.input_method = InputMethod::SimpleTelex,
+            "Method.Custom" => cfg.input_method = InputMethod::Custom,
             "Charset.Unicode" => cfg.charset = Charset::Unicode,
             "Charset.Tcvn3" => cfg.charset = Charset::Tcvn3,
             "Charset.Vni" => cfg.charset = Charset::VniWindows,
+            "Charset.Comp" => cfg.charset = Charset::UnicodeComposite,
             "Mech.Preedit" => cfg.mechanism = Mechanism::KeyboardHook,
             "Mech.Direct" => cfg.mechanism = Mechanism::CompatibleHook,
             _ => return None,
         }
         save_config(&cfg);
+        st.last_mtime = config_mtime_nanos();
         st.session.update_config(cfg.clone());
-        Some(cfg)
+        Some((cfg, None))
     });
-    if let Some(cfg) = updated {
+    if let Some((cfg, toggled)) = updated {
         register_panel_properties(conn, path, &cfg);
+        if let Some((next, anchor)) = toggled {
+            if cfg.beep_on_switch {
+                unsafe { gdk_beep() };
+            }
+            if cfg.show_switch_osd {
+                show_linux_switch_osd(next, Some(anchor));
+            }
+        }
     }
 }
 
@@ -441,14 +454,32 @@ fn apply_dbus_op(conn: *mut GDBusConnection, path: &str, op: IbusOp) {
         IbusOp::DeleteSurrounding(offset, len) => emit_delete_surrounding(conn, path, offset, len),
         IbusOp::ForwardKey(kv, kc, st) => emit_forward_key(conn, path, kv, kc, st),
         IbusOp::SyncProperties => {
-            if let Some(cfg) =
-                DAEMON.with(|d| d.borrow().as_ref().map(|s| s.session.engine.config().clone()))
-            {
-                save_config(&cfg);
+            if let Some(cfg) = DAEMON.with(|d| {
+                d.borrow_mut().as_mut().map(|s| {
+                    let c = s.session.engine.config().clone();
+                    save_config(&c);
+                    s.last_mtime = config_mtime_nanos();
+                    c
+                })
+            }) {
                 register_panel_properties(conn, path, &cfg);
             }
         }
         IbusOp::TriggerClipboardConvert => spawn_self_arg("--convert"),
         IbusOp::Beep => unsafe { gdk_beep() },
+        IbusOp::ShowOsd(vi) => {
+            let anchor = DAEMON.with(|d| d.borrow().as_ref().map(|s| (s.session.cursor_rect.0, s.session.cursor_rect.1)));
+            show_linux_switch_osd(vi, anchor);
+        }
+        IbusOp::Delay(ms) => std::thread::sleep(Duration::from_millis(ms as u64)),
+        IbusOp::PasteViaClipboard(text, shift_insert) => {
+            let delay = DAEMON.with(|d| {
+                d.borrow()
+                    .as_ref()
+                    .map(|s| s.session.engine.config().send_delay_ms as u32)
+                    .unwrap_or(0)
+            });
+            apply_clipboard_paste_linux(&text, shift_insert, delay);
+        }
     }
 }

@@ -44,6 +44,7 @@ unsafe extern "C" {
         function: Option<unsafe extern "C" fn(*mut c_void) -> c_int>,
         data: *mut c_void,
     ) -> c_uint;
+    pub fn g_source_remove(tag: c_uint) -> c_int;
     pub fn g_idle_add(
         function: Option<unsafe extern "C" fn(*mut c_void) -> c_int>,
         data: *mut c_void,
@@ -66,7 +67,10 @@ unsafe extern "C" {
     ) -> *mut GVariant;
     pub fn g_variant_new_tuple(children: *const *mut GVariant, n_children: usize) -> *mut GVariant;
     pub fn g_variant_get_child_value(val: *mut GVariant, index: usize) -> *mut GVariant;
+    pub fn g_variant_get_variant(val: *mut GVariant) -> *mut GVariant;
+    pub fn g_variant_n_children(val: *mut GVariant) -> usize;
     pub fn g_variant_get_uint32(val: *mut GVariant) -> u32;
+    pub fn g_variant_get_int32(val: *mut GVariant) -> i32;
     pub fn g_variant_get_string(val: *mut GVariant, length: *mut usize) -> *const c_char;
     pub fn g_variant_unref(val: *mut GVariant);
 

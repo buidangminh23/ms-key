@@ -6,6 +6,7 @@ public struct MacroManagerView: View {
     @Environment(\.dismiss) private var dismiss
     @State private var shortcut = ""
     @State private var expansion = ""
+    @State private var statusText = ""
 
     public init(store: MSKeyStore) {
         self.store = store
@@ -17,29 +18,47 @@ public struct MacroManagerView: View {
             List {
                 ForEach(store.config.macros) { item in
                     HStack(spacing: 8) {
-                        Text(item.shortcut).fontWeight(.semibold).frame(width: 120, alignment: .leading)
+                        Text(item.shortcut).fontWeight(.semibold).frame(width: 110, alignment: .leading)
                         Text("→").foregroundStyle(.secondary)
-                        Text(item.expansion).lineLimit(1)
+                        Text(item.expansion.replacingOccurrences(of: "\n", with: "\\n")).lineLimit(1)
+                        if !item.enabled {
+                            Text("[Tắt]").font(.caption).foregroundStyle(.secondary)
+                        }
                         Spacer()
+                        Button(item.enabled ? "Tắt" : "Bật") {
+                            store.updateConfig { cfg in
+                                if let idx = cfg.macros.firstIndex(where: { $0.shortcut == item.shortcut }) {
+                                    cfg.macros[idx].enabled.toggle()
+                                }
+                            }
+                        }
+                        .frame(height: 24)
                         Button("Xoá") {
                             store.updateConfig { $0.macros.removeAll { $0.shortcut == item.shortcut } }
                         }
                         .frame(height: 24)
+                    }
+                    .opacity(item.enabled ? 1.0 : 0.55)
+                    .contentShape(Rectangle())
+                    .onTapGesture {
+                        shortcut = item.shortcut
+                        expansion = item.expansion.replacingOccurrences(of: "\n", with: "\\n")
                     }
                 }
             }
             .frame(height: 200)
 
             HStack(spacing: 8) {
-                TextField("Từ tắt", text: $shortcut).frame(width: 120)
-                TextField("Nội dung thay thế", text: $expansion)
+                TextField("Từ tắt", text: $shortcut).frame(width: 110)
+                TextField("Nội dung (dùng \\n để xuống dòng)", text: $expansion)
                 Button("Thêm / Cập nhật") {
                     let s = shortcut.trimmingCharacters(in: .whitespaces)
-                    let e = expansion
+                    let e = expansion.replacingOccurrences(of: "\\n", with: "\n")
                     guard !s.isEmpty else { return }
                     store.updateConfig { cfg in
                         if let idx = cfg.macros.firstIndex(where: { $0.shortcut == s }) {
-                            cfg.macros[idx] = MacroItem(shortcut: s, expansion: e, enabled: true)
+                            let prevEnabled = cfg.macros[idx].enabled
+                            cfg.macros[idx] = MacroItem(shortcut: s, expansion: e, enabled: prevEnabled)
                         } else {
                             cfg.macros.append(MacroItem(shortcut: s, expansion: e, enabled: true))
                         }
@@ -50,13 +69,58 @@ public struct MacroManagerView: View {
                 .frame(height: 28)
             }
 
-            HStack {
+            HStack(spacing: 8) {
+                Button("Nhập .txt...") { importMacrosTxt() }.frame(height: 28)
+                Button("Xuất .txt...") { exportMacrosTxt() }.frame(height: 28)
+                if !statusText.isEmpty {
+                    Text(statusText).font(.caption).foregroundStyle(.secondary).lineLimit(1)
+                }
                 Spacer()
                 Button("Đóng") { dismiss() }.frame(height: 32)
             }
         }
         .padding(16)
-        .frame(width: 480)
+        .frame(width: 540)
+    }
+
+    private func importMacrosTxt() {
+        let panel = NSOpenPanel()
+        panel.title = "Nhập bảng gõ tắt (.txt)"
+        panel.allowsMultipleSelection = false
+        panel.canChooseDirectories = false
+        guard panel.runModal() == .OK, let url = panel.url,
+              let raw = try? String(contentsOf: url, encoding: .utf8) else {
+            return
+        }
+        let parsed = RustEngine.parseMacroText(raw)
+        guard !parsed.isEmpty else {
+            statusText = "Không tìm thấy mục gõ tắt hợp lệ"
+            return
+        }
+        store.updateConfig { cfg in
+            for item in parsed {
+                if let idx = cfg.macros.firstIndex(where: { $0.shortcut == item.shortcut }) {
+                    cfg.macros[idx] = item
+                } else {
+                    cfg.macros.append(item)
+                }
+            }
+        }
+        statusText = "Đã nhập \(parsed.count) mục"
+    }
+
+    private func exportMacrosTxt() {
+        let panel = NSSavePanel()
+        panel.title = "Xuất bảng gõ tắt (.txt)"
+        panel.nameFieldStringValue = "mskey-macros.txt"
+        guard panel.runModal() == .OK, let url = panel.url else { return }
+        let body = RustEngine.formatMacroText(config: store.config)
+        do {
+            try body.write(to: url, atomically: true, encoding: .utf8)
+            statusText = "Đã xuất \(url.lastPathComponent)"
+        } catch {
+            statusText = "Lỗi xuất file"
+        }
     }
 }
 
@@ -73,6 +137,9 @@ public struct AppRulesView: View {
     public var body: some View {
         VStack(alignment: .leading, spacing: 12) {
             Text("Danh sách ứng dụng").font(.headline)
+            Text("Hỗ trợ dấu * đại diện (vd: *code*, *.terminal) • Nhấn dòng để sửa")
+                .font(.caption)
+                .foregroundStyle(.secondary)
             List {
                 ForEach(store.config.app_rules) { rule in
                     HStack(spacing: 8) {
@@ -82,6 +149,18 @@ public struct AppRulesView: View {
                             store.updateConfig { $0.app_rules.removeAll { $0.process_name == rule.process_name } }
                         }
                         .frame(height: 24)
+                    }
+                    .padding(.vertical, 2)
+                    .background(
+                        processName.caseInsensitiveCompare(rule.process_name) == .orderedSame
+                            ? Color.accentColor.opacity(0.12)
+                            : Color.clear,
+                        in: RoundedRectangle(cornerRadius: 4)
+                    )
+                    .contentShape(Rectangle())
+                    .onTapGesture {
+                        processName = rule.process_name
+                        behavior = rule.behavior
                     }
                 }
             }
@@ -199,10 +278,11 @@ public struct CustomKeymapView: View {
 public struct ConverterView: View {
     @ObservedObject public var store: MSKeyStore
     @Environment(\.dismiss) private var dismiss
-    @State private var fromCharset: CharsetKind = .tcvn3
-    @State private var toCharset: CharsetKind = .unicode
+    @State private var fromCharset: ConvertEncodingKind = .auto
+    @State private var toCharset: ConvertEncodingKind = .unicode
     @State private var caseMode: UInt8 = 0
     @State private var text = ""
+    @State private var detectedNote = ""
 
     public init(store: MSKeyStore) {
         self.store = store
@@ -210,18 +290,29 @@ public struct ConverterView: View {
 
     public var body: some View {
         VStack(alignment: .leading, spacing: 12) {
-            Text("Chuyển mã Clipboard").font(.headline)
+            HStack {
+                Text("Chuyển mã Clipboard").font(.headline)
+                Spacer()
+                if !detectedNote.isEmpty {
+                    Text(detectedNote)
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                }
+            }
             HStack(spacing: 8) {
                 Picker("Nguồn", selection: $fromCharset) {
-                    ForEach(CharsetKind.allCases) { cs in Text(cs.label).tag(cs) }
+                    ForEach(ConvertEncodingKind.allCases) { cs in Text(cs.label).tag(cs) }
                 }
                 Picker("Đích", selection: $toCharset) {
-                    ForEach(CharsetKind.allCases) { cs in Text(cs.label).tag(cs) }
+                    ForEach(ConvertEncodingKind.targetCases) { cs in Text(cs.label).tag(cs) }
                 }
                 Picker("Chữ", selection: $caseMode) {
                     Text("Giữ nguyên").tag(UInt8(0))
                     Text("CHỮ HOA").tag(UInt8(1))
                     Text("chữ thường").tag(UInt8(2))
+                    Text("Hoa đầu câu").tag(UInt8(3))
+                    Text("Hoa Mỗi Từ").tag(UInt8(4))
+                    Text("Bỏ dấu tiếng Việt").tag(UInt8(5))
                 }
             }
             TextEditor(text: $text)
@@ -232,11 +323,13 @@ public struct ConverterView: View {
             HStack(spacing: 8) {
                 Button("Lấy Clipboard") {
                     text = NSPasteboard.general.string(forType: .string) ?? ""
+                    updateDetectedNote()
                 }
                 .frame(height: 32)
 
                 Button("Chuyển mã") {
-                    text = RustEngine.convertText(text, from: fromCharset, to: toCharset, caseMode: caseMode)
+                    updateDetectedNote()
+                    text = RustEngine.convertWithEncoding(text, from: fromCharset, to: toCharset, caseMode: caseMode)
                 }
                 .buttonStyle(.borderedProminent)
                 .frame(height: 32)
@@ -252,9 +345,22 @@ public struct ConverterView: View {
             }
         }
         .padding(16)
-        .frame(width: 520)
+        .frame(width: 560)
         .onAppear {
             text = NSPasteboard.general.string(forType: .string) ?? ""
+            updateDetectedNote()
+        }
+    }
+
+    private func updateDetectedNote() {
+        guard !text.isEmpty else {
+            detectedNote = ""
+            return
+        }
+        if fromCharset == .auto {
+            detectedNote = "Nhận diện: \(RustEngine.detectCharset(text).label)"
+        } else {
+            detectedNote = ""
         }
     }
 }
@@ -279,6 +385,9 @@ public struct HotkeyCaptureView: View {
     public var body: some View {
         VStack(alignment: .leading, spacing: 12) {
             Text("Nhấn tổ hợp phím mới...").font(.headline)
+            Text("Hỗ trợ A-Z, 0-9, F1-F12, Space, Tab, Return, dấu câu")
+                .font(.caption)
+                .foregroundStyle(.secondary)
             Text(captured.displayText)
                 .font(.title3.monospaced())
                 .padding(12)

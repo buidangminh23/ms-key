@@ -220,6 +220,10 @@ unsafe extern "system" fn main_wnd_proc(
             show_converter_dialog(hwnd);
             0
         }
+        crate::state::WM_APP_SHOW_OSD => {
+            crate::ui_osd::show_switch_osd(wparam != 0);
+            0
+        }
         WM_DPICHANGED => {
             refresh_ui_and_tray(hwnd);
             0
@@ -247,11 +251,28 @@ unsafe extern "system" fn main_wnd_proc(
 }
 
 fn toggle_ve_and_refresh(hwnd: HWND) {
-    with_state(|st| {
-        let next = !st.engine.config().vietnamese_enabled;
+    let (next, beep, osd, fg_proc, smart) = with_state(|st| {
+        let c = st.engine.config().clone();
+        let next = !c.vietnamese_enabled;
         st.set_user_vietnamese(next);
         save_config(st.engine.config());
+        (
+            next,
+            c.beep_on_switch,
+            c.show_switch_osd,
+            st.fg_process.clone(),
+            c.smart_app_switch,
+        )
     });
+    if smart && !fg_proc.is_empty() {
+        crate::platform_extra::record_app_ve_memory(&fg_proc, next);
+    }
+    if beep {
+        crate::platform::play_switch_beep();
+    }
+    if osd {
+        crate::ui_osd::show_switch_osd(next);
+    }
     refresh_ui_and_tray(hwnd);
 }
 
@@ -275,6 +296,28 @@ fn handle_command(hwnd: HWND, id: usize, code: usize) {
         IDC_BTN_MACRO | ID_TRAY_MACROS => show_macro_dialog(hwnd),
         IDC_BTN_CONVERT | ID_TRAY_CONVERT => show_converter_dialog(hwnd),
         IDC_BTN_APPS | ID_TRAY_APPS => show_app_rules_dialog(hwnd),
+        IDC_BTN_EXTRAS | crate::tray::ID_TRAY_EXTRAS => {
+            if crate::ui_extras::show_extras_sandbox_dialog(hwnd) {
+                rebuild_theme_resources(hwnd);
+                refresh_ui_and_tray(hwnd);
+            }
+        }
+        IDC_BTN_USER_DICT | crate::tray::ID_TRAY_USER_DICT => {
+            crate::ui_extras::show_user_dict_dialog(hwnd);
+        }
+        crate::tray::ID_TRAY_QUICK_TELEX | crate::tray::ID_TRAY_SHOW_OSD => {
+            with_state(|st| {
+                let mut cfg = st.engine.config().clone();
+                if id == crate::tray::ID_TRAY_QUICK_TELEX {
+                    cfg.quick_telex = !cfg.quick_telex;
+                } else {
+                    cfg.show_switch_osd = !cfg.show_switch_osd;
+                }
+                save_config(&cfg);
+                st.engine.update_config(cfg);
+            });
+            refresh_ui_and_tray(hwnd);
+        }
         IDC_BTN_ADD_CUR_EN => {
             add_current_app_force_english();
             refresh_ui_and_tray(hwnd);
@@ -336,6 +379,7 @@ fn handle_capture_hotkey(hwnd: HWND, id: usize) {
             } else {
                 cfg.clipboard_convert_hotkey = combo;
             }
+            save_config(&cfg);
             st.engine.update_config(cfg);
         });
         refresh_ui_and_tray(hwnd);
@@ -399,6 +443,7 @@ fn handle_control_change(hwnd: HWND, id: usize, code: usize) {
             did_change = true;
         }
         if did_change {
+            save_config(&cfg);
             st.engine.update_config(cfg);
         }
         (did_change, is_theme)

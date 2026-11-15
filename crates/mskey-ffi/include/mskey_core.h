@@ -40,6 +40,17 @@ char *mskey_convert_text(
     uint8_t to_charset,
     uint8_t case_mode
 );
+char *mskey_convert_with_encoding(
+    const char *input,
+    uint8_t from_enc,
+    uint8_t to_enc,
+    uint8_t case_mode
+);
+uint8_t mskey_detect_charset(const char *input);
+char *mskey_format_macro_text(const char *config_json);
+char *mskey_parse_macro_text(const char *raw_text);
+bool mskey_is_active_delimiter(MsKeyHandle *handle, uint32_t codepoint);
+void mskey_set_clock_offset(MsKeyHandle *handle, int64_t offset_secs);
 
 void mskey_free_string(char *ptr);
 void mskey_free_action(MsKeyAction action);
