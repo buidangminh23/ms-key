@@ -16,7 +16,7 @@ checksum = "cf8baf1c55e62ffcace7a9f06f4bd9cd3f0c4beb022d3b367256b91b87513d98"
 
 [[package]]
 name = "mskey-core"
-version = "0.1.0"
+version = "0.1.1"
 dependencies = [
  "serde",
  "serde_json",
@@ -24,7 +24,7 @@ dependencies = [
 
 [[package]]
 name = "mskey-ffi"
-version = "0.1.0"
+version = "0.1.1"
 dependencies = [
  "mskey-core",
  "serde_json",
@@ -32,7 +32,7 @@ dependencies = [
 
 [[package]]
 name = "mskey-linux"
-version = "0.1.0"
+version = "0.1.1"
 dependencies = [
  "mskey-core",
  "serde",
@@ -41,7 +41,7 @@ dependencies = [
 
 [[package]]
 name = "mskey-win"
-version = "0.1.0"
+version = "0.1.1"
 dependencies = [
  "mskey-core",
  "serde_json",

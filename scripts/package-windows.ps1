@@ -33,7 +33,7 @@ $outAbs = (Resolve-Path $OutDir).Path
 $setup = Join-Path $outAbs "MSKey-Setup-$version-windows-x64.exe"
 $zip = Join-Path $outAbs "MSKey-$version-windows-x64-portable.zip"
 
-& $makensis /V2 /INPUTCHARSET UTF8 "/DVERSION=$version" "/DSRC_EXE=$exe" "/DOUTFILE=$setup" "/DLICENSE_FILE=$(Join-Path $root 'LICENSE')" "/DNOTICES_FILE=$(Join-Path $root 'THIRD-PARTY-NOTICES.md')" (Join-Path $root "scripts\windows-installer.nsi")
+& $makensis /V2 /INPUTCHARSET UTF8 "/DVERSION=$version" "/DSRC_EXE=$exe" "/DOUTFILE=$setup" "/DLICENSE_FILE=$(Join-Path $root 'LICENSE')" "/DNOTICES_FILE=$(Join-Path $root 'THIRD-PARTY-NOTICES.md')" "/DBRANDING_DIR=$(Join-Path $root 'assets/branding')" (Join-Path $root "scripts\windows-installer.nsi")
 if ($LASTEXITCODE -ne 0) { throw "makensis failed" }
 
 $stage = Join-Path ([System.IO.Path]::GetTempPath()) "mskey-portable-$version"

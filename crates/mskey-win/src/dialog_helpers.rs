@@ -50,12 +50,12 @@ pub fn register_tool_class(
         cbClsExtra: 0,
         cbWndExtra: 0,
         hInstance: hinst,
-        hIcon: ptr::null_mut(),
+        hIcon: crate::tray::app_icon(32),
         hCursor: ptr::null_mut(),
         hbrBackground: ptr::null_mut(),
         lpszMenuName: ptr::null(),
         lpszClassName: cname.as_ptr(),
-        hIconSm: ptr::null_mut(),
+        hIconSm: crate::tray::app_icon(16),
     };
     unsafe {
         RegisterClassExW(&wc);

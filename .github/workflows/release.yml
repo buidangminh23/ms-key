@@ -87,6 +87,8 @@ jobs:
           hdiutil detach "$MOUNT"
           trap - EXIT
           APP="$RUNNER_TEMP/dmg-apps/MSKey.app"
+          test -s "$APP/Contents/Resources/mskey.icns"
+          test -s "$APP/Contents/Resources/mskey-mark.png"
           codesign --verify --deep --strict "$APP"
           ARCHS="$(lipo -archs "$APP/Contents/MacOS/MSKey")"
           [[ "$ARCHS" == *arm64* && "$ARCHS" == *x86_64* ]]

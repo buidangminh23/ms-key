@@ -9,7 +9,7 @@ public final class MenuBarController: NSObject {
     public init(store: MSKeyStore) {
         self.store = store
         super.init()
-        let item = NSStatusBar.system.statusItem(withLength: NSStatusItem.squareLength)
+        let item = NSStatusBar.system.statusItem(withLength: 40)
         self.statusItem = item
         updateStatusIcon(vietnamese: store.effectiveVE)
         rebuildMenu()
@@ -72,10 +72,11 @@ public final class MenuBarController: NSObject {
     }
 
     private func makeBadgeImage(letter: String, vietnamese: Bool) -> NSImage {
-        let size = NSSize(width: 20, height: 18)
+        let size = NSSize(width: 36, height: 20)
         let img = NSImage(size: size)
         img.lockFocus()
-        let rect = NSRect(x: 1, y: 1, width: 18, height: 16)
+        MSKeyBrand.mark.draw(in: NSRect(x: 0, y: 1, width: 20, height: 18))
+        let rect = NSRect(x: 21, y: 2, width: 15, height: 16)
         let path = NSBezierPath(roundedRect: rect, xRadius: 4, yRadius: 4)
         let bg = vietnamese
             ? NSColor(srgbRed: 0.84, green: 0.17, blue: 0.15, alpha: 1.0)

@@ -71,6 +71,18 @@ pub struct GtkTextIter {
 }
 
 unsafe extern "C" {
+    pub fn gdk_pixbuf_loader_new() -> *mut c_void;
+    pub fn gdk_pixbuf_loader_write(loader: *mut c_void, data: *const u8, size: usize, error: *mut *mut c_void) -> c_int;
+    pub fn gdk_pixbuf_loader_close(loader: *mut c_void, error: *mut *mut c_void) -> c_int;
+    pub fn gdk_pixbuf_loader_get_pixbuf(loader: *mut c_void) -> *mut c_void;
+    pub fn g_object_unref(object: *mut c_void);
+    pub fn g_object_get(object: *mut c_void, property: *const c_char, ...);
+    pub fn gtk_window_set_default_icon(icon: *mut c_void);
+    pub fn gtk_window_get_default_icon_list() -> *mut GList;
+    pub fn gtk_image_new_from_pixbuf(icon: *mut c_void) -> *mut GtkWidget;
+    pub fn gtk_widget_get_settings(widget: *mut GtkWidget) -> *mut c_void;
+    pub fn gtk_widget_set_opacity(widget: *mut GtkWidget, opacity: f64);
+    pub fn gtk_widget_add_tick_callback(widget: *mut GtkWidget, callback: Option<unsafe extern "C" fn(*mut GtkWidget, *mut c_void, *mut c_void) -> c_int>, data: *mut c_void, notify: Option<unsafe extern "C" fn(*mut c_void)>) -> c_uint;
     pub fn gtk_init_check(argc: *mut c_int, argv: *mut *mut *mut c_char) -> c_int;
     pub fn gtk_main();
     pub fn gtk_main_quit();

@@ -38,7 +38,7 @@ public final class MacOSDHud {
         if let panel {
             return panel
         }
-        let rect = NSRect(x: 0, y: 0, width: 176, height: 38)
+        let rect = NSRect(x: 0, y: 0, width: 208, height: 38)
         let p = NSPanel(
             contentRect: rect,
             styleMask: [.borderless, .nonactivatingPanel],
@@ -57,8 +57,12 @@ public final class MacOSDHud {
         container.layer?.cornerRadius = 10
         container.layer?.masksToBounds = true
 
+        let logo = NSImageView(frame: NSRect(x: 8, y: 5, width: 28, height: 28))
+        logo.image = MSKeyBrand.mark
+        logo.imageScaling = .scaleProportionallyUpOrDown
+        container.addSubview(logo)
         let tf = NSTextField(labelWithString: "")
-        tf.frame = NSRect(x: 10, y: 8, width: 156, height: 22)
+        tf.frame = NSRect(x: 42, y: 8, width: 156, height: 22)
         tf.alignment = .center
         tf.font = NSFont.systemFont(ofSize: 13.5, weight: .semibold)
         tf.textColor = .white

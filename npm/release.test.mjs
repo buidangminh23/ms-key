@@ -1,6 +1,6 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { fetchVerifiedAsset, parseChecksums, pickAsset, sha256, targetKey } from './release.mjs';
+import { download, fetchVerifiedAsset, parseChecksums, pickAsset, sha256, targetKey } from './release.mjs';
 
 const SUMS = [
   `${'a'.repeat(64)}  MSKey-0.1.0-linux-amd64.tar.gz`,
@@ -52,4 +52,33 @@ test('verifies the downloaded asset against SHA256SUMS', async () => {
   assert.equal(asset.name, 'mskey_0.1.0_amd64.deb');
   files['mskey_0.1.0_amd64.deb'] = Buffer.from('tampered');
   await assert.rejects(fetchVerifiedAsset('linux-x64-deb', { baseUrl: 'https://example.test', fetchImpl }), /Checksum mismatch/);
+});
+
+test('reports streamed bytes without changing downloaded data', async () => {
+  const updates = [];
+  const fetchImpl = async () => new Response(new ReadableStream({
+    start(controller) {
+      controller.enqueue(new Uint8Array([1, 2]));
+      controller.enqueue(new Uint8Array([3, 4, 5]));
+      controller.close();
+    },
+  }), { headers: { 'content-length': '5' } });
+  const data = await download('https://example.test/file', fetchImpl, (value) => updates.push(value));
+  assert.deepEqual(data, Buffer.from([1, 2, 3, 4, 5]));
+  assert.deepEqual(updates, [{ received: 0, total: 5 }, { received: 2, total: 5 }, { received: 5, total: 5 }]);
+});
+
+test('does not invent percentages for unknown or compressed lengths', async () => {
+  for (const headers of [{}, { 'content-length': '10', 'content-encoding': 'gzip' }]) {
+    const updates = [];
+    await download('https://example.test/file', async () => new Response('data', { headers }), (value) => updates.push(value));
+    assert.ok(updates.every((value) => value.total === null));
+    assert.equal(updates.at(-1).received, 4);
+  }
+});
+
+test('rejects interrupted response streams', async () => {
+  await assert.rejects(download('https://example.test/file', async () => new Response(new ReadableStream({
+    pull(controller) { controller.error(new Error('connection lost')); },
+  }))), /connection lost/);
 });

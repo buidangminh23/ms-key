@@ -26,6 +26,42 @@ fail() {
     exit 1
 }
 
+download_file() {
+    if [ -t 2 ] && [ "${TERM:-dumb}" != dumb ] && [ "${MSKEY_REDUCE_MOTION:-0}" != 1 ]; then
+        curl -fL --progress-bar "$1" -o "$2"
+    else
+        curl -fsSL "$1" -o "$2"
+    fi
+}
+
+run_stage() (
+    LABEL="$1"
+    shift
+    if [ ! -t 2 ] || [ "${TERM:-dumb}" = dumb ] || [ "${MSKEY_REDUCE_MOTION:-0}" = 1 ]; then
+        echo "MS Key: ${LABEL}"
+        "$@"
+        exit $?
+    fi
+    "$@" &
+    STAGE_PID=$!
+    trap 'kill "${STAGE_PID}" 2>/dev/null || true; printf "\r\033[K" >&2' EXIT
+    trap 'exit 130' INT
+    trap 'exit 143' TERM
+    FRAMES='|/-\'
+    INDEX=0
+    while kill -0 "${STAGE_PID}" 2>/dev/null; do
+        printf '\rMS Key %s %s' "${FRAMES:INDEX:1}" "${LABEL}" >&2
+        INDEX=$(( (INDEX + 1) % 4 ))
+        sleep 0.1
+    done
+    STATUS=0
+    wait "${STAGE_PID}" || STATUS=$?
+    trap - EXIT INT TERM
+    printf '\r\033[K' >&2
+    if [ "${STATUS}" -eq 0 ]; then printf 'MS Key: %s — done\n' "${LABEL}" >&2; fi
+    exit "${STATUS}"
+)
+
 [ "$(uname -s)" = "Darwin" ] || fail "this installer only runs on macOS"
 
 if [ -z "${DEST_DIR}" ]; then
@@ -41,10 +77,15 @@ if pgrep -f "${DEST_APP}/Contents/MacOS/MSKey" >/dev/null 2>&1; then
 fi
 
 WORK="$(mktemp -d)"
-trap 'rm -rf "${WORK}"' EXIT
+STAGED=""
+cleanup() {
+    rm -rf "${WORK}"
+    if [ -n "${STAGED}" ]; then rm -rf "${STAGED}"; fi
+}
+trap cleanup EXIT
 
 echo "Downloading checksums..."
-curl -fsSL "${BASE_URL}/SHA256SUMS" -o "${WORK}/SHA256SUMS"
+download_file "${BASE_URL}/SHA256SUMS" "${WORK}/SHA256SUMS"
 tr -d '\r' < "${WORK}/SHA256SUMS" > "${WORK}/SHA256SUMS.lf"
 LINE="$(grep -E '  MSKey-[0-9][^ ]*-macos-universal\.zip$' "${WORK}/SHA256SUMS.lf" | head -n1 || true)"
 [ -n "${LINE}" ] || fail "no macOS build listed in SHA256SUMS"
@@ -52,24 +93,24 @@ EXPECTED="${LINE%% *}"
 ASSET="${LINE##* }"
 
 echo "Downloading ${ASSET}..."
-curl -fsSL "${BASE_URL}/${ASSET}" -o "${WORK}/${ASSET}"
+download_file "${BASE_URL}/${ASSET}" "${WORK}/${ASSET}"
 ACTUAL="$(shasum -a 256 "${WORK}/${ASSET}" | cut -d' ' -f1)"
 [ "${ACTUAL}" = "${EXPECTED}" ] || fail "checksum mismatch for ${ASSET}"
 
-ditto -x -k "${WORK}/${ASSET}" "${WORK}/unpacked"
+run_stage "Unpacking MS Key" ditto -x -k "${WORK}/${ASSET}" "${WORK}/unpacked"
 NEW_APP="${WORK}/unpacked/${APP_NAME}"
 [ -d "${NEW_APP}" ] || fail "${APP_NAME} not found in ${ASSET}"
 GOT_ID="$(defaults read "${NEW_APP}/Contents/Info" CFBundleIdentifier 2>/dev/null || true)"
 [ "${GOT_ID}" = "${BUNDLE_ID}" ] || fail "unexpected bundle identifier '${GOT_ID}'"
 VERSION="$(defaults read "${NEW_APP}/Contents/Info" CFBundleShortVersionString 2>/dev/null || echo unknown)"
-codesign --verify --deep --strict "${NEW_APP}" || fail "code signature check failed"
+run_stage "Verifying app signature" codesign --verify --deep --strict "${NEW_APP}" || fail "code signature check failed"
 
 find "${NEW_APP}" -exec xattr -d com.apple.quarantine {} \; 2>/dev/null || true
 
 STAGED="${DEST_DIR}/.${APP_NAME}.new.$$"
 BACKUP="${DEST_DIR}/.${APP_NAME}.old.$$"
 rm -rf "${STAGED}"
-ditto "${NEW_APP}" "${STAGED}"
+run_stage "Installing MS Key" ditto "${NEW_APP}" "${STAGED}"
 if [ -e "${DEST_APP}" ]; then
     mv "${DEST_APP}" "${BACKUP}"
 fi

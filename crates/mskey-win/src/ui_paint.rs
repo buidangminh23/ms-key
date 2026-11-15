@@ -9,7 +9,7 @@ use windows_sys::Win32::Graphics::Gdi::{
 use windows_sys::Win32::UI::Controls::{DRAWITEMSTRUCT, ODT_BUTTON};
 use windows_sys::Win32::UI::Shell::Shell_NotifyIconW;
 use windows_sys::Win32::UI::WindowsAndMessaging::{
-    GetClientRect, GetDlgCtrlID, ICON_BIG, ICON_SMALL, SendMessageW, WM_SETICON,
+    GetClientRect, GetDlgCtrlID, DrawIconEx, DI_NORMAL,
 };
 
 use crate::dialog_helpers::{handle_draw_combo_or_btn, read_window_text, scale_px, window_dpi};
@@ -33,6 +33,7 @@ pub struct MainWinData {
     pub pal: ThemePalette,
     pub ctrls: MainUiCtrls,
     pub tray: TrayController,
+    pub reveal_started: Option<std::time::Instant>,
 }
 
 thread_local! {
@@ -91,14 +92,12 @@ pub fn refresh_ui_and_tray(hwnd: HWND) {
         sync_controls_from_config(targets, &cfg, &fg_proc);
     }
     let tray_req = with_main_data(|d| d.tray.prepare_update(cfg.vietnamese_enabled));
-    if let Some((msg, nid, icon)) = tray_req {
+    if let Some((msg, nid, _)) = tray_req {
         let updated = unsafe { Shell_NotifyIconW(msg, &nid) } != 0;
         if updated {
             with_main_data_mut(|d| d.tray.mark_installed());
         }
         unsafe {
-            SendMessageW(hwnd, WM_SETICON, ICON_BIG as usize, icon as LPARAM);
-            SendMessageW(hwnd, WM_SETICON, ICON_SMALL as usize, icon as LPARAM);
             InvalidateRect(hwnd, ptr::null(), 1);
         }
     }
@@ -115,8 +114,8 @@ pub fn set_tab_redraw(hwnd: HWND, tab: usize) {
 }
 
 pub fn paint_main_window(hwnd: HWND) {
-    let snapshot = with_main_data(|d| (d.pal, d.bold_font, d.ctrls.active_tab));
-    let Some((pal, bold_font, active_tab)) = snapshot else {
+    let snapshot = with_main_data(|d| (d.pal, d.bold_font, d.ctrls.active_tab, d.reveal_started));
+    let Some((pal, bold_font, active_tab, reveal_started)) = snapshot else {
         return;
     };
     let mut ps: PAINTSTRUCT = unsafe { std::mem::zeroed() };
@@ -127,6 +126,16 @@ pub fn paint_main_window(hwnd: HWND) {
     fill_solid(hdc, &rc, pal.window_bg);
 
     let s = |v: i32| scale_px(v, dpi);
+    let progress = reveal_started.map_or(1.0, |start| (start.elapsed().as_secs_f32() / 0.48).min(1.0));
+    let eased = 1.0 - (1.0 - progress).powi(3);
+    let size = s((32.0 + 12.0 * eased).round() as i32);
+    unsafe { DrawIconEx(hdc, s(502) - size / 2, s(120) - size / 2, crate::tray::app_icon(64), size, size, 0, ptr::null_mut(), DI_NORMAL) };
+    if reveal_started.is_some() {
+        let track = RECT { left: s(464), top: s(144), right: s(540), bottom: s(146) };
+        fill_solid(hdc, &track, pal.border);
+        let bar = RECT { right: track.left + ((track.right - track.left) as f32 * eased) as i32, ..track };
+        fill_solid(hdc, &bar, pal.accent);
+    }
     let top_gb = RECT { left: s(16), top: s(12), right: s(444), bottom: s(140) };
     draw_group_box(hdc, &top_gb, "Điều khiển", pal, bold_font);
 

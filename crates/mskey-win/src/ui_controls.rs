@@ -481,5 +481,5 @@ fn build_tab2(hwnd: HWND, font: HFONT, dpi: i32) -> (Vec<HWND>, HWND, HWND) {
 fn build_footer(hwnd: HWND, font: HFONT, dpi: i32) {
     make_owner_button(hwnd, "Th.Lập mặc định", 16, 524, 136, 32, IDC_BTN_DEFAULT, font, dpi);
     make_owner_button(hwnd, "Lưu", 164, 524, 96, 32, IDC_BTN_SAVE, font, dpi);
-    make_child(hwnd, "STATIC", "MS Key v0.1 • Tiếng Việt Unicode", 0x0082, 280, 528, 264, 24, IDC_LBL_FOOTER_VER, font, dpi);
+    make_child(hwnd, "STATIC", concat!("MS Key v", env!("CARGO_PKG_VERSION"), " • Tiếng Việt Unicode"), 0x0082, 280, 528, 264, 24, IDC_LBL_FOOTER_VER, font, dpi);
 }

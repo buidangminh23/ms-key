@@ -37,6 +37,7 @@ pub fn ensure_gtk_init() -> bool {
     let ok = unsafe { gtk_init_check(ptr::null_mut(), ptr::null_mut()) != 0 };
     if ok {
         IS_INIT.with(|c| c.set(true));
+        crate::gtk_branding::initialize_brand_icon();
     }
     ok
 }
@@ -71,7 +72,7 @@ pub fn run_setup_ui(smoke_out: Option<&str>) -> i32 {
     let cfg = load_config();
     apply_gtk_theme(cfg.theme);
     LAST_APP.with(|c| *c.borrow_mut() = detect_active_app().unwrap_or_else(|| "-".to_string()));
-    let st = build_main_window(cfg);
+    let st = build_main_window(cfg, smoke_out.is_none());
     let win = st.win;
     UI.with(|c| {
         *c.borrow_mut() = Some(st);
@@ -95,12 +96,12 @@ pub fn run_setup_ui(smoke_out: Option<&str>) -> i32 {
     0
 }
 
-fn build_main_window(cfg: Config) -> UiState {
-    let title = cstr("MS Key 0.1");
+fn build_main_window(cfg: Config, animate: bool) -> UiState {
+    let title = cstr(&format!("MS Key {}", env!("CARGO_PKG_VERSION")));
     let win = unsafe {
         let w = gtk_window_new(GTK_WINDOW_TOPLEVEL);
         gtk_window_set_title(w, title.as_ptr());
-        gtk_window_set_default_size(w, 560, 568);
+        gtk_window_set_default_size(w, 560, 640);
         gtk_window_set_resizable(w, 0);
         gtk_window_set_position(w, GTK_WIN_POS_CENTER);
         gtk_container_set_border_width(w, 12);
@@ -108,6 +109,7 @@ fn build_main_window(cfg: Config) -> UiState {
     };
     let mut st = UiState::empty(win, cfg);
     let root = make_vbox(8);
+    pack(root, crate::gtk_branding::make_brand_header(animate), false, false, 0);
     pack(root, build_header_box(&mut st), false, false, 0);
 
     let nb = unsafe { gtk_notebook_new() };
@@ -124,7 +126,7 @@ fn build_main_window(cfg: Config) -> UiState {
     let footer = make_hbox(8);
     st.btn_default = make_button("Th.Lập mặc định", false);
     st.btn_save = make_button("Lưu", true);
-    let lbl_ver = make_label("MS Key v0.1 • Tiếng Việt Unicode (IBus)", true);
+    let lbl_ver = make_label("MS Key • Tiếng Việt Unicode (IBus)", true);
     pack(footer, st.btn_default, false, false, 0);
     pack(footer, st.btn_save, false, false, 0);
     pack(footer, make_label("", false), true, true, 0);

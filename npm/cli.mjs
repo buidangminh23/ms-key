@@ -4,7 +4,8 @@ import { mkdtempSync, mkdirSync, writeFileSync, rmSync, readFileSync } from 'nod
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { DEFAULT_BASE_URL, REPO, download, fetchVerifiedAsset, targetKey } from './release.mjs';
+import { DEFAULT_BASE_URL, REPO, download, fetchVerifiedAsset, parseChecksums, sha256, targetKey } from './release.mjs';
+import { withProgress } from './progress.mjs';
 
 const HELP = `MS Key installer
 
@@ -33,7 +34,12 @@ function run(command, args) {
 }
 
 async function installMac(baseUrl) {
-  const script = await download(`${baseUrl}/install-macos.sh`);
+  const script = await withProgress('Preparing macOS installer', async (onProgress) => {
+    const sums = parseChecksums((await download(`${baseUrl}/SHA256SUMS`)).toString('utf8'));
+    const data = await download(`${baseUrl}/install-macos.sh`, undefined, onProgress);
+    if (sha256(data) !== sums.get('install-macos.sh')) throw new Error('Checksum mismatch for install-macos.sh');
+    return data;
+  });
   const dir = mkdtempSync(path.join(tmpdir(), 'mskey-'));
   try {
     const file = path.join(dir, 'install-macos.sh');
@@ -46,12 +52,12 @@ async function installMac(baseUrl) {
 }
 
 async function installOther(key, baseUrl) {
-  const asset = await fetchVerifiedAsset(key, { baseUrl });
+  const asset = await withProgress('Downloading installer', (onProgress) => fetchVerifiedAsset(key, { baseUrl, onProgress }));
   const dir = mkdtempSync(path.join(tmpdir(), 'mskey-'));
   const file = path.join(dir, asset.name);
-  writeFileSync(file, asset.data, { mode: 0o755 });
-  console.log(`Verified ${asset.name} (SHA-256 ${asset.sha256.slice(0, 12)}...)`);
   try {
+    writeFileSync(file, asset.data, { mode: 0o755 });
+    console.log(`Verified ${asset.name} (SHA-256 ${asset.sha256.slice(0, 12)}...)`);
     if (key === 'win32-x64') {
       run(file, []);
     } else if (key === 'linux-x64-deb') {
@@ -68,7 +74,7 @@ async function installOther(key, baseUrl) {
 }
 
 async function downloadOnly(key, folder, baseUrl) {
-  const asset = await fetchVerifiedAsset(key, { baseUrl });
+  const asset = await withProgress('Downloading installer', (onProgress) => fetchVerifiedAsset(key, { baseUrl, onProgress }));
   mkdirSync(folder, { recursive: true });
   const file = path.resolve(folder, asset.name);
   writeFileSync(file, asset.data);

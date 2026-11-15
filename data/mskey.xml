@@ -13,7 +13,7 @@
 			<language>vi</language>
 			<license>MIT</license>
 			<author>MS Key</author>
-			<icon>preferences-desktop-locale</icon>
+			<icon>mskey</icon>
 			<layout>us</layout>
 			<longname>MS Key (Tiếng Việt)</longname>
 			<description>Vietnamese Unicode IME inspired by EVKey, OpenKey, Gonhanh, IBus Bamboo</description>

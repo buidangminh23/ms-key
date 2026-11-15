@@ -10,6 +10,8 @@ pub mod gio_ffi;
 #[cfg(target_os = "linux")]
 pub mod gtk_dialogs;
 #[cfg(target_os = "linux")]
+pub mod gtk_branding;
+#[cfg(target_os = "linux")]
 pub mod gtk_dialogs_edit;
 #[cfg(target_os = "linux")]
 pub mod gtk_extras;

@@ -1,5 +1,7 @@
 # MS Key
 
+<p align="center"><img src="https://raw.githubusercontent.com/buidangminh23/ms-key/main/assets/branding/mskey-logo.png" alt="MS Key" width="280"></p>
+
 [![npm](https://img.shields.io/npm/v/@minhspark/ms-key?logo=npm&color=CB3837)](https://www.npmjs.com/package/@minhspark/ms-key)
 [![CI](https://github.com/buidangminh23/ms-key/actions/workflows/ci.yml/badge.svg)](https://github.com/buidangminh23/ms-key/actions/workflows/ci.yml)
 [![Release](https://img.shields.io/github/v/release/buidangminh23/ms-key)](https://github.com/buidangminh23/ms-key/releases/latest)
@@ -18,6 +20,8 @@ npx @minhspark/ms-key
 ```
 
 Add `--download <folder>` to only download and verify the installer.
+
+The installer shows live download progress in interactive terminals and verifies the download before running it. Set `MSKEY_REDUCE_MOTION=1` to use plain progress messages. Redirected output stays free of animation and terminal controls.
 
 ### Windows 10/11
 
@@ -58,6 +62,7 @@ On first launch, allow MS Key in **System Settings > Privacy & Security > Access
 
 - Press **Ctrl + Shift** to switch between Vietnamese (**V**) and English (**E**). Alt + Z, Ctrl + Space, Shift + Shift or your own shortcut can be chosen instead.
 - Open the settings panel from the tray icon (Windows), the IBus menu or app launcher (Linux), or the menu bar icon (macOS).
+- The MS logo appears across app icons, settings and installers. Opening settings briefly animates the logo without delaying typing; system reduced-motion settings are respected.
 
 | You type (Telex) | You get | You type (VNI) | You get |
 |---|---|---|---|
@@ -146,6 +151,8 @@ open dist/MSKey.app
 
 ## Packaging and releases
 
+Brand assets live in `assets/branding`. `mskey-logo.png` preserves the supplied full logo; `mskey-mark.png` is the transparent symbol used at small sizes. To regenerate ICO, ICNS, PNG sizes and installer bitmaps, install Pillow and run `python scripts/prepare-branding.py`.
+
 | Script | Output |
 |---|---|
 | `scripts/package-windows.ps1` | NSIS installer and portable zip (needs NSIS) |
@@ -153,6 +160,8 @@ open dist/MSKey.app
 | `scripts/package-macos.sh` | Universal ad-hoc signed `MSKey.app` in a drag-to-install `.dmg`, a zip and `install-macos.sh` |
 
 Pushing a tag such as `v0.1.0` runs `.github/workflows/release.yml`. It builds every package on its own runner, installs it, launches the settings panel in smoke-test mode, uninstalls it, and then publishes the release with `SHA256SUMS` and the matching section of [CHANGELOG.md](CHANGELOG.md). The tag must match the version in `Cargo.toml`.
+
+The DMG uses the native Finder drag-to-Applications installation and copy progress. The Terminal installer adds live download progress and activity indicators during unpacking, signature verification and copying.
 
 ## Repository layout
 

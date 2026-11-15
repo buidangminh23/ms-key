@@ -13,7 +13,7 @@ use windows_sys::Win32::UI::WindowsAndMessaging::{
     KillTimer, LWA_ALPHA, RegisterClassExW, SW_HIDE, SW_SHOWNOACTIVATE, SWP_NOACTIVATE,
     SetLayeredWindowAttributes, SetTimer, SetWindowPos, ShowWindow, WM_ERASEBKGND, WM_PAINT,
     WM_TIMER, WNDCLASSEXW, WS_EX_LAYERED, WS_EX_NOACTIVATE, WS_EX_TOOLWINDOW, WS_EX_TOPMOST,
-    WS_POPUP,
+    WS_POPUP, DrawIconEx, DI_NORMAL,
 };
 
 use crate::dialog_helpers::{current_palette, scale_px, window_dpi};
@@ -60,7 +60,7 @@ fn osd_window() -> HWND {
             WS_POPUP,
             0,
             0,
-            184,
+            222,
             48,
             ptr::null_mut(),
             ptr::null_mut(),
@@ -84,7 +84,7 @@ pub fn show_switch_osd(vietnamese: bool) {
         return;
     }
     let dpi = window_dpi(hw);
-    let w = scale_px(184, dpi);
+    let w = scale_px(222, dpi);
     let h = scale_px(48, dpi);
     let anchor = unsafe { GetForegroundWindow() };
     let mon = unsafe { MonitorFromWindow(anchor, MONITOR_DEFAULTTONEAREST) };
@@ -130,13 +130,14 @@ unsafe extern "system" fn osd_wnd_proc(
             let s = |v: i32| scale_px(v, dpi);
             fill_solid(hdc, &rc, pal.window_bg);
             draw_round_box(hdc, &rc, s(10), pal.card_bg, pal.border);
+            unsafe { DrawIconEx(hdc, s(10), s(10), crate::tray::app_icon(32), s(28), s(28), 0, ptr::null_mut(), DI_NORMAL) };
 
             let is_vi = OSD_IS_VI.load(Ordering::SeqCst);
             let badge_fill = if is_vi { pal.danger_badge } else { pal.accent };
             let badge_rc = RECT {
-                left: s(10),
+                left: s(48),
                 top: s(9),
-                right: s(44),
+                right: s(82),
                 bottom: rc.bottom - s(9),
             };
             draw_round_box(hdc, &badge_rc, s(7), badge_fill, badge_fill);
@@ -146,7 +147,7 @@ unsafe extern "system" fn osd_wnd_proc(
             let mut b_txt = to_wide(if is_vi { "V" } else { "E" });
             let mut label = to_wide(if is_vi { "Tiếng Việt" } else { "English" });
             let mut l_rc = RECT {
-                left: s(54),
+                left: s(92),
                 top: 0,
                 right: rc.right - s(10),
                 bottom: rc.bottom,

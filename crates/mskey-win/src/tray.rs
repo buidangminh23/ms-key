@@ -2,6 +2,7 @@ use std::ptr;
 
 use mskey_core::{Charset, InputMethod};
 use windows_sys::Win32::Foundation::{HWND, POINT, RECT};
+use windows_sys::Win32::System::LibraryLoader::GetModuleHandleW;
 use windows_sys::Win32::Graphics::Gdi::{
     BI_RGB, BITMAPINFO, BITMAPINFOHEADER, CreateBitmap, CreateCompatibleDC, CreateDIBSection,
     CreateFontW, CreateSolidBrush, DIB_RGB_COLORS, DT_CENTER, DT_SINGLELINE, DT_VCENTER, DeleteDC,
@@ -13,12 +14,20 @@ use windows_sys::Win32::UI::Shell::{
 };
 use windows_sys::Win32::UI::WindowsAndMessaging::{
     AppendMenuW, CreateIconIndirect, CreatePopupMenu, DestroyIcon, DestroyMenu, GetCursorPos,
+    DrawIconEx, LoadImageW, DI_NORMAL, IMAGE_ICON, LR_SHARED,
     HICON, ICONINFO, MF_CHECKED, MF_POPUP, MF_SEPARATOR, MF_STRING, MF_UNCHECKED,
     SetForegroundWindow, TPM_BOTTOMALIGN, TPM_LEFTALIGN, TrackPopupMenu,
 };
 
 use crate::platform::to_wide;
 use crate::state::WM_APP_TRAY;
+
+pub fn app_icon(size: i32) -> HICON {
+    unsafe {
+        LoadImageW(GetModuleHandleW(ptr::null()), 101usize as *const u16,
+            IMAGE_ICON, size, size, LR_SHARED) as HICON
+    }
+}
 
 pub const ID_TRAY_SHOW: usize = 4001;
 pub const ID_TRAY_TOGGLE_VE: usize = 4002;
@@ -189,11 +198,11 @@ unsafe fn append_item(menu: windows_sys::Win32::UI::WindowsAndMessaging::HMENU, 
 }
 
 fn fill_badge_pixels(pixels: &mut [u32], size: i32, r: u8, g: u8, b: u8) {
-    let radius = 6.0f32;
-    let half = 15.5f32;
-    let max_c = 13.5f32 - radius;
-    for y in 0..size {
-        for x in 0..size {
+    let radius = 3.0f32;
+    let half = 24.0f32;
+    let max_c = 8.0f32 - radius;
+    for y in 16..size {
+        for x in 16..size {
             let dx = ((x as f32 + 0.5 - half).abs() - max_c).max(0.0);
             let dy = ((y as f32 + 0.5 - half).abs() - max_c).max(0.0);
             let dist = (dx * dx + dy * dy).sqrt() - radius;
@@ -210,13 +219,13 @@ fn fill_badge_pixels(pixels: &mut [u32], size: i32, r: u8, g: u8, b: u8) {
 fn draw_badge_glyph(dc: HDC, pixels: &mut [u32], size: i32, letter: &str) {
     let font_name = to_wide("Segoe UI");
     let hfont = unsafe {
-        CreateFontW(24, 0, 0, 0, 700, 0, 0, 0, 1, 0, 0, 4, 0, font_name.as_ptr())
+        CreateFontW(16, 0, 0, 0, 700, 0, 0, 0, 1, 0, 0, 4, 0, font_name.as_ptr())
     };
     let old_font = unsafe { SelectObject(dc, hfont) };
     unsafe {
         SetBkMode(dc, TRANSPARENT as i32);
         SetTextColor(dc, 0x00FF_FFFF);
-        let mut rc = RECT { left: 0, top: 0, right: size, bottom: size };
+        let mut rc = RECT { left: 16, top: 15, right: size, bottom: size };
         let mut wide_txt = to_wide(letter);
         DrawTextW(dc, wide_txt.as_mut_ptr(), -1, &mut rc, DT_CENTER | DT_VCENTER | DT_SINGLELINE);
     }
@@ -259,6 +268,8 @@ pub fn create_badge_icon(letter: &str, r: u8, g: u8, b: u8) -> HICON {
     }
     let old_bm = unsafe { SelectObject(dc, hbm) };
     let pixels = unsafe { std::slice::from_raw_parts_mut(bits_ptr as *mut u32, (size * size) as usize) };
+    pixels.fill(0);
+    unsafe { DrawIconEx(dc, 0, 0, app_icon(32), 28, 28, 0, ptr::null_mut(), DI_NORMAL) };
     fill_badge_pixels(pixels, size, r, g, b);
     draw_badge_glyph(dc, pixels, size, letter);
     unsafe { SelectObject(dc, old_bm) };

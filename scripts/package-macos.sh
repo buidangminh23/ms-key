@@ -33,6 +33,10 @@ create_dmg() (
     mkdir -p "${DMG_WORK}/volume"
     ditto "${SOURCE}" "${DMG_WORK}/volume/MSKey.app"
     ln -s /Applications "${DMG_WORK}/volume/Applications"
+    cp "${ROOT_DIR}/assets/branding/mskey.icns" "${DMG_WORK}/volume/.VolumeIcon.icns"
+    if command -v SetFile >/dev/null 2>&1; then
+        SetFile -a C "${DMG_WORK}/volume"
+    fi
     cat > "${DMG_WORK}/volume/Install.txt" <<'EOF'
 MS Key for macOS 13 or later (Apple Silicon and Intel)
 
@@ -86,6 +90,8 @@ mkdir -p "${APP}/Contents/MacOS" "${APP}/Contents/Resources"
 cp "${BIN_PATH}" "${APP}/Contents/MacOS/MSKey"
 chmod 755 "${APP}/Contents/MacOS/MSKey"
 cp "${ROOT_DIR}/macos/MSKeyMac/Info.plist" "${APP}/Contents/Info.plist"
+cp "${ROOT_DIR}/assets/branding/mskey.icns" "${APP}/Contents/Resources/mskey.icns"
+cp "${ROOT_DIR}/assets/branding/mskey-mark.png" "${APP}/Contents/Resources/mskey-mark.png"
 plutil -replace CFBundleShortVersionString -string "${VERSION}" "${APP}/Contents/Info.plist"
 plutil -replace CFBundleVersion -string "${BUILD_NUMBER}" "${APP}/Contents/Info.plist"
 cp "${ROOT_DIR}/LICENSE" "${APP}/Contents/Resources/LICENSE"

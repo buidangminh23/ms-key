@@ -22,6 +22,7 @@ public final class MSKeyStore: ObservableObject {
     @Published public var lastActiveApp: String = ""
     @Published public var activeSheet: ActiveSheetKind?
     @Published public var accessibilityGranted: Bool
+    @Published public var presentationID = 0
 
     public let rust: RustEngine
     public let tapManager: EventTapManager
@@ -190,6 +191,7 @@ public final class MSKeyStore: ObservableObject {
     }
 
     public func showMainWindow() {
+        if mainWindow?.isVisible != true { presentationID += 1 }
         if let win = mainWindow {
             applyTheme(config.theme)
             win.makeKeyAndOrderFront(nil)
@@ -198,7 +200,7 @@ public final class MSKeyStore: ObservableObject {
         }
         let host = NSHostingController(rootView: SettingsView(store: self))
         let win = NSWindow(contentViewController: host)
-        win.title = "MS Key 0.1"
+        win.title = "MS Key \(MSKeyBrand.version)"
         win.styleMask = [.titled, .closable, .miniaturizable]
         win.isReleasedWhenClosed = false
         win.center()
@@ -235,6 +237,7 @@ public final class MSKeyAppDelegate: NSObject, NSApplicationDelegate {
     public func applicationDidFinishLaunching(_ notification: Notification) {
         NSApp.setActivationPolicy(.accessory)
         store.startRuntime()
+        if CommandLine.arguments.contains("--show") { store.showMainWindow() }
         if openConverterOnLaunch {
             store.openSheet(.converter)
         }
@@ -268,7 +271,18 @@ public enum MSKeyMainRunner {
                     typed.append(Character(scalar))
                 }
             }
-            let report = "ffi_typed=\(typed)\npanel=560x568\n"
+            let app = NSApplication.shared
+            app.setActivationPolicy(.prohibited)
+            guard let markURL = Bundle.main.url(forResource: "mskey-mark", withExtension: "png"),
+                  NSImage(contentsOf: markURL) != nil,
+                  Bundle.main.url(forResource: "mskey", withExtension: "icns") != nil else {
+                fputs("MS Key branding resources are missing\n", stderr)
+                exit(1)
+            }
+            let host = NSHostingView(rootView: SettingsView(store: MSKeyStore()))
+            host.frame = NSRect(x: 0, y: 0, width: 560, height: 624)
+            host.layoutSubtreeIfNeeded()
+            let report = "ffi_typed=\(typed)\npanel=\(Int(host.bounds.width))x\(Int(host.bounds.height))\nbranding=loaded\n"
             try? report.write(toFile: outPath, atomically: true, encoding: .utf8)
             return
         }

@@ -6,6 +6,7 @@ PREFIX="${PREFIX:-/usr/local}"
 BIN_DIR="${PREFIX}/bin"
 IBUS_COMPONENT_DIR="${IBUS_COMPONENT_DIR:-/usr/share/ibus/component}"
 APP_DIR="${APP_DIR:-/usr/share/applications}"
+ICON_DIR="${ICON_DIR:-${PREFIX}/share/icons/hicolor}"
 
 if ! command -v cargo >/dev/null 2>&1; then
     echo "cargo is required to build mskey-linux" >&2
@@ -36,6 +37,12 @@ trap 'rm -f "${TMP_XML}"' EXIT
 "${BIN_DIR}/mskey-linux" --print-xml > "${TMP_XML}"
 ${SUDO} install -Dm644 "${TMP_XML}" "${IBUS_COMPONENT_DIR}/mskey.xml"
 ${SUDO} install -Dm644 "${ROOT_DIR}/data/mskey.desktop" "${APP_DIR}/mskey.desktop"
+for size in 32 48 64 128 256 512; do
+    ${SUDO} install -Dm644 "${ROOT_DIR}/assets/branding/mskey-${size}.png" "${ICON_DIR}/${size}x${size}/apps/mskey.png"
+done
+if command -v gtk-update-icon-cache >/dev/null 2>&1; then
+    ${SUDO} gtk-update-icon-cache -q -t -f "${ICON_DIR}" || true
+fi
 
 echo "Installed ${BIN_DIR}/mskey-linux"
 echo "Installed ${IBUS_COMPONENT_DIR}/mskey.xml"

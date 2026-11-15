@@ -43,6 +43,13 @@ VIAddVersionKey "CompanyName" "${APP_PUBLISHER}"
 VIAddVersionKey "LegalCopyright" "MIT License"
 
 !define MUI_ABORTWARNING
+!define MUI_ICON "${BRANDING_DIR}\mskey.ico"
+!define MUI_UNICON "${BRANDING_DIR}\mskey.ico"
+!define MUI_HEADERIMAGE
+!define MUI_HEADERIMAGE_BITMAP "${BRANDING_DIR}\installer-header.bmp"
+!define MUI_WELCOMEFINISHPAGE_BITMAP "${BRANDING_DIR}\installer-sidebar.bmp"
+!define MUI_UNWELCOMEFINISHPAGE_BITMAP "${BRANDING_DIR}\installer-sidebar.bmp"
+!define MUI_INSTFILESPAGE_PROGRESSBAR smooth
 !define MUI_FINISHPAGE_RUN "$INSTDIR\${APP_EXE}"
 !define MUI_FINISHPAGE_RUN_PARAMETERS "--show"
 !define MUI_FINISHPAGE_RUN_TEXT "Mở MS Key ngay"

@@ -39,6 +39,9 @@ DEB_ROOT="${WORK}/deb"
 install -Dm755 "${BIN}" "${DEB_ROOT}/usr/bin/mskey-linux"
 render_xml /usr/bin/mskey-linux | install -Dm644 /dev/stdin "${DEB_ROOT}/usr/share/ibus/component/mskey.xml"
 render_desktop /usr/bin/mskey-linux | install -Dm644 /dev/stdin "${DEB_ROOT}/usr/share/applications/mskey.desktop"
+for size in 32 48 64 128 256 512; do
+    install -Dm644 "${ROOT_DIR}/assets/branding/mskey-${size}.png" "${DEB_ROOT}/usr/share/icons/hicolor/${size}x${size}/apps/mskey.png"
+done
 { cat "${ROOT_DIR}/LICENSE"; echo; cat "${ROOT_DIR}/THIRD-PARTY-NOTICES.md"; } | install -Dm644 /dev/stdin "${DEB_ROOT}/usr/share/doc/mskey/copyright"
 INSTALLED_KB="$(du -sk "${DEB_ROOT}/usr" | cut -f1)"
 mkdir -p "${DEB_ROOT}/DEBIAN"
@@ -64,6 +67,9 @@ set -e
 if command -v ibus >/dev/null 2>&1; then
     ibus write-cache --system >/dev/null 2>&1 || true
 fi
+if command -v gtk-update-icon-cache >/dev/null 2>&1; then
+    gtk-update-icon-cache -q -t -f /usr/share/icons/hicolor || true
+fi
 exit 0
 EOF
 chmod 755 "${DEB_ROOT}/DEBIAN/postinst"
@@ -74,6 +80,9 @@ TAR_NAME="MSKey-${VERSION}-linux-${ARCH}"
 TAR_ROOT="${WORK}/${TAR_NAME}"
 install -Dm755 "${BIN}" "${TAR_ROOT}/mskey-linux"
 install -Dm644 "${ROOT_DIR}/data/mskey.desktop" "${TAR_ROOT}/mskey.desktop"
+for size in 32 48 64 128 256 512; do
+    install -Dm644 "${ROOT_DIR}/assets/branding/mskey-${size}.png" "${TAR_ROOT}/icons/mskey-${size}.png"
+done
 install -Dm644 "${ROOT_DIR}/LICENSE" "${TAR_ROOT}/LICENSE"
 install -Dm644 "${ROOT_DIR}/THIRD-PARTY-NOTICES.md" "${TAR_ROOT}/THIRD-PARTY-NOTICES.md"
 cat > "${TAR_ROOT}/install.sh" <<'EOF'
@@ -84,11 +93,18 @@ PREFIX="${PREFIX:-/usr/local}"
 BIN_DIR="${PREFIX}/bin"
 IBUS_COMPONENT_DIR="${IBUS_COMPONENT_DIR:-/usr/share/ibus/component}"
 APP_DIR="${APP_DIR:-/usr/share/applications}"
+ICON_DIR="${ICON_DIR:-${PREFIX}/share/icons/hicolor}"
 SUDO=""
 if [ "$(id -u)" -ne 0 ]; then SUDO="sudo"; fi
 ${SUDO} install -Dm755 "${HERE}/mskey-linux" "${BIN_DIR}/mskey-linux"
 "${BIN_DIR}/mskey-linux" --print-xml | ${SUDO} install -Dm644 /dev/stdin "${IBUS_COMPONENT_DIR}/mskey.xml"
 sed "s#/usr/local/bin/mskey-linux#${BIN_DIR}/mskey-linux#g" "${HERE}/mskey.desktop" | ${SUDO} install -Dm644 /dev/stdin "${APP_DIR}/mskey.desktop"
+for size in 32 48 64 128 256 512; do
+    ${SUDO} install -Dm644 "${HERE}/icons/mskey-${size}.png" "${ICON_DIR}/${size}x${size}/apps/mskey.png"
+done
+if command -v gtk-update-icon-cache >/dev/null 2>&1; then
+    ${SUDO} gtk-update-icon-cache -q -t -f "${ICON_DIR}" || true
+fi
 echo "Installed ${BIN_DIR}/mskey-linux"
 echo "Run 'ibus restart', then add 'MS Key (Tiếng Việt)' in Settings > Keyboard > Input Sources."
 EOF
@@ -98,9 +114,16 @@ set -euo pipefail
 PREFIX="${PREFIX:-/usr/local}"
 IBUS_COMPONENT_DIR="${IBUS_COMPONENT_DIR:-/usr/share/ibus/component}"
 APP_DIR="${APP_DIR:-/usr/share/applications}"
+ICON_DIR="${ICON_DIR:-${PREFIX}/share/icons/hicolor}"
 SUDO=""
 if [ "$(id -u)" -ne 0 ]; then SUDO="sudo"; fi
 ${SUDO} rm -f "${PREFIX}/bin/mskey-linux" "${IBUS_COMPONENT_DIR}/mskey.xml" "${APP_DIR}/mskey.desktop"
+for size in 32 48 64 128 256 512; do
+    ${SUDO} rm -f "${ICON_DIR}/${size}x${size}/apps/mskey.png"
+done
+if command -v gtk-update-icon-cache >/dev/null 2>&1; then
+    ${SUDO} gtk-update-icon-cache -q -t -f "${ICON_DIR}" || true
+fi
 rm -f "${XDG_CONFIG_HOME:-${HOME}/.config}/autostart/mskey.desktop"
 echo "Removed MS Key. Run 'ibus restart' to unload it."
 EOF

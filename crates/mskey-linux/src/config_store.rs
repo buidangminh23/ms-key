@@ -247,7 +247,7 @@ pub fn render_ibus_component_xml(exec_path: &str, setup_path: &str) -> String {
          \t\t\t<language>vi</language>\n\
          \t\t\t<license>MIT</license>\n\
          \t\t\t<author>MS Key</author>\n\
-         \t\t\t<icon>preferences-desktop-locale</icon>\n\
+         \t\t\t<icon>mskey</icon>\n\
          \t\t\t<layout>us</layout>\n\
          \t\t\t<longname>MS Key (Tiếng Việt)</longname>\n\
          \t\t\t<description>Vietnamese Unicode IME inspired by EVKey, OpenKey, Gonhanh, IBus Bamboo</description>\n\

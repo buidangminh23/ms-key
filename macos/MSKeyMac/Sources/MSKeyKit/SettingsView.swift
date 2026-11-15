@@ -3,6 +3,8 @@ import SwiftUI
 public struct SettingsView: View {
     @ObservedObject public var store: MSKeyStore
     @State private var selectedTab = 0
+    @State private var brandVisible = false
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
 
     public init(store: MSKeyStore) {
         self.store = store
@@ -10,6 +12,25 @@ public struct SettingsView: View {
 
     public var body: some View {
         VStack(alignment: .leading, spacing: 12) {
+            HStack(spacing: 12) {
+                Image(nsImage: MSKeyBrand.mark)
+                    .resizable()
+                    .scaledToFit()
+                    .frame(width: 48, height: 40)
+                    .scaleEffect(brandVisible ? 1 : 0.8)
+                    .opacity(brandVisible ? 1 : 0.25)
+                    .accessibilityHidden(true)
+                VStack(alignment: .leading, spacing: 2) {
+                    Text("MS Key").font(.title3.bold())
+                    Text("Gõ tiếng Việt theo cách của riêng bạn")
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                }
+                Spacer()
+                Text("v\(MSKeyBrand.version)")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+            }
             headerSection
             Picker("", selection: $selectedTab) {
                 Text("Cơ bản").tag(0)
@@ -26,7 +47,8 @@ public struct SettingsView: View {
             footerSection
         }
         .padding(12)
-        .frame(width: 560, height: 568)
+        .frame(width: 560, height: 624)
+        .task(id: store.presentationID) { await animateBrand() }
         .sheet(item: $store.activeSheet) { sheet in
             switch sheet {
             case .macros:
@@ -143,9 +165,25 @@ public struct SettingsView: View {
 
             Spacer()
 
-            Text("MS Key v0.1 • Tiếng Việt Unicode (macOS)")
+            Text("MS Key • Tiếng Việt Unicode (macOS)")
                 .font(.caption)
                 .foregroundStyle(.secondary)
+        }
+    }
+
+    private func animateBrand() async {
+        guard !reduceMotion && !CommandLine.arguments.contains("--verify-smoke") else {
+            brandVisible = true
+            return
+        }
+        brandVisible = false
+        do {
+            try await Task.sleep(nanoseconds: 20_000_000)
+        } catch {
+            return
+        }
+        withAnimation(.easeOut(duration: 0.45)) {
+            brandVisible = true
         }
     }
 

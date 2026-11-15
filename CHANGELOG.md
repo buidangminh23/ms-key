@@ -2,6 +2,28 @@
 
 All notable changes to MS Key are documented here. The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and the project uses [Semantic Versioning](https://semver.org/).
 
+## [0.1.1] - 2026-11-15
+
+### Added
+
+- MS Key branding across Windows executable, window, tray and installer icons; macOS app, menu bar and DMG; Linux launcher, IBus and settings; and the project README.
+- Brief nonblocking logo entrance animations when opening settings, respecting each system's reduced-motion preference.
+- Live byte-based download progress in the npm installer, with plain output for redirected terminals and `MSKEY_REDUCE_MOTION=1`.
+- macOS Terminal download progress and activity indicators while unpacking, verifying and installing the app.
+- Branded Windows setup pages and smooth native installation progress.
+
+### Fixed
+
+- The npm macOS installer now checks the installer script against `SHA256SUMS` before executing it.
+
+### Downloads
+
+- macOS 13+ (Intel and Apple Silicon): `MSKey-0.1.1-macos-universal.dmg`. Open it and drag MSKey.app into Applications.
+- Windows 10/11: `MSKey-Setup-0.1.1-windows-x64.exe` or `MSKey-0.1.1-windows-x64-portable.zip`.
+- Linux: `mskey_0.1.1_amd64.deb` or `MSKey-0.1.1-linux-amd64.tar.gz`.
+
+All downloads include SHA-256 checksums. macOS remains ad-hoc signed and not notarized; first launch may require **System Settings > Privacy & Security > Open Anyway**, followed by Accessibility permission.
+
 ## [0.1.0] - 2026-11-15
 
 First public release of MS Key, a lightweight Vietnamese Unicode input method for Windows, Linux and macOS built on one shared Rust engine.
@@ -51,3 +73,4 @@ Every file is listed in `SHA256SUMS`.
 - Real typing through each system's keyboard hook was tested by hand only on the developer's machines; please report problems in GitHub Issues.
 
 [0.1.0]: https://github.com/buidangminh23/ms-key/releases/tag/v0.1.0
+[0.1.1]: https://github.com/buidangminh23/ms-key/releases/tag/v0.1.1

@@ -42,16 +42,28 @@ export function sha256(buffer) {
   return createHash('sha256').update(buffer).digest('hex');
 }
 
-export async function download(url, fetchImpl = globalThis.fetch) {
+export async function download(url, fetchImpl = globalThis.fetch, onProgress) {
   const response = await fetchImpl(url, { redirect: 'follow', signal: AbortSignal.timeout(120_000) });
   if (!response.ok) throw new Error(`Download failed (${response.status}) for ${url}`);
-  return Buffer.from(await response.arrayBuffer());
+  const length = Number(response.headers.get('content-length'));
+  const total = Number.isFinite(length) && length > 0 && !response.headers.get('content-encoding') ? length : null;
+  let received = 0;
+  const chunks = [];
+  onProgress?.({ received, total });
+  if (response.body) {
+    for await (const chunk of response.body) {
+      chunks.push(Buffer.from(chunk));
+      received += chunk.byteLength;
+      onProgress?.({ received, total });
+    }
+  }
+  return Buffer.concat(chunks, received);
 }
 
-export async function fetchVerifiedAsset(key, { baseUrl = DEFAULT_BASE_URL, fetchImpl } = {}) {
+export async function fetchVerifiedAsset(key, { baseUrl = DEFAULT_BASE_URL, fetchImpl, onProgress } = {}) {
   const sums = parseChecksums((await download(`${baseUrl}/SHA256SUMS`, fetchImpl)).toString('utf8'));
   const asset = pickAsset(sums, key);
-  const data = await download(`${baseUrl}/${asset.name}`, fetchImpl);
+  const data = await download(`${baseUrl}/${asset.name}`, fetchImpl, onProgress);
   const actual = sha256(data);
   if (actual !== asset.sha256) throw new Error(`Checksum mismatch for ${asset.name}`);
   return { ...asset, data };

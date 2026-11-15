@@ -12,7 +12,8 @@ use windows_sys::Win32::UI::WindowsAndMessaging::{
     SM_CYSCREEN, SW_HIDE, SW_RESTORE, SW_SHOW, SendMessageW, SetForegroundWindow, SetWindowPos,
     ShowWindow, TranslateMessage, WM_CLOSE, WM_COMMAND, WM_CREATE, WM_CTLCOLORSTATIC, WM_DESTROY,
     WM_DPICHANGED, WM_DRAWITEM, WM_LBUTTONDBLCLK, WM_PAINT, WM_RBUTTONUP, WM_SETICON,
-    WNDCLASSEXW, WS_CAPTION, WS_MINIMIZEBOX, WS_SYSMENU,
+    WNDCLASSEXW, WS_CAPTION, WS_MINIMIZEBOX, WS_SYSMENU, WM_TIMER, KillTimer, SetTimer,
+    SystemParametersInfoW, SPI_GETCLIENTAREAANIMATION, IsWindowVisible,
 };
 
 use crate::dialog_convert::{capture_hotkey_dialog, show_converter_dialog};
@@ -55,12 +56,12 @@ pub fn create_and_run_main(show_initially: bool, verify_smoke_path: Option<&str>
         cbClsExtra: 0,
         cbWndExtra: 0,
         hInstance: hinst,
-        hIcon: ptr::null_mut(),
+        hIcon: crate::tray::app_icon(32),
         hCursor: ptr::null_mut(),
         hbrBackground: ptr::null_mut(),
         lpszMenuName: ptr::null(),
         lpszClassName: cname.as_ptr(),
-        hIconSm: ptr::null_mut(),
+        hIconSm: crate::tray::app_icon(16),
     };
     unsafe {
         RegisterClassExW(&wc);
@@ -75,7 +76,7 @@ pub fn create_and_run_main(show_initially: bool, verify_smoke_path: Option<&str>
     let win_h = rc.bottom - rc.top;
     let sx = (unsafe { GetSystemMetrics(SM_CXSCREEN) } - win_w) / 2;
     let sy = (unsafe { GetSystemMetrics(SM_CYSCREEN) } - win_h) / 2;
-    let title = to_wide("MS Key 0.1");
+    let title = to_wide(concat!("MS Key ", env!("CARGO_PKG_VERSION")));
 
     let hwnd = unsafe {
         CreateWindowExW(
@@ -120,6 +121,15 @@ pub fn create_and_run_main(show_initially: bool, verify_smoke_path: Option<&str>
 }
 
 fn show_and_focus(hwnd: HWND) {
+    let visible = unsafe { IsWindowVisible(hwnd) } != 0;
+    let mut animate: i32 = 0;
+    unsafe {
+        SystemParametersInfoW(SPI_GETCLIENTAREAANIMATION, 0, &mut animate as *mut _ as *mut _, 0);
+    }
+    if !visible && animate != 0 {
+        crate::ui_paint::with_main_data_mut(|d| d.reveal_started = Some(std::time::Instant::now()));
+        unsafe { SetTimer(hwnd, 92, 16, None) };
+    }
     unsafe {
         ShowWindow(hwnd, SW_RESTORE);
         ShowWindow(hwnd, SW_SHOW);
@@ -152,10 +162,9 @@ fn on_main_create(hwnd: HWND) {
     let mut tray = TrayController::new(hwnd);
     let ve = with_state(|st| st.engine.config().vietnamese_enabled);
     tray.update(ve);
-    let icon = tray.current_icon(ve);
     unsafe {
-        SendMessageW(hwnd, WM_SETICON, ICON_BIG as usize, icon as LPARAM);
-        SendMessageW(hwnd, WM_SETICON, ICON_SMALL as usize, icon as LPARAM);
+        SendMessageW(hwnd, WM_SETICON, ICON_BIG as usize, crate::tray::app_icon(32) as LPARAM);
+        SendMessageW(hwnd, WM_SETICON, ICON_SMALL as usize, crate::tray::app_icon(16) as LPARAM);
     }
     ctrls.sync_from_state();
     set_main_data(Some(MainWinData {
@@ -167,6 +176,7 @@ fn on_main_create(hwnd: HWND) {
         pal,
         ctrls,
         tray,
+        reveal_started: None,
     }));
 }
 
@@ -183,6 +193,21 @@ unsafe extern "system" fn main_wnd_proc(
         }
         WM_PAINT => {
             paint_main_window(hwnd);
+            0
+        }
+        WM_TIMER if wparam == 92 => {
+            let done = crate::ui_paint::with_main_data_mut(|d| {
+                if d.reveal_started.is_some_and(|start| start.elapsed().as_millis() >= 480) {
+                    d.reveal_started = None;
+                }
+                d.reveal_started.is_none()
+            }).unwrap_or(true);
+            if done {
+                unsafe { KillTimer(hwnd, 92) };
+            }
+            let dpi = window_dpi(hwnd);
+            let rc = RECT { left: scale_px(450, dpi), top: scale_px(96, dpi), right: scale_px(548, dpi), bottom: scale_px(148, dpi) };
+            unsafe { windows_sys::Win32::Graphics::Gdi::InvalidateRect(hwnd, &rc, 0) };
             0
         }
         WM_DRAWITEM => draw_main_item(hwnd, lparam).unwrap_or(0),
