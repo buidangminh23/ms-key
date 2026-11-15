@@ -4,20 +4,26 @@ import SwiftUI
 @MainActor
 public final class MenuBarController: NSObject {
     private var statusItem: NSStatusItem?
+    private var menu = NSMenu()
     private weak var store: MSKeyStore?
 
     public init(store: MSKeyStore) {
         self.store = store
         super.init()
-        let item = NSStatusBar.system.statusItem(withLength: 40)
+        let item = NSStatusBar.system.statusItem(withLength: NSStatusItem.squareLength)
         self.statusItem = item
+        if let button = item.button {
+            button.target = self
+            button.action = #selector(onStatusClick)
+            button.sendAction(on: [.leftMouseUp, .rightMouseUp])
+        }
         updateStatusIcon(vietnamese: store.effectiveVE)
         rebuildMenu()
     }
 
     public func updateStatusIcon(vietnamese: Bool) {
         guard let button = statusItem?.button else { return }
-        button.image = makeBadgeImage(letter: vietnamese ? "V" : "E", vietnamese: vietnamese)
+        button.image = Self.letterImage(letter: vietnamese ? "V" : "E", vietnamese: vietnamese)
         button.toolTip = vietnamese ? "MS Key — Tiếng Việt (V)" : "MS Key — Tiếng Anh (E)"
         rebuildMenu()
     }
@@ -61,7 +67,19 @@ public final class MenuBarController: NSObject {
         menu.addItem(osdItem)
         menu.addItem(.separator())
         menu.addItem(makeItem("Thoát MS Key", action: #selector(onQuit), key: "q"))
-        statusItem?.menu = menu
+        self.menu = menu
+    }
+
+    @objc private func onStatusClick() {
+        let event = NSApp.currentEvent
+        let wantsMenu = event?.type == .rightMouseUp || event?.modifierFlags.contains(.control) == true
+        guard wantsMenu, let item = statusItem, let button = item.button else {
+            store?.toggleVE()
+            return
+        }
+        item.menu = menu
+        button.performClick(nil)
+        item.menu = nil
     }
 
     private func makeItem(_ title: String, action: Selector, key: String = "", rep: Any? = nil) -> NSMenuItem {
@@ -71,29 +89,24 @@ public final class MenuBarController: NSObject {
         return item
     }
 
-    private func makeBadgeImage(letter: String, vietnamese: Bool) -> NSImage {
-        let size = NSSize(width: 36, height: 20)
-        let img = NSImage(size: size)
-        img.lockFocus()
-        MSKeyBrand.mark.draw(in: NSRect(x: 0, y: 1, width: 20, height: 18))
-        let rect = NSRect(x: 21, y: 2, width: 15, height: 16)
-        let path = NSBezierPath(roundedRect: rect, xRadius: 4, yRadius: 4)
-        let bg = vietnamese
-            ? NSColor(srgbRed: 0.84, green: 0.17, blue: 0.15, alpha: 1.0)
-            : NSColor(srgbRed: 0.14, green: 0.45, blue: 0.85, alpha: 1.0)
-        bg.setFill()
-        path.fill()
-        let attrs: [NSAttributedString.Key: Any] = [
-            .font: NSFont.systemFont(ofSize: 11.5, weight: .bold),
-            .foregroundColor: NSColor.white,
-        ]
-        let str = NSAttributedString(string: letter, attributes: attrs)
-        let sz = str.size()
-        let pt = NSPoint(x: rect.midX - sz.width / 2, y: rect.midY - sz.height / 2 - 0.5)
-        str.draw(at: pt)
-        img.unlockFocus()
-        img.isTemplate = false
-        return img
+    static let letterInkHeight: CGFloat = 16
+
+    static func letterImage(letter: String, vietnamese: Bool) -> NSImage {
+        let color = vietnamese
+            ? NSColor(srgbRed: 0xD1 / 255, green: 0x34 / 255, blue: 0x38 / 255, alpha: 1)
+            : NSColor(srgbRed: 0x00 / 255, green: 0x78 / 255, blue: 0xD4 / 255, alpha: 1)
+        let probe = NSFont.systemFont(ofSize: 100, weight: .bold)
+        let font = NSFont.systemFont(ofSize: 100 * letterInkHeight / probe.capHeight, weight: .bold)
+        let text = NSAttributedString(string: letter, attributes: [.font: font, .foregroundColor: color])
+        let ink = text.boundingRect(with: NSSize(width: 100, height: 100), options: [.usesLineFragmentOrigin, .usesDeviceMetrics])
+        let size = NSSize(width: max(18, ceil(ink.width) + 2), height: 22)
+        let image = NSImage(size: size, flipped: false) { rect in
+            let origin = NSPoint(x: rect.midX - ink.midX, y: rect.midY - ink.midY)
+            text.draw(with: NSRect(origin: origin, size: NSSize(width: 100, height: 100)), options: [.usesLineFragmentOrigin])
+            return true
+        }
+        image.isTemplate = false
+        return image
     }
 
     @objc private func onToggleVE() { store?.toggleVE() }
