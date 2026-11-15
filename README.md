@@ -1,5 +1,5 @@
 <p align="center">
-  <img src="https://raw.githubusercontent.com/buidangminh23/ms-key/main/assets/branding/mskey-readme.png" width="280" height="193" alt="MS Key logo" />
+  <img src="assets/branding/mskey-readme.png" width="280" height="193" alt="MS Key logo" />
 </p>
 
 <h1 align="center">MS Key</h1>
