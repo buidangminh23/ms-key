@@ -62,6 +62,8 @@ pub fn show_converter_dialog(parent: *mut GtkWindow) {
         "Hoa đầu câu",
         "Hoa Mỗi Từ",
         "Bỏ dấu tiếng Việt",
+        "Chuẩn hóa dấu mới",
+        "Chuẩn hóa dấu cũ",
     ];
     let from_cb = make_combo(src_cs);
     let to_cb = make_combo(dst_cs);
@@ -147,6 +149,8 @@ unsafe extern "C" fn on_conv_run(_: *mut GtkWidget, _: *mut c_void) {
             3 => CaseTransform::Sentence,
             4 => CaseTransform::Title,
             5 => CaseTransform::StripDiacritics,
+            6 => CaseTransform::NormalizeModernTone,
+            7 => CaseTransform::NormalizeClassicTone,
             _ => CaseTransform::None,
         };
         let out = convert_with_encoding(&src, from_enc, to_enc, case_tf);
@@ -220,6 +224,25 @@ pub fn pick_file_path(
     save: bool,
     default_name: &str,
 ) -> Option<String> {
+    pick_file_path_inner(parent, title, save, default_name, true)
+}
+
+pub fn pick_sync_file_path(parent: *mut GtkWindow, current: &str) -> Option<String> {
+    let default_name = std::path::Path::new(current.trim())
+        .file_name()
+        .and_then(|s| s.to_str())
+        .filter(|s| !s.is_empty())
+        .unwrap_or("mskey-sync.json");
+    pick_file_path_inner(parent, "Chọn tệp cấu hình đồng bộ", true, default_name, false)
+}
+
+fn pick_file_path_inner(
+    parent: *mut GtkWindow,
+    title: &str,
+    save: bool,
+    default_name: &str,
+    confirm_overwrite: bool,
+) -> Option<String> {
     let dlg = create_modal_gtk(parent, title, 600, 420);
     let root = make_vbox(8);
     let action = if save { GTK_FILE_CHOOSER_ACTION_SAVE } else { GTK_FILE_CHOOSER_ACTION_OPEN };
@@ -228,7 +251,10 @@ pub fn pick_file_path(
         gtk_widget_set_hexpand(chooser, 1);
         gtk_widget_set_vexpand(chooser, 1);
         if save {
-            gtk_file_chooser_set_do_overwrite_confirmation(chooser, 1);
+            gtk_file_chooser_set_do_overwrite_confirmation(
+                chooser,
+                if confirm_overwrite { 1 } else { 0 },
+            );
             if !default_name.is_empty() {
                 let cn = crate::gio_ffi::cstr(default_name);
                 gtk_file_chooser_set_current_name(chooser, cn.as_ptr());

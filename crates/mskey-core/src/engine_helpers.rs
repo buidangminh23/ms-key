@@ -1,7 +1,7 @@
 use crate::config::{Charset, Config};
 use crate::converter::encode_char_for_charset;
 use crate::dict;
-use crate::engine_quick::expand_macro_variables;
+use crate::engine_quick::{MacroExpansion, expand_macro_variables_with_context};
 use crate::syllable::{is_valid_complete_syllable, parse_syllable};
 use crate::tables::{Tone, decode_vowel, strip_vowel_diacritic};
 
@@ -10,7 +10,8 @@ pub(crate) fn match_macro(
     display_str: &str,
     raw_str: &str,
     clock_offset_secs: i64,
-) -> Option<String> {
+    clipboard: Option<&str>,
+) -> Option<MacroExpansion> {
     let (entry, word) = if let Some(e) = config
         .macros
         .iter()
@@ -26,18 +27,41 @@ pub(crate) fn match_macro(
     } else {
         return None;
     };
-    let expanded = expand_macro_variables(&entry.expansion, clock_offset_secs);
+    let expanded =
+        expand_macro_variables_with_context(&entry.expansion, clock_offset_secs, clipboard);
     let mut chars = word.chars();
     let all_upper = word.chars().all(|c| !c.is_alphabetic() || c.is_uppercase());
     if all_upper && word.chars().any(|c| c.is_alphabetic()) {
-        return Some(expanded.to_uppercase());
+        if let Some(pos) = expanded.cursor_char_idx {
+            let before: String = expanded.text.chars().take(pos).collect();
+            let after: String = expanded.text.chars().skip(pos).collect();
+            let upper_before = before.to_uppercase();
+            let upper_after = after.to_uppercase();
+            let new_pos = upper_before.chars().count();
+            return Some(MacroExpansion {
+                text: format!("{upper_before}{upper_after}"),
+                cursor_char_idx: Some(new_pos),
+            });
+        }
+        return Some(MacroExpansion {
+            text: expanded.text.to_uppercase(),
+            cursor_char_idx: None,
+        });
     }
     if chars.next().is_some_and(|c| c.is_uppercase()) {
-        let mut exp_chars = expanded.chars();
+        let mut exp_chars = expanded.text.chars();
         if let Some(first) = exp_chars.next() {
-            let mut out: String = first.to_uppercase().collect();
+            let first_upper: String = first.to_uppercase().collect();
+            let delta = first_upper.chars().count().saturating_sub(1);
+            let mut out = first_upper;
             out.extend(exp_chars);
-            return Some(out);
+            let adjusted_pos = expanded
+                .cursor_char_idx
+                .map(|p| if p == 0 { 0 } else { p + delta });
+            return Some(MacroExpansion {
+                text: out,
+                cursor_char_idx: adjusted_pos,
+            });
         }
     }
     Some(expanded)
@@ -61,6 +85,12 @@ pub(crate) fn should_auto_restore(
         && !dict::is_english_word(raw_str)
     {
         return false;
+    }
+    if dict::is_user_word(display_str, &config.user_dict_words) {
+        return false;
+    }
+    if dict::is_user_word(raw_str, &config.user_dict_words) {
+        return true;
     }
     if dict::is_vietnamese_word_with_custom(
         display_str,

@@ -13,12 +13,13 @@ use windows_sys::Win32::UI::HiDpi::{AdjustWindowRectExForDpi, GetDpiForWindow};
 use windows_sys::Win32::UI::Input::KeyboardAndMouse::EnableWindow;
 use windows_sys::Win32::UI::WindowsAndMessaging::{
     BS_OWNERDRAW, CBS_DROPDOWNLIST, CBS_HASSTRINGS, CBS_OWNERDRAWFIXED, CB_ADDSTRING, CB_GETCURSEL,
-    CB_GETLBTEXT, CB_SETCURSEL, CB_SETITEMHEIGHT, CreateWindowExW, DispatchMessageW, ES_AUTOHSCROLL,
-    ES_MULTILINE, ES_WANTRETURN, GetMessageW, GetSystemMetrics, GetWindowTextLengthW,
-    GetWindowTextW, HMENU, IsWindow, MSG, RegisterClassExW, SM_CXSCREEN, SM_CYSCREEN, SW_SHOW,
-    SendMessageW, SetWindowTextW, ShowWindow, TranslateMessage, WM_CTLCOLOREDIT,
-    WM_CTLCOLORLISTBOX, WM_CTLCOLORSTATIC, WM_SETFONT, WNDCLASSEXW, WS_BORDER, WS_CAPTION,
-    WS_CHILD, WS_EX_DLGMODALFRAME, WS_POPUP, WS_SYSMENU, WS_TABSTOP, WS_VISIBLE, WS_VSCROLL,
+    CB_GETLBTEXT, CB_RESETCONTENT, CB_SETCURSEL, CB_SETITEMHEIGHT, CreateWindowExW,
+    DispatchMessageW, ES_AUTOHSCROLL, ES_MULTILINE, ES_WANTRETURN, GetMessageW, GetSystemMetrics,
+    GetWindowTextLengthW, GetWindowTextW, HMENU, IsWindow, MSG, RegisterClassExW, SM_CXSCREEN,
+    SM_CYSCREEN, SW_SHOW, SendMessageW, SetWindowTextW, ShowWindow, TranslateMessage,
+    WM_CTLCOLOREDIT, WM_CTLCOLORLISTBOX, WM_CTLCOLORSTATIC, WM_SETFONT, WNDCLASSEXW, WS_BORDER,
+    WS_CAPTION, WS_CHILD, WS_EX_DLGMODALFRAME, WS_POPUP, WS_SYSMENU, WS_TABSTOP, WS_VISIBLE,
+    WS_VSCROLL,
 };
 
 use crate::platform::to_wide;
@@ -217,7 +218,7 @@ pub fn make_combo(
     let style = ((CBS_DROPDOWNLIST | CBS_OWNERDRAWFIXED | CBS_HASSTRINGS) as u32)
         | WS_TABSTOP
         | WS_VSCROLL;
-    let hw = make_child(parent, "COMBOBOX", "", style, x, y, w, 180, id, font, dpi);
+    let hw = make_child(parent, "COMBOBOX", "", style, x, y, w, 220, id, font, dpi);
     let ih = scale_px(h - 6, dpi).max(18);
     unsafe {
         SendMessageW(hw, CB_SETITEMHEIGHT, -1i32 as usize, ih as LPARAM);
@@ -279,6 +280,26 @@ pub fn write_window_text(hwnd: HWND, text: &str) {
     let w = to_wide(text);
     unsafe {
         SetWindowTextW(hwnd, w.as_ptr());
+    }
+}
+
+pub fn set_cue_banner(hwnd: HWND, text: &str) {
+    let w = to_wide(text);
+    unsafe {
+        SendMessageW(hwnd, 0x1501, 1, w.as_ptr() as LPARAM);
+    }
+}
+
+pub fn reset_combo_items<S: AsRef<str>>(hwnd: HWND, items: &[S], selected: usize) {
+    unsafe {
+        SendMessageW(hwnd, CB_RESETCONTENT, 0, 0);
+        for item in items {
+            let w_item = to_wide(item.as_ref());
+            SendMessageW(hwnd, CB_ADDSTRING, 0, w_item.as_ptr() as LPARAM);
+        }
+        if !items.is_empty() {
+            SendMessageW(hwnd, CB_SETCURSEL, selected.min(items.len() - 1), 0);
+        }
     }
 }
 

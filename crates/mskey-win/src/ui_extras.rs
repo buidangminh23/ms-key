@@ -18,7 +18,7 @@ use windows_sys::Win32::UI::WindowsAndMessaging::{
 use crate::dialog_helpers::{
     combo_index, create_modal_window, current_palette, handle_ctl_color, handle_draw_combo_or_btn,
     make_child, make_combo, make_edit, make_owner_button, read_window_text, register_tool_class,
-    run_modal_loop, scale_px, window_dpi, write_window_text,
+    run_modal_loop, scale_px, set_cue_banner, window_dpi, write_window_text,
 };
 use crate::platform::{save_config, to_wide};
 use crate::state::with_state;
@@ -52,6 +52,7 @@ struct ExtrasDlg {
 thread_local! {
     static EXTRAS_STATE: RefCell<Option<ExtrasDlg>> = const { RefCell::new(None) };
     static DICT_STATE: RefCell<Option<DictDlg>> = const { RefCell::new(None) };
+    static DICT_FILTER_IDX: RefCell<Vec<usize>> = const { RefCell::new(Vec::new()) };
 }
 
 pub fn show_extras_sandbox_dialog(parent: HWND) -> bool {
@@ -247,6 +248,11 @@ const ID_DICT_ADD: usize = 6702;
 const ID_DICT_DEL: usize = 6703;
 const ID_DICT_CLOSE: usize = 6704;
 const ID_DICT_LIST: usize = 6705;
+const ID_DICT_SEARCH: usize = 6706;
+const ID_DICT_IMPORT: usize = 6707;
+const ID_DICT_EXPORT: usize = 6708;
+const ID_DICT_ADD_ESC: usize = 6709;
+const DICT_EN_CHANGE_CODE: usize = 0x0300;
 
 #[derive(Clone, Copy)]
 struct DictDlg {
@@ -254,6 +260,7 @@ struct DictDlg {
     bg_br: HBRUSH,
     in_br: HBRUSH,
     edit: HWND,
+    search_edit: HWND,
     list: HWND,
 }
 
@@ -263,56 +270,134 @@ pub fn show_user_dict_dialog(parent: HWND) {
         parent,
         "MSKeyUserDictDlg",
         "Từ điển cá nhân (MS Key)",
-        448,
-        348,
+        500,
+        418,
     );
     run_modal_loop(parent, modal);
 }
 
-fn reload_dict_list(list: HWND) {
+fn reload_dict_list(list: HWND, search_edit: HWND) {
+    let needle = read_window_text(search_edit).trim().to_lowercase();
     unsafe {
         SendMessageW(list, LB_RESETCONTENT, 0, 0);
+        let mut indices = Vec::new();
         with_state(|st| {
-            for word in &st.engine.config().user_dict_words {
+            for (idx, word) in st.engine.config().user_dict_words.iter().enumerate() {
+                if !needle.is_empty() && !word.to_lowercase().contains(&needle) {
+                    continue;
+                }
+                indices.push(idx);
                 let w = to_wide(word);
                 SendMessageW(list, LB_ADDSTRING, 0, w.as_ptr() as LPARAM);
             }
         });
+        DICT_FILTER_IDX.with(|f| *f.borrow_mut() = indices);
     }
 }
 
-fn handle_dict_cmd(hwnd: HWND, id: usize, st: DictDlg) {
+pub fn add_word_to_user_dict(word: &str) -> bool {
+    let clean = word.trim();
+    if clean.is_empty() {
+        return false;
+    }
+    with_state(|app| {
+        let mut cfg = app.engine.config().clone();
+        if cfg
+            .user_dict_words
+            .iter()
+            .any(|w| w.eq_ignore_ascii_case(clean))
+        {
+            return false;
+        }
+        cfg.user_dict_words.push(clean.to_string());
+        cfg.user_dict_words.sort_by_key(|w| w.to_lowercase());
+        save_config(&cfg);
+        app.engine.update_config(cfg);
+        true
+    })
+}
+
+fn import_dict_txt(hwnd: HWND, list: HWND, search_edit: HWND) {
+    let filter = crate::platform_extra::make_win_filter(&[
+        ("Word List (*.txt)", "*.txt"),
+        ("All Files (*.*)", "*.*"),
+    ]);
+    let Some(path) = crate::platform_extra::browse_file_dialog(hwnd, false, &filter, "txt") else {
+        return;
+    };
+    let Ok(raw) = std::fs::read_to_string(path) else {
+        return;
+    };
+    let words = Config::parse_user_dict_text(&raw);
+    if words.is_empty() {
+        return;
+    }
+    with_state(|app| {
+        let mut cfg = app.engine.config().clone();
+        for w in words {
+            if !cfg.user_dict_words.iter().any(|ex| ex.eq_ignore_ascii_case(&w)) {
+                cfg.user_dict_words.push(w);
+            }
+        }
+        cfg.user_dict_words.sort_by_key(|w| w.to_lowercase());
+        save_config(&cfg);
+        app.engine.update_config(cfg);
+    });
+    reload_dict_list(list, search_edit);
+}
+
+fn export_dict_txt(hwnd: HWND) {
+    let filter = crate::platform_extra::make_win_filter(&[
+        ("Word List (*.txt)", "*.txt"),
+        ("All Files (*.*)", "*.*"),
+    ]);
+    let Some(path) = crate::platform_extra::browse_file_dialog(hwnd, true, &filter, "txt") else {
+        return;
+    };
+    let txt = with_state(|app| app.engine.config().format_user_dict_text());
+    let _ = std::fs::write(path, txt);
+}
+
+fn handle_dict_cmd(hwnd: HWND, id: usize, code: usize, st: DictDlg) {
     match id {
+        ID_DICT_SEARCH if code == DICT_EN_CHANGE_CODE => {
+            reload_dict_list(st.list, st.search_edit);
+        }
         ID_DICT_ADD => {
-            let word = read_window_text(st.edit).trim().to_string();
-            if !word.is_empty() {
-                with_state(|app| {
-                    let mut cfg = app.engine.config().clone();
-                    if !cfg.user_dict_words.iter().any(|w| w.eq_ignore_ascii_case(&word)) {
-                        cfg.user_dict_words.push(word);
-                        cfg.user_dict_words.sort_by_key(|w| w.to_lowercase());
-                        save_config(&cfg);
-                        app.engine.update_config(cfg);
-                    }
-                });
+            let word = read_window_text(st.edit);
+            if add_word_to_user_dict(&word) {
                 write_window_text(st.edit, "");
-                reload_dict_list(st.list);
+                reload_dict_list(st.list, st.search_edit);
+            }
+        }
+        ID_DICT_ADD_ESC => {
+            if let Some(word) = with_state(|app| app.engine.last_word_for_dict()) {
+                let _ = add_word_to_user_dict(&word);
+                write_window_text(st.edit, &word);
+                reload_dict_list(st.list, st.search_edit);
             }
         }
         ID_DICT_DEL => {
             let sel = unsafe { SendMessageW(st.list, LB_GETCURSEL, 0, 0) };
-            if sel >= 0 {
+            let real_idx = if sel >= 0 {
+                DICT_FILTER_IDX.with(|f| f.borrow().get(sel as usize).copied())
+            } else {
+                None
+            };
+            if let Some(idx) = real_idx {
                 with_state(|app| {
                     let mut cfg = app.engine.config().clone();
-                    if (sel as usize) < cfg.user_dict_words.len() {
-                        cfg.user_dict_words.remove(sel as usize);
+                    if idx < cfg.user_dict_words.len() {
+                        cfg.user_dict_words.remove(idx);
                         save_config(&cfg);
                         app.engine.update_config(cfg);
                     }
                 });
-                reload_dict_list(st.list);
+                reload_dict_list(st.list, st.search_edit);
             }
         }
+        ID_DICT_IMPORT => import_dict_txt(hwnd, st.list, st.search_edit),
+        ID_DICT_EXPORT => export_dict_txt(hwnd),
         ID_DICT_CLOSE => unsafe { DestroyWindow(hwnd); },
         _ => {}
     }
@@ -331,27 +416,40 @@ unsafe extern "system" fn dict_wnd_proc(
             let font = create_ui_font(scale_px(14, dpi), false);
             let bg_br = unsafe { CreateSolidBrush(pal.card_bg) };
             let in_br = unsafe { CreateSolidBrush(pal.input_bg) };
-            make_child(hwnd, "STATIC", "Thêm từ không bị khôi phục khi gõ:", 0, 16, 16, 360, 24, 0, font, dpi);
-            let edit = make_edit(hwnd, "", 16, 42, 296, 28, ID_DICT_EDIT, false, font, dpi);
-            make_owner_button(hwnd, "Thêm từ", 324, 42, 108, 28, ID_DICT_ADD, font, dpi);
-            make_owner_button(hwnd, "Xóa mục chọn", 16, 78, 136, 30, ID_DICT_DEL, font, dpi);
-            make_owner_button(hwnd, "Đóng", 348, 78, 84, 30, ID_DICT_CLOSE, font, dpi);
+            make_child(hwnd, "STATIC", "Thêm từ không bị khôi phục khi gõ:", 0, 16, 14, 360, 22, 0, font, dpi);
+            let edit = make_edit(hwnd, "", 16, 38, 368, 28, ID_DICT_EDIT, false, font, dpi);
+            set_cue_banner(edit, "Nhập từ cần bảo vệ...");
+            make_owner_button(hwnd, "Thêm từ", 392, 38, 92, 28, ID_DICT_ADD, font, dpi);
+            make_owner_button(hwnd, "Thêm từ Esc gần nhất", 16, 74, 172, 30, ID_DICT_ADD_ESC, font, dpi);
+            make_owner_button(hwnd, "Xóa mục chọn", 196, 74, 122, 30, ID_DICT_DEL, font, dpi);
+            make_owner_button(hwnd, "Đóng", 400, 74, 84, 30, ID_DICT_CLOSE, font, dpi);
+            make_owner_button(hwnd, "Nhập .txt...", 16, 112, 108, 28, ID_DICT_IMPORT, font, dpi);
+            make_owner_button(hwnd, "Xuất .txt...", 132, 112, 108, 28, ID_DICT_EXPORT, font, dpi);
+            let search_edit = make_edit(hwnd, "", 248, 112, 236, 28, ID_DICT_SEARCH, false, font, dpi);
+            set_cue_banner(search_edit, "Tìm từ trong từ điển...");
             let list = make_child(
                 hwnd,
                 "LISTBOX",
                 "",
                 (LBS_NOTIFY as u32) | WS_BORDER | WS_VSCROLL | WS_TABSTOP,
                 16,
-                118,
-                416,
-                212,
+                148,
+                468,
+                254,
                 ID_DICT_LIST,
                 font,
                 dpi,
             );
-            reload_dict_list(list);
+            reload_dict_list(list, search_edit);
             DICT_STATE.with(|c| {
-                *c.borrow_mut() = Some(DictDlg { font, bg_br, in_br, edit, list });
+                *c.borrow_mut() = Some(DictDlg {
+                    font,
+                    bg_br,
+                    in_br,
+                    edit,
+                    search_edit,
+                    list,
+                });
             });
             0
         }
@@ -376,8 +474,9 @@ unsafe extern "system" fn dict_wnd_proc(
         }
         WM_COMMAND => {
             let id = wparam & 0xFFFF;
+            let code = (wparam >> 16) & 0xFFFF;
             if let Some(st) = DICT_STATE.with(|c| *c.borrow()) {
-                handle_dict_cmd(hwnd, id, st);
+                handle_dict_cmd(hwnd, id, code, st);
             }
             0
         }

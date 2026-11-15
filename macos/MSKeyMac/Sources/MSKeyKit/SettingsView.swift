@@ -67,6 +67,10 @@ public struct SettingsView: View {
                 HotkeyCaptureView(store: store, target: .switchHotkey)
             case .captureConvertHotkey:
                 HotkeyCaptureView(store: store, target: .convertHotkey)
+            case .captureUndoHotkey:
+                HotkeyCaptureView(store: store, target: .undoHotkey)
+            case .captureConvertSelectionHotkey:
+                HotkeyCaptureView(store: store, target: .convertSelectionHotkey)
             }
         }
     }

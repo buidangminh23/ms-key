@@ -30,7 +30,7 @@ use windows_sys::Win32::UI::WindowsAndMessaging::{
 use crate::platform::{config_file_path, to_wide};
 
 static APP_MEMORY: OnceLock<Mutex<HashMap<String, bool>>> = OnceLock::new();
-type ClipboardSnapshot = Vec<(u32, Vec<u8>)>;
+pub type ClipboardSnapshot = Vec<(u32, Vec<u8>)>;
 
 static CLIP_SNAPSHOT: Mutex<Option<ClipboardSnapshot>> = Mutex::new(None);
 static CLIP_GEN: AtomicU64 = AtomicU64::new(0);
@@ -114,8 +114,20 @@ pub fn import_config_json(path: &Path) -> Result<Config, String> {
     serde_json::from_str(&raw).map_err(|e| e.to_string())
 }
 
-pub fn browse_file_dialog(owner: HWND, save: bool, filter: &[u16], def_ext: &str) -> Option<PathBuf> {
+fn run_file_dialog(
+    owner: HWND,
+    save: bool,
+    flags: u32,
+    filter: &[u16],
+    def_ext: &str,
+    initial: &str,
+) -> Option<PathBuf> {
     let mut file_buf = vec![0u16; 1024];
+    if !initial.is_empty() {
+        for (i, ch) in initial.encode_utf16().take(file_buf.len() - 1).enumerate() {
+            file_buf[i] = ch;
+        }
+    }
     let ext_w = to_wide(def_ext);
     let mut ofn: OPENFILENAMEW = unsafe { std::mem::zeroed() };
     ofn.lStructSize = std::mem::size_of::<OPENFILENAMEW>() as u32;
@@ -125,11 +137,7 @@ pub fn browse_file_dialog(owner: HWND, save: bool, filter: &[u16], def_ext: &str
     ofn.lpstrFile = file_buf.as_mut_ptr();
     ofn.nMaxFile = file_buf.len() as u32;
     ofn.lpstrDefExt = ext_w.as_ptr();
-    ofn.Flags = if save {
-        OFN_EXPLORER | OFN_OVERWRITEPROMPT
-    } else {
-        OFN_EXPLORER | OFN_FILEMUSTEXIST | OFN_HIDEREADONLY
-    };
+    ofn.Flags = flags;
     let ok = unsafe {
         if save {
             GetSaveFileNameW(&mut ofn)
@@ -142,6 +150,20 @@ pub fn browse_file_dialog(owner: HWND, save: bool, filter: &[u16], def_ext: &str
     }
     let end = file_buf.iter().position(|&c| c == 0).unwrap_or(file_buf.len());
     Some(PathBuf::from(String::from_utf16_lossy(&file_buf[..end])))
+}
+
+pub fn browse_file_dialog(owner: HWND, save: bool, filter: &[u16], def_ext: &str) -> Option<PathBuf> {
+    let flags = if save {
+        OFN_EXPLORER | OFN_OVERWRITEPROMPT
+    } else {
+        OFN_EXPLORER | OFN_FILEMUSTEXIST | OFN_HIDEREADONLY
+    };
+    run_file_dialog(owner, save, flags, filter, def_ext, "")
+}
+
+pub fn browse_sync_file_dialog(owner: HWND, current: &str) -> Option<PathBuf> {
+    let filter = make_win_filter(&[("JSON files (*.json)", "*.json"), ("All files (*.*)", "*.*")]);
+    run_file_dialog(owner, false, OFN_EXPLORER | OFN_HIDEREADONLY, &filter, "json", current)
 }
 
 pub fn make_win_filter(pairs: &[(&str, &str)]) -> Vec<u16> {
@@ -224,20 +246,7 @@ fn write_unicode_clipboard_locked(text: &str) -> bool {
     }
 }
 
-fn restore_clipboard_snapshot(expected_gen: u64, seq_after_write: u32) {
-    if CLIP_GEN.load(Ordering::SeqCst) != expected_gen {
-        return;
-    }
-    if unsafe { GetClipboardSequenceNumber() } != seq_after_write {
-        if let Ok(mut slot) = CLIP_SNAPSHOT.lock() {
-            *slot = None;
-        }
-        return;
-    }
-    let saved = CLIP_SNAPSHOT.lock().ok().and_then(|mut s| s.take());
-    let Some(items) = saved else {
-        return;
-    };
+pub fn restore_clipboard_now(items: ClipboardSnapshot) {
     if !open_clipboard_retry() {
         return;
     }
@@ -258,6 +267,86 @@ fn restore_clipboard_snapshot(expected_gen: u64, seq_after_write: u32) {
         }
         CloseClipboard();
     }
+}
+
+pub fn backup_clipboard() -> Option<ClipboardSnapshot> {
+    if !open_clipboard_retry() {
+        return None;
+    }
+    let snap = snapshot_current_clipboard_locked();
+    unsafe {
+        CloseClipboard();
+    }
+    Some(snap)
+}
+
+pub fn clear_clipboard() -> bool {
+    if !open_clipboard_retry() {
+        return false;
+    }
+    let ok = unsafe { EmptyClipboard() != 0 };
+    unsafe {
+        CloseClipboard();
+    }
+    ok
+}
+
+pub fn read_clipboard_text() -> Option<String> {
+    if !open_clipboard_retry() {
+        return None;
+    }
+    let out = unsafe {
+        let h = GetClipboardData(13);
+        if h.is_null() {
+            None
+        } else {
+            let max_u16 = GlobalSize(h) / 2;
+            let ptr_w = GlobalLock(h) as *const u16;
+            let res = if ptr_w.is_null() || max_u16 == 0 {
+                None
+            } else {
+                let slice = std::slice::from_raw_parts(ptr_w, max_u16);
+                let len = slice.iter().position(|&c| c == 0).unwrap_or(slice.len());
+                Some(String::from_utf16_lossy(&slice[..len]))
+            };
+            if !ptr_w.is_null() {
+                GlobalUnlock(h);
+            }
+            res
+        }
+    };
+    unsafe {
+        CloseClipboard();
+    }
+    out
+}
+
+pub fn write_clipboard_text(text: &str) -> bool {
+    if !open_clipboard_retry() {
+        return false;
+    }
+    let ok = write_unicode_clipboard_locked(text);
+    unsafe {
+        CloseClipboard();
+    }
+    ok
+}
+
+fn restore_clipboard_snapshot(expected_gen: u64, seq_after_write: u32) {
+    if CLIP_GEN.load(Ordering::SeqCst) != expected_gen {
+        return;
+    }
+    if unsafe { GetClipboardSequenceNumber() } != seq_after_write {
+        if let Ok(mut slot) = CLIP_SNAPSHOT.lock() {
+            *slot = None;
+        }
+        return;
+    }
+    let saved = CLIP_SNAPSHOT.lock().ok().and_then(|mut s| s.take());
+    let Some(items) = saved else {
+        return;
+    };
+    restore_clipboard_now(items);
 }
 
 pub fn write_clipboard_for_paste_with_restore(text: &str) -> bool {
@@ -285,6 +374,9 @@ pub fn write_clipboard_for_paste_with_restore(text: &str) -> bool {
 }
 
 pub fn is_focused_password_field() -> bool {
+    if crate::uia::is_password_focused() {
+        return true;
+    }
     let mut gti: GUITHREADINFO = unsafe { std::mem::zeroed() };
     gti.cbSize = std::mem::size_of::<GUITHREADINFO>() as u32;
     if unsafe { GetGUIThreadInfo(0, &mut gti) } == 0 || gti.hwndFocus.is_null() {

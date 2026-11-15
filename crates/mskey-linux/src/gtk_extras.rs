@@ -1,13 +1,16 @@
 use std::cell::RefCell;
 use std::collections::HashSet;
 use std::ffi::c_void;
+use std::fs;
 use std::os::raw::c_int;
 use std::path::Path;
 use std::ptr;
 
 use mskey_core::{Config, Engine, EngineAction};
 
-use crate::config_store::{export_config_json, import_config_json};
+use crate::config_store::{
+    export_config_json, import_config_json, load_last_esc_word, save_last_esc_word,
+};
 use crate::gio_ffi::cstr;
 use crate::gtk_dialogs::pick_file_path;
 use crate::gtk_ffi::{
@@ -20,8 +23,9 @@ use crate::gtk_ffi::{
     gtk_widget_set_vexpand,
 };
 use crate::gtk_helpers::{
-    create_modal_gtk, get_toggle, make_button, make_check, make_frame, make_hbox, make_label,
-    make_vbox, pack, read_textview, run_modal_gtk, set_toggle, write_textview,
+    create_modal_gtk, get_toggle, make_button, make_check, make_entry_placeholder, make_frame,
+    make_hbox, make_label, make_vbox, pack, read_entry, read_textview, run_modal_gtk,
+    set_label_text, set_toggle, write_textview,
 };
 use crate::keyval::{
     IBUS_CONTROL_MASK, IBUS_MOD1_MASK, IBUS_MOD4_MASK, KEY_BACKSPACE, KEY_ESCAPE,
@@ -46,13 +50,17 @@ struct ExtrasWidgets {
 struct DictWidgets {
     dlg: *mut GtkWidget,
     tv: *mut GtkWidget,
-    words: Vec<String>,
+    search_ed: *mut GtkWidget,
+    lbl_status: *mut GtkWidget,
+    all_words: Vec<String>,
+    displayed_words: Vec<String>,
     saved: bool,
 }
 
 thread_local! {
     static EXTRAS_DLG: RefCell<Option<ExtrasWidgets>> = const { RefCell::new(None) };
     static DICT_DLG: RefCell<Option<DictWidgets>> = const { RefCell::new(None) };
+    static LAST_SANDBOX_ESC: RefCell<Option<String>> = const { RefCell::new(None) };
 }
 
 pub fn show_extras_sandbox_dialog(parent: *mut GtkWindow, cfg: &mut Config) -> bool {
@@ -251,7 +259,11 @@ unsafe extern "C" fn on_sandbox_key(
         let mut b = c.borrow_mut();
         let st = b.as_mut()?;
         if e.keyval == KEY_ESCAPE {
-            return Some(st.engine.process_escape());
+            let act = st.engine.process_escape();
+            let word = st.engine.last_word_for_dict();
+            save_last_esc_word(word.as_deref());
+            LAST_SANDBOX_ESC.with(|lc| *lc.borrow_mut() = word);
+            return Some(act);
         }
         if e.keyval == KEY_BACKSPACE {
             return Some(st.engine.process_backspace());
@@ -286,13 +298,79 @@ unsafe extern "C" fn on_sandbox_key(
     1
 }
 
+fn dedup_words(words: Vec<String>) -> Vec<String> {
+    let mut seen = HashSet::new();
+    let mut out = Vec::new();
+    for raw in words {
+        let w = raw.trim();
+        if !w.is_empty() && seen.insert(w.to_lowercase()) {
+            out.push(w.to_string());
+        }
+    }
+    out
+}
+
+fn sync_visible_into_all(st: &mut DictWidgets) {
+    let edited_visible: Vec<String> = read_textview(st.tv)
+        .lines()
+        .map(str::trim)
+        .filter(|s| !s.is_empty())
+        .map(ToOwned::to_owned)
+        .collect();
+    let was_displayed: HashSet<String> =
+        st.displayed_words.iter().map(|w| w.to_lowercase()).collect();
+    let mut merged = Vec::new();
+    let mut seen = HashSet::new();
+    for w in &st.all_words {
+        let low = w.to_lowercase();
+        if !was_displayed.contains(&low) && seen.insert(low) {
+            merged.push(w.clone());
+        }
+    }
+    for w in edited_visible {
+        if seen.insert(w.to_lowercase()) {
+            merged.push(w);
+        }
+    }
+    st.all_words = merged;
+}
+
+fn apply_dict_filter(st: &mut DictWidgets) {
+    let q = read_entry(st.search_ed).trim().to_lowercase();
+    let filtered: Vec<String> = st
+        .all_words
+        .iter()
+        .filter(|w| q.is_empty() || w.to_lowercase().contains(&q))
+        .cloned()
+        .collect();
+    st.displayed_words = filtered.clone();
+    write_textview(st.tv, &filtered.join("\n"));
+}
+
 pub fn show_user_dict_dialog(parent: *mut GtkWindow, cfg: &mut Config) -> bool {
-    let dlg = create_modal_gtk(parent, "Từ điển cá nhân (1 từ / 1 dòng)", 420, 340);
+    let dlg = create_modal_gtk(parent, "Từ điển cá nhân (1 từ / 1 dòng)", 520, 400);
     let root = make_vbox(8);
-    pack(root, make_label("Các từ bên dưới luôn được giữ nguyên (không kiểm tra/khôi phục sai chính tả):", false), false, false, 0);
+    pack(
+        root,
+        make_label("Các từ bên dưới luôn được giữ nguyên (không kiểm tra/khôi phục sai chính tả):", false),
+        false,
+        false,
+        0,
+    );
+
+    let search_bar = make_hbox(6);
+    let search_ed = make_entry_placeholder("", "Tìm từ trong từ điển...");
+    let b_add_esc = make_button("Thêm từ Esc gần nhất", false);
+    unsafe { gtk_widget_set_hexpand(search_ed, 1) };
+    pack(search_bar, make_label("Tìm kiếm:", false), false, false, 0);
+    pack(search_bar, search_ed, true, true, 0);
+    pack(search_bar, b_add_esc, false, false, 0);
+    pack(root, search_bar, false, false, 0);
+
     let sw = unsafe { gtk_scrolled_window_new(ptr::null_mut(), ptr::null_mut()) };
     let tv = unsafe { gtk_text_view_new() };
-    write_textview(tv, &cfg.user_dict_words.join("\n"));
+    let initial_words = dedup_words(cfg.user_dict_words.clone());
+    write_textview(tv, &initial_words.join("\n"));
     unsafe {
         gtk_widget_set_hexpand(sw, 1);
         gtk_widget_set_vexpand(sw, 1);
@@ -301,9 +379,16 @@ pub fn show_user_dict_dialog(parent: *mut GtkWindow, cfg: &mut Config) -> bool {
     }
     pack(root, sw, true, true, 0);
 
+    let lbl_status = make_label(&format!("Tổng: {} từ", initial_words.len()), true);
+    pack(root, lbl_status, false, false, 0);
+
     let bar = make_hbox(8);
+    let b_imp = make_button("Nhập .txt...", false);
+    let b_exp = make_button("Xuất .txt...", false);
     let b_save = make_button("Lưu", true);
     let b_cancel = make_button("Hủy", false);
+    pack(bar, b_imp, false, false, 0);
+    pack(bar, b_exp, false, false, 0);
     pack(bar, make_label("", false), true, true, 0);
     pack(bar, b_save, false, false, 0);
     pack(bar, b_cancel, false, false, 0);
@@ -314,35 +399,114 @@ pub fn show_user_dict_dialog(parent: *mut GtkWindow, cfg: &mut Config) -> bool {
         *c.borrow_mut() = Some(DictWidgets {
             dlg,
             tv,
-            words: cfg.user_dict_words.clone(),
+            search_ed,
+            lbl_status,
+            all_words: initial_words.clone(),
+            displayed_words: initial_words,
             saved: false,
         });
     });
+    connect_signal(search_ed, "changed", on_dict_search as *const c_void, 0);
+    connect_signal(b_add_esc, "clicked", on_dict_add_esc as *const c_void, 0);
+    connect_signal(b_imp, "clicked", on_dict_import as *const c_void, 0);
+    connect_signal(b_exp, "clicked", on_dict_export as *const c_void, 0);
     connect_signal(b_save, "clicked", on_dict_save as *const c_void, 0);
     connect_signal(b_cancel, "clicked", on_dict_cancel as *const c_void, 0);
     run_modal_gtk(dlg);
 
     if let Some(st) = DICT_DLG.with(|c| c.borrow_mut().take())
-        && st.saved {
-            cfg.user_dict_words = st.words;
-            return true;
-        }
+        && st.saved
+    {
+        cfg.user_dict_words = st.all_words;
+        return true;
+    }
     false
+}
+
+unsafe extern "C" fn on_dict_search(_: *mut GtkWidget, _: *mut c_void) {
+    DICT_DLG.with(|c| {
+        if let Some(st) = c.borrow_mut().as_mut() {
+            sync_visible_into_all(st);
+            apply_dict_filter(st);
+            set_label_text(
+                st.lbl_status,
+                &format!("Hiển thị {}/{} từ", st.displayed_words.len(), st.all_words.len()),
+            );
+        }
+    });
+}
+
+unsafe extern "C" fn on_dict_add_esc(_: *mut GtkWidget, _: *mut c_void) {
+    let candidate = load_last_esc_word()
+        .or_else(|| LAST_SANDBOX_ESC.with(|lc| lc.borrow().clone()));
+    DICT_DLG.with(|c| {
+        if let Some(st) = c.borrow_mut().as_mut() {
+            sync_visible_into_all(st);
+            let Some(word) = candidate.map(|w| w.trim().to_string()).filter(|w| !w.is_empty()) else {
+                set_label_text(st.lbl_status, "Chưa có từ vừa hoàn tác bằng Esc gần đây.");
+                return;
+            };
+            if st.all_words.iter().any(|w| w.eq_ignore_ascii_case(&word)) {
+                set_label_text(st.lbl_status, &format!("Từ \"{word}\" đã có trong từ điển."));
+            } else {
+                st.all_words.push(word.clone());
+                apply_dict_filter(st);
+                set_label_text(st.lbl_status, &format!("Đã thêm từ Esc gần nhất: {word}"));
+            }
+        }
+    });
+}
+
+unsafe extern "C" fn on_dict_import(_: *mut GtkWidget, _: *mut c_void) {
+    let dlg = DICT_DLG.with(|c| c.borrow().as_ref().map(|w| w.dlg).unwrap_or(ptr::null_mut()));
+    if let Some(path) = pick_file_path(dlg, "Nhập từ điển cá nhân (.txt)", false, "")
+        && let Ok(raw) = fs::read_to_string(path)
+    {
+        let imported = Config::parse_user_dict_text(&raw);
+        DICT_DLG.with(|c| {
+            if let Some(st) = c.borrow_mut().as_mut() {
+                sync_visible_into_all(st);
+                let before = st.all_words.len();
+                for w in imported {
+                    if !st.all_words.iter().any(|ex| ex.eq_ignore_ascii_case(&w)) {
+                        st.all_words.push(w);
+                    }
+                }
+                let added = st.all_words.len().saturating_sub(before);
+                apply_dict_filter(st);
+                set_label_text(
+                    st.lbl_status,
+                    &format!("Đã nhập {added} từ mới (tổng {} từ)", st.all_words.len()),
+                );
+            }
+        });
+    }
+}
+
+unsafe extern "C" fn on_dict_export(_: *mut GtkWidget, _: *mut c_void) {
+    let pair = DICT_DLG.with(|c| {
+        let mut b = c.borrow_mut();
+        let st = b.as_mut()?;
+        sync_visible_into_all(st);
+        let tmp = Config { user_dict_words: st.all_words.clone(), ..Config::default() };
+        Some((st.dlg, tmp.format_user_dict_text(), st.all_words.len()))
+    });
+    if let Some((dlg, txt, count)) = pair
+        && let Some(path) = pick_file_path(dlg, "Xuất từ điển cá nhân (.txt)", true, "user-dict.txt")
+        && fs::write(path, txt).is_ok()
+    {
+        DICT_DLG.with(|c| {
+            if let Some(st) = c.borrow().as_ref() {
+                set_label_text(st.lbl_status, &format!("Đã xuất {count} từ ra tệp .txt"));
+            }
+        });
+    }
 }
 
 unsafe extern "C" fn on_dict_save(_: *mut GtkWidget, _: *mut c_void) {
     let dlg = DICT_DLG.with(|c| {
         if let Some(st) = c.borrow_mut().as_mut() {
-            let raw = read_textview(st.tv);
-            let mut seen = HashSet::new();
-            let mut out = Vec::new();
-            for line in raw.lines() {
-                let w = line.trim();
-                if !w.is_empty() && seen.insert(w.to_lowercase()) {
-                    out.push(w.to_string());
-                }
-            }
-            st.words = out;
+            sync_visible_into_all(st);
             st.saved = true;
             return st.dlg;
         }

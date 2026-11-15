@@ -26,14 +26,26 @@ char *mskey_import_evkey_tree(const char *tree_text);
 
 void mskey_set_enabled(MsKeyHandle *handle, bool enabled);
 bool mskey_is_enabled(MsKeyHandle *handle);
+void mskey_set_temporary_english(MsKeyHandle *handle, bool enabled);
 void mskey_reset_word(MsKeyHandle *handle);
 void mskey_reset_all(MsKeyHandle *handle);
 
 MsKeyAction mskey_process_key(MsKeyHandle *handle, uint32_t codepoint);
 MsKeyAction mskey_process_backspace(MsKeyHandle *handle);
 MsKeyAction mskey_process_escape(MsKeyHandle *handle);
+MsKeyAction mskey_toggle_last_committed_word(MsKeyHandle *handle);
+void mskey_hydrate_word(MsKeyHandle *handle, const char *word);
+void mskey_set_clipboard_text(MsKeyHandle *handle, const char *text);
+uint32_t mskey_take_pending_cursor_left(MsKeyHandle *handle);
+char *mskey_last_word_for_dict(MsKeyHandle *handle);
+bool mskey_apply_profile(MsKeyHandle *handle, const char *name);
 
 uint8_t mskey_behavior_for_app(MsKeyHandle *handle, const char *process_name);
+uint8_t mskey_behavior_for_window(
+    MsKeyHandle *handle,
+    const char *process_name,
+    const char *window_title
+);
 char *mskey_convert_text(
     const char *input,
     uint8_t from_charset,
@@ -46,7 +58,9 @@ char *mskey_convert_with_encoding(
     uint8_t to_enc,
     uint8_t case_mode
 );
+char *mskey_normalize_tone_style(const char *input, bool modern_tone);
 uint8_t mskey_detect_charset(const char *input);
+bool mskey_is_newer_version(const char *current, const char *candidate);
 char *mskey_format_macro_text(const char *config_json);
 char *mskey_parse_macro_text(const char *raw_text);
 bool mskey_is_active_delimiter(MsKeyHandle *handle, uint32_t codepoint);

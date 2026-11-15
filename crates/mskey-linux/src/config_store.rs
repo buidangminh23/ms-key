@@ -19,19 +19,70 @@ pub fn config_file_path() -> PathBuf {
     config_dir().join("config.json")
 }
 
-pub fn load_config() -> Config {
-    let path = config_file_path();
-    fs::read_to_string(&path)
+pub fn resolve_sync_config_path(raw: &str) -> Option<PathBuf> {
+    let trimmed = raw.trim();
+    if trimmed.is_empty() {
+        return None;
+    }
+    if let Some(rest) = trimmed.strip_prefix("~/") {
+        let home = env::var("HOME").unwrap_or_else(|_| ".".to_string());
+        return Some(PathBuf::from(home).join(rest));
+    }
+    if trimmed == "~" {
+        let home = env::var("HOME").unwrap_or_else(|_| ".".to_string());
+        return Some(PathBuf::from(home));
+    }
+    Some(PathBuf::from(trimmed))
+}
+
+fn read_valid_config(path: &Path) -> Option<Config> {
+    fs::read_to_string(path)
         .ok()
         .and_then(|raw| Config::from_json_str(&raw).ok())
-        .unwrap_or_default()
+}
+
+pub fn file_mtime_nanos(path: &Path) -> u128 {
+    fs::metadata(path)
+        .and_then(|m| m.modified())
+        .ok()
+        .and_then(|t| t.duration_since(std::time::UNIX_EPOCH).ok())
+        .map(|d| d.as_nanos())
+        .unwrap_or(0)
+}
+
+pub fn load_config_at(primary: &Path) -> Config {
+    let primary_cfg = read_valid_config(primary);
+    let mut cfg = primary_cfg.clone().unwrap_or_default();
+    if let Some(sync_path) = resolve_sync_config_path(&cfg.sync_config_path)
+        && sync_path != primary
+        && let Some(mut synced) = read_valid_config(&sync_path)
+    {
+        let sync_mtime = file_mtime_nanos(&sync_path);
+        let primary_mtime = file_mtime_nanos(primary);
+        if primary_cfg.is_none() || sync_mtime > primary_mtime {
+            if synced.sync_config_path.trim().is_empty() {
+                synced.sync_config_path = cfg.sync_config_path.clone();
+            }
+            if let Ok(json) = synced.to_json_pretty() {
+                let _ = write_atomic(primary, &json);
+            }
+            cfg = synced;
+        }
+    }
+    cfg
+}
+
+pub fn load_config() -> Config {
+    load_config_at(&config_file_path())
 }
 
 fn write_atomic(path: &Path, body: &str) -> Result<(), String> {
-    if let Some(parent) = path.parent() {
+    if let Some(parent) = path.parent()
+        && !parent.as_os_str().is_empty()
+    {
         fs::create_dir_all(parent).map_err(|e| e.to_string())?;
     }
-    let tmp = path.with_extension("json.tmp");
+    let tmp = PathBuf::from(format!("{}.tmp", path.to_string_lossy()));
     fs::write(&tmp, body).map_err(|e| e.to_string())?;
     fs::rename(&tmp, path).map_err(|e| {
         let _ = fs::remove_file(&tmp);
@@ -39,10 +90,39 @@ fn write_atomic(path: &Path, body: &str) -> Result<(), String> {
     })
 }
 
-pub fn save_config(cfg: &Config) {
+pub fn save_config_at(primary: &Path, cfg: &Config) {
     if let Ok(json) = cfg.to_json_pretty() {
-        let _ = write_atomic(&config_file_path(), &json);
+        let _ = write_atomic(primary, &json);
+        if let Some(sync_path) = resolve_sync_config_path(&cfg.sync_config_path)
+            && sync_path != primary
+        {
+            let _ = write_atomic(&sync_path, &json);
+        }
     }
+}
+
+pub fn save_config(cfg: &Config) {
+    save_config_at(&config_file_path(), cfg);
+}
+
+pub fn last_esc_word_file_path() -> PathBuf {
+    config_dir().join("last_esc_word.txt")
+}
+
+pub fn save_last_esc_word(word: Option<&str>) {
+    if let Some(w) = word {
+        let trimmed = w.trim();
+        if !trimmed.is_empty() {
+            let _ = write_atomic(&last_esc_word_file_path(), trimmed);
+        }
+    }
+}
+
+pub fn load_last_esc_word() -> Option<String> {
+    fs::read_to_string(last_esc_word_file_path())
+        .ok()
+        .map(|s| s.trim().to_string())
+        .filter(|s| !s.is_empty())
 }
 
 pub fn app_state_file_path() -> PathBuf {
@@ -104,12 +184,18 @@ pub fn local_utc_offset_secs() -> i32 {
 }
 
 pub fn config_mtime_nanos() -> u128 {
-    fs::metadata(config_file_path())
-        .and_then(|m| m.modified())
-        .ok()
-        .and_then(|t| t.duration_since(std::time::UNIX_EPOCH).ok())
-        .map(|d| d.as_nanos())
-        .unwrap_or(0)
+    file_mtime_nanos(&config_file_path())
+}
+
+pub fn effective_config_mtime_nanos(cfg: &Config) -> u128 {
+    let primary = config_file_path();
+    let mut best = file_mtime_nanos(&primary);
+    if let Some(sync_path) = resolve_sync_config_path(&cfg.sync_config_path)
+        && sync_path != primary
+    {
+        best = best.max(file_mtime_nanos(&sync_path));
+    }
+    best
 }
 
 pub fn sync_linux_autostart(enable: bool) {
@@ -204,7 +290,69 @@ pub fn detect_system_dark_mode() -> bool {
         .unwrap_or(false)
 }
 
-pub fn detect_active_x11_app() -> Option<String> {
+fn extract_xprop_quoted(line: &str) -> Option<String> {
+    let idx = line.find('=')?;
+    let rhs = line[idx + 1..].trim();
+    if rhs.starts_with('"') && rhs.ends_with('"') && rhs.len() >= 2 {
+        let inner = &rhs[1..rhs.len() - 1];
+        let unescaped = inner.replace("\\\"", "\"").replace("\\\\", "\\");
+        let trimmed = unescaped.trim().to_string();
+        if !trimmed.is_empty() {
+            return Some(trimmed);
+        }
+    }
+    let last_quoted = line.rsplit('"').nth(1)?.trim();
+    if last_quoted.is_empty() {
+        None
+    } else {
+        Some(last_quoted.to_string())
+    }
+}
+
+pub fn parse_x11_wm_class(raw: &str) -> Option<String> {
+    for line in raw.lines() {
+        if line.contains("WM_CLASS") {
+            let last_quoted = line.rsplit('"').nth(1)?.trim();
+            if !last_quoted.is_empty() {
+                return Some(last_quoted.to_string());
+            }
+        }
+    }
+    None
+}
+
+pub fn parse_x11_wm_name(raw: &str) -> Option<String> {
+    let mut fallback = None;
+    for line in raw.lines() {
+        if line.contains("_NET_WM_NAME")
+            && let Some(val) = extract_xprop_quoted(line)
+        {
+            return Some(val);
+        }
+        if line.contains("WM_NAME")
+            && fallback.is_none()
+        {
+            fallback = extract_xprop_quoted(line);
+        }
+    }
+    fallback
+}
+
+pub fn query_x11_window_props(win_id: &str) -> (Option<String>, String) {
+    let out = match Command::new("xprop")
+        .args(["-id", win_id, "WM_CLASS", "_NET_WM_NAME", "WM_NAME"])
+        .output()
+    {
+        Ok(o) if o.status.success() => o,
+        _ => return (None, String::new()),
+    };
+    let raw = String::from_utf8_lossy(&out.stdout);
+    let app = parse_x11_wm_class(&raw);
+    let title = parse_x11_wm_name(&raw).unwrap_or_default();
+    (app, title)
+}
+
+pub fn detect_active_x11_window() -> Option<(String, String)> {
     let win_out = Command::new("xprop").args(["-root", "_NET_ACTIVE_WINDOW"]).output().ok()?;
     if !win_out.status.success() {
         return None;
@@ -217,17 +365,32 @@ pub fn detect_active_x11_app() -> Option<String> {
     if win_id == "0x0" {
         return None;
     }
-    let cls_out = Command::new("xprop").args(["-id", win_id, "WM_CLASS"]).output().ok()?;
-    if !cls_out.status.success() {
-        return None;
+    let (app, title) = query_x11_window_props(win_id);
+    app.map(|a| (a, title))
+}
+
+pub fn detect_active_x11_app() -> Option<String> {
+    detect_active_x11_window().map(|(app, _)| app)
+}
+
+pub fn list_x11_windows() -> Vec<(String, String)> {
+    let mut out_list = Vec::new();
+    let list_out = match Command::new("xprop").args(["-root", "_NET_CLIENT_LIST"]).output() {
+        Ok(o) if o.status.success() => o,
+        _ => return out_list,
+    };
+    let raw = String::from_utf8_lossy(&list_out.stdout);
+    for token in raw.split_whitespace() {
+        let win_id = token.trim_end_matches(',');
+        if !win_id.starts_with("0x") || win_id == "0x0" {
+            continue;
+        }
+        let (app_opt, title) = query_x11_window_props(win_id);
+        if let Some(app) = app_opt {
+            out_list.push((app, title));
+        }
     }
-    let cls_raw = String::from_utf8_lossy(&cls_out.stdout);
-    let last_quoted = cls_raw.rsplit('"').nth(1)?.trim();
-    if last_quoted.is_empty() {
-        None
-    } else {
-        Some(last_quoted.to_string())
-    }
+    out_list
 }
 
 pub fn render_ibus_component_xml(exec_path: &str, setup_path: &str) -> String {

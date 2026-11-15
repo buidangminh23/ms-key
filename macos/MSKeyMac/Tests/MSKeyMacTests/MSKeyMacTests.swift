@@ -133,5 +133,273 @@ final class MSKeyMacTests: XCTestCase {
         XCTAssertEqual(mem.switchApp("Terminal", behavior: .forceEnglish, smartSwitch: true), false)
         XCTAssertEqual(mem.switchApp("Notes", behavior: .default, smartSwitch: true), false)
         XCTAssertEqual(mem.exportMemory()["notes"], false)
+
+        XCTAssertNil(mem.switchApp("Notes", behavior: .default, smartSwitch: true))
+        XCTAssertEqual(mem.switchApp("Notes", behavior: .forceEnglish, smartSwitch: true), false)
+        XCTAssertEqual(mem.switchApp("Notes", behavior: .default, smartSwitch: true), false)
+
+        let rightShiftFlags = UInt64(CGEventFlags.maskShift.rawValue) | 0x0004
+        let leftShiftFlags = UInt64(CGEventFlags.maskShift.rawValue) | 0x0002
+        XCTAssertEqual(
+            tracker.updateHoldEnglish(holdKey: .rightShift, flags: leftShiftFlags, keyCode: UInt16(kVK_Shift)),
+            nil
+        )
+        XCTAssertFalse(tracker.holdEnglishActive)
+        XCTAssertEqual(
+            tracker.updateHoldEnglish(holdKey: .rightShift, flags: rightShiftFlags, keyCode: UInt16(kVK_RightShift)),
+            true
+        )
+        XCTAssertEqual(
+            tracker.updateHoldEnglish(holdKey: .rightShift, flags: 0, keyCode: UInt16(kVK_RightShift)),
+            false
+        )
+
+        var capsTracker = MacHotkeyTracker()
+        let capsMask = UInt64(CGEventFlags.maskAlphaShift.rawValue)
+        XCTAssertEqual(
+            capsTracker.handleFlagsChanged(
+                preset: .ctrlShift,
+                flags: capsMask,
+                now: 1.0,
+                quickCapslockSwitch: true,
+                keyCode: UInt16(kVK_CapsLock)
+            ),
+            .toggleVE
+        )
+        XCTAssertEqual(
+            capsTracker.handleFlagsChanged(
+                preset: .ctrlShift,
+                flags: capsMask,
+                now: 1.1,
+                quickCapslockSwitch: true,
+                keyCode: UInt16(kVK_CapsLock)
+            ),
+            .none
+        )
+
+        let undoCombo = HotkeyComboModel(ctrl: true, alt: false, shift: true, win_cmd: false, key_code: 0x5A)
+        let selCombo = HotkeyComboModel(ctrl: true, alt: false, shift: true, win_cmd: false, key_code: 0x76)
+        XCTAssertEqual(
+            tracker.handleKeyDown(
+                preset: .ctrlShift,
+                customSwitch: custom,
+                convertHotkey: conv,
+                vk: 0x5A,
+                flags: ctrlShiftFlags,
+                undoHotkey: undoCombo,
+                convertSelectionHotkey: selCombo
+            ),
+            .undoLastWord
+        )
+        XCTAssertEqual(
+            tracker.handleKeyDown(
+                preset: .ctrlShift,
+                customSwitch: custom,
+                convertHotkey: conv,
+                vk: 0x76,
+                flags: ctrlShiftFlags,
+                undoHotkey: undoCombo,
+                convertSelectionHotkey: selCombo
+            ),
+            .convertSelection
+        )
+    }
+
+    func testNewConfigFieldsProfilesWindowRulesAndSyncStore() throws {
+        var cfg = MSKeyConfig()
+        cfg.smartCodeBypass = false
+        cfg.macroTriggerTabOnly = true
+        cfg.holdEnglishKey = .rightShift
+        cfg.quickCapslockSwitch = true
+        cfg.undoLastWordHotkey = HotkeyComboModel(ctrl: true, alt: true, shift: false, win_cmd: false, key_code: 0x5A)
+        cfg.convertSelectionHotkey = HotkeyComboModel(ctrl: true, alt: false, shift: true, win_cmd: false, key_code: 0x77)
+        cfg.showCaretOsd = false
+        cfg.reeditSurroundingWord = false
+        cfg.checkUpdatesOnStart = true
+        cfg.activeProfile = "CustomDev"
+        cfg.syncConfigPath = "/tmp/mskey-sync-test.json"
+        cfg.app_rules = [
+            AppRule(process_name: "Code", titlePattern: "*terminal*", behavior: .forceEnglish),
+            AppRule(process_name: "Code", titlePattern: "", behavior: .forceVietnamese),
+        ]
+        cfg.saveCurrentAsProfile("CustomDev")
+
+        let data = try JSONEncoder().encode(cfg)
+        let json = try XCTUnwrap(String(data: data, encoding: .utf8))
+        XCTAssertTrue(json.contains("\"hold_english_key\":\"RightShift\""))
+        XCTAssertTrue(json.contains("\"title_pattern\":\"*terminal*\""))
+        XCTAssertTrue(json.contains("\"smart_code_bypass\":false"))
+        XCTAssertTrue(json.contains("\"macro_trigger_tab_only\":true"))
+        XCTAssertTrue(json.contains("\"quick_capslock_switch\":true"))
+        XCTAssertTrue(json.contains("\"show_caret_osd\":false"))
+        XCTAssertTrue(json.contains("\"reedit_surrounding_word\":false"))
+        XCTAssertTrue(json.contains("\"check_updates_on_start\":true"))
+        XCTAssertTrue(json.contains("\"sync_config_path\":\"\\/tmp\\/mskey-sync-test.json\"") || json.contains("\"sync_config_path\":\"/tmp/mskey-sync-test.json\""))
+
+        for variant in HoldEnglishKey.allCases {
+            let encoded = try JSONEncoder().encode(variant)
+            let decoded = try JSONDecoder().decode(HoldEnglishKey.self, from: encoded)
+            XCTAssertEqual(decoded, variant)
+        }
+
+        let engine = RustEngine(configJSON: json)
+        let rustRound = engine.getConfigJSON()
+        let decoded = try JSONDecoder().decode(MSKeyConfig.self, from: XCTUnwrap(rustRound.data(using: .utf8)))
+        XCTAssertEqual(decoded.smartCodeBypass, false)
+        XCTAssertEqual(decoded.macroTriggerTabOnly, true)
+        XCTAssertEqual(decoded.holdEnglishKey, .rightShift)
+        XCTAssertEqual(decoded.quickCapslockSwitch, true)
+        XCTAssertEqual(decoded.undoLastWordHotkey.key_code, 0x5A)
+        XCTAssertEqual(decoded.convertSelectionHotkey.key_code, 0x77)
+        XCTAssertEqual(decoded.showCaretOsd, false)
+        XCTAssertEqual(decoded.reeditSurroundingWord, false)
+        XCTAssertEqual(decoded.checkUpdatesOnStart, true)
+        XCTAssertEqual(decoded.activeProfile, "CustomDev")
+        XCTAssertEqual(decoded.profiles.count, 1)
+        XCTAssertEqual(decoded.app_rules.first?.titlePattern, "*terminal*")
+        XCTAssertEqual(decoded.syncConfigPath, "/tmp/mskey-sync-test.json")
+
+        let legacy = try JSONDecoder().decode(MSKeyConfig.self, from: XCTUnwrap("{}".data(using: .utf8)))
+        XCTAssertEqual(legacy.smartCodeBypass, true)
+        XCTAssertEqual(legacy.macroTriggerTabOnly, false)
+        XCTAssertEqual(legacy.holdEnglishKey, .none)
+        XCTAssertEqual(legacy.quickCapslockSwitch, false)
+        XCTAssertEqual(legacy.showCaretOsd, true)
+        XCTAssertEqual(legacy.reeditSurroundingWord, true)
+        XCTAssertEqual(legacy.checkUpdatesOnStart, false)
+        XCTAssertEqual(legacy.activeProfile, "Mặc định")
+
+        let tempDir = FileManager.default.temporaryDirectory.appendingPathComponent("mskey-sync-\(UUID().uuidString)", isDirectory: true)
+        try FileManager.default.createDirectory(at: tempDir, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: tempDir) }
+
+        let primaryFile = tempDir.appendingPathComponent("config.json")
+        let mirrorFile = tempDir.appendingPathComponent("mirror.json")
+        var localCfg = MSKeyConfig()
+        localCfg.syncConfigPath = mirrorFile.path
+        localCfg.modern_tone = true
+        MacConfigStore.save(localCfg, to: primaryFile)
+        XCTAssertTrue(FileManager.default.fileExists(atPath: mirrorFile.path))
+
+        var remoteCfg = localCfg
+        remoteCfg.modern_tone = false
+        remoteCfg.syncConfigPath = "/another/path.json"
+        let remoteData = try JSONEncoder().encode(remoteCfg)
+        try remoteData.write(to: mirrorFile, options: .atomic)
+        let futureDate = Date().addingTimeInterval(30)
+        try FileManager.default.setAttributes([.modificationDate: futureDate], ofItemAtPath: mirrorFile.path)
+
+        let synced = MacConfigStore.load(from: primaryFile)
+        XCTAssertEqual(synced.modern_tone, false)
+        XCTAssertEqual(synced.syncConfigPath, mirrorFile.path)
+
+        let formattedDict = MacConfigStore.formatUserDictText(["Swinburne", "Anthropic", "Swinburne"])
+        XCTAssertEqual(MacConfigStore.parseUserDictText(formattedDict), ["Swinburne", "Anthropic"])
+    }
+
+    func testNewRustBridgeFeatureAPIs() throws {
+        XCTAssertEqual(RustEngine.normalizeToneStyle("hòa khóa", modernTone: true), "hoà khoá")
+        XCTAssertEqual(RustEngine.normalizeToneStyle("hoà khoá", modernTone: false), "hòa khóa")
+        XCTAssertEqual(
+            RustEngine.convertWithEncoding("hòa", from: .unicode, to: .unicode, caseTransform: .normalizeModernTone),
+            "hoà"
+        )
+        XCTAssertEqual(
+            RustEngine.convertWithEncoding("hoà", from: .unicode, to: .unicode, caseTransform: .normalizeClassicTone),
+            "hòa"
+        )
+
+        var cfg = MSKeyConfig()
+        cfg.app_rules = [
+            AppRule(process_name: "Code", titlePattern: "*terminal*", behavior: .forceEnglish),
+            AppRule(process_name: "Code", titlePattern: "", behavior: .forceVietnamese),
+        ]
+        cfg.macros = [
+            MacroItem(shortcut: "cb", expansion: "Hi {clipboard}", enabled: true),
+            MacroItem(shortcut: "tag", expansion: "<b>{cursor}</b>", enabled: true),
+        ]
+        let jsonData = try JSONEncoder().encode(cfg)
+        let jsonStr = try XCTUnwrap(String(data: jsonData, encoding: .utf8))
+        let engine = RustEngine(configJSON: jsonStr)
+
+        XCTAssertEqual(engine.behaviorForWindow(processName: "Code", windowTitle: "zsh - Terminal"), .forceEnglish)
+        XCTAssertEqual(engine.behaviorForWindow(processName: "Code", windowTitle: "App.swift"), .forceVietnamese)
+        XCTAssertEqual(engine.behaviorForWindow(processName: "Notes", windowTitle: ""), .default)
+
+        XCTAssertFalse(engine.toggleLastCommittedWord().replace)
+        XCTAssertEqual(typeTelex(engine, "vieejt "), "việt ")
+        let undoRes = engine.toggleLastCommittedWord()
+        XCTAssertTrue(undoRes.replace)
+        XCTAssertEqual(undoRes.text, "vieejt ")
+        let redoRes = engine.toggleLastCommittedWord()
+        XCTAssertTrue(redoRes.replace)
+        XCTAssertEqual(redoRes.text, "việt ")
+
+        engine.setTemporaryEnglish(true)
+        XCTAssertEqual(typeTelex(engine, "vieetj "), "vieetj ")
+        engine.setTemporaryEnglish(false)
+        XCTAssertEqual(typeTelex(engine, "vieetj "), "việt ")
+
+        engine.resetWord()
+        engine.hydrateWord("xin tiếng")
+        let hydratedEdit = engine.processKey(scalar: UnicodeScalar("f").value)
+        XCTAssertTrue(hydratedEdit.replace)
+        XCTAssertEqual(hydratedEdit.text, "tiềng")
+
+        engine.setClipboardText("Swift6")
+        XCTAssertEqual(typeTelex(engine, "cb "), "Hi Swift6 ")
+        XCTAssertEqual(engine.takePendingCursorLeft(), 0)
+        XCTAssertEqual(typeTelex(engine, "tag "), "<b></b> ")
+        XCTAssertGreaterThan(engine.takePendingCursorLeft(), 0)
+        XCTAssertEqual(engine.takePendingCursorLeft(), 0)
+
+        let escEngine = RustEngine()
+        _ = typeTelex(escEngine, "boo")
+        _ = escEngine.processEscape()
+        XCTAssertEqual(escEngine.lastWordForDict(), "boo")
+
+        XCTAssertTrue(engine.applyProfile("Lập trình"))
+        let profJSON = engine.getConfigJSON()
+        let profDecoded = try JSONDecoder().decode(MSKeyConfig.self, from: XCTUnwrap(profJSON.data(using: .utf8)))
+        XCTAssertEqual(profDecoded.activeProfile, "Lập trình")
+        XCTAssertTrue(profDecoded.macroTriggerTabOnly)
+        XCTAssertFalse(engine.applyProfile("NonExistentProfile"))
+
+        XCTAssertTrue(RustEngine.isNewerVersion(current: "0.1.2", candidate: "v0.1.3"))
+        XCTAssertFalse(RustEngine.isNewerVersion(current: "0.2.0", candidate: "0.2.0"))
+        XCTAssertFalse(RustEngine.isNewerVersion(current: "0.2.0", candidate: "0.1.9"))
+    }
+
+    func testUpdateCheckerJSONAndSHA256Verification() throws {
+        let releaseJSON = """
+        {
+          "draft": false,
+          "tag_name": "v0.2.0",
+          "html_url": "https://github.com/buidangminh23/ms-key/releases/tag/v0.2.0",
+          "body": "Release notes",
+          "assets": [
+            {
+              "name": "MSKey-0.2.0-macOS.dmg",
+              "browser_download_url": "https://example.com/MSKey-0.2.0-macOS.dmg",
+              "size": 1048576
+            },
+            {
+              "name": "SHA256SUMS",
+              "browser_download_url": "https://example.com/SHA256SUMS",
+              "size": 256
+            }
+          ]
+        }
+        """
+        let info = try XCTUnwrap(UpdateChecker.parseReleaseJSON(releaseJSON))
+        XCTAssertEqual(info.version, "0.2.0")
+        XCTAssertEqual(UpdateChecker.preferredMacAsset(from: info.assets)?.name, "MSKey-0.2.0-macOS.dmg")
+        XCTAssertEqual(UpdateChecker.checksumAsset(from: info.assets)?.name, "SHA256SUMS")
+
+        let payload = Data("mskey-release-binary".utf8)
+        let hex = UpdateChecker.sha256Hex(of: payload)
+        let sums = UpdateChecker.parseSHA256Sums("\(hex)  *./MSKey-0.2.0-macOS.dmg\n")
+        XCTAssertTrue(UpdateChecker.verifySHA256(sums: sums, filename: "MSKey-0.2.0-macOS.dmg", actualHex: hex))
+        XCTAssertFalse(UpdateChecker.verifySHA256(sums: sums, filename: "MSKey-0.2.0-macOS.dmg", actualHex: String(repeating: "0", count: 64)))
     }
 }

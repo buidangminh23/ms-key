@@ -1,6 +1,8 @@
 use std::ptr;
+use std::sync::Mutex;
+use std::time::Instant;
 
-use mskey_core::{EngineAction, SwitchPreset};
+use mskey_core::{AppBehavior, EngineAction, HoldEnglishKey, SwitchPreset};
 use windows_sys::Win32::Foundation::{HWND, LPARAM, LRESULT, WPARAM};
 use windows_sys::Win32::UI::Accessibility::{HWINEVENTHOOK, SetWinEventHook, UnhookWinEvent};
 use windows_sys::Win32::UI::Input::KeyboardAndMouse::{
@@ -17,19 +19,50 @@ use windows_sys::Win32::UI::WindowsAndMessaging::{
 };
 
 use crate::hook_send::{
-    MSKEY_EXTRA_INFO, ReplacePayload, convert_clipboard_now, dispatch_payload,
+    MSKEY_EXTRA_INFO, ReplacePayload, convert_clipboard_now, dispatch_payload, send_capslock_tap,
+    send_cursor_left,
 };
-use crate::platform::{play_switch_beep, query_foreground_info, save_config};
-use crate::state::{AppState, WM_APP_SYNC_UI, with_state};
+use crate::platform::{
+    play_switch_beep, query_foreground_info, query_window_title, save_config,
+};
+use crate::state::{
+    AppState, WM_APP_CONVERT_SELECTION, WM_APP_SYNC_UI, WM_APP_UPDATE_CARET_OSD, with_state,
+};
 
 const EVENT_SYSTEM_FOREGROUND: u32 = 0x0003;
+const EVENT_OBJECT_NAMECHANGE: u32 = 0x800C;
 const WINEVENT_OUTOFCONTEXT: u32 = 0x0000;
 const WINEVENT_SKIPOWNPROCESS: u32 = 0x0002;
+
+struct CapsTapState {
+    down_at: Option<Instant>,
+    had_other_key: bool,
+    toggled_os: bool,
+}
+
+impl CapsTapState {
+    const fn new() -> Self {
+        Self {
+            down_at: None,
+            had_other_key: false,
+            toggled_os: false,
+        }
+    }
+
+    fn reset(&mut self) {
+        self.down_at = None;
+        self.had_other_key = false;
+        self.toggled_os = false;
+    }
+}
+
+static CAPS_TAP: Mutex<CapsTapState> = Mutex::new(CapsTapState::new());
 
 pub struct HookGuard {
     kb_hook: HHOOK,
     mouse_hook: HHOOK,
     win_event: HWINEVENTHOOK,
+    name_event: HWINEVENTHOOK,
 }
 
 impl Drop for HookGuard {
@@ -44,6 +77,9 @@ impl Drop for HookGuard {
             if !self.win_event.is_null() {
                 UnhookWinEvent(self.win_event);
             }
+            if !self.name_event.is_null() {
+                UnhookWinEvent(self.name_event);
+            }
         }
     }
 }
@@ -52,6 +88,7 @@ pub fn install_hooks() -> HookGuard {
     let kb_hook =
         unsafe { SetWindowsHookExW(WH_KEYBOARD_LL, Some(keyboard_proc), ptr::null_mut(), 0) };
     let mouse_hook = unsafe { SetWindowsHookExW(WH_MOUSE_LL, Some(mouse_proc), ptr::null_mut(), 0) };
+    let flags = WINEVENT_OUTOFCONTEXT | WINEVENT_SKIPOWNPROCESS;
     let win_event = unsafe {
         SetWinEventHook(
             EVENT_SYSTEM_FOREGROUND,
@@ -60,7 +97,18 @@ pub fn install_hooks() -> HookGuard {
             Some(win_event_proc),
             0,
             0,
-            WINEVENT_OUTOFCONTEXT | WINEVENT_SKIPOWNPROCESS,
+            flags,
+        )
+    };
+    let name_event = unsafe {
+        SetWinEventHook(
+            EVENT_OBJECT_NAMECHANGE,
+            EVENT_OBJECT_NAMECHANGE,
+            ptr::null_mut(),
+            Some(win_event_proc),
+            0,
+            0,
+            flags,
         )
     };
     refresh_foreground();
@@ -68,32 +116,92 @@ pub fn install_hooks() -> HookGuard {
         kb_hook,
         mouse_hook,
         win_event,
+        name_event,
+    }
+}
+
+fn post_caret_osd_if_enabled(hwnd: HWND, is_vi: bool, force_show: bool, caret_enabled: bool) {
+    if !hwnd.is_null() && (caret_enabled || force_show) {
+        unsafe {
+            PostMessageW(
+                hwnd,
+                WM_APP_UPDATE_CARET_OSD,
+                if is_vi { 1 } else { 0 },
+                if force_show { 1 } else { 0 },
+            );
+        }
     }
 }
 
 fn refresh_foreground() {
-    let (hwnd, proc_name, class_name, is_us) = query_foreground_info();
-    let changed_ve = with_state(|st| {
-        let before = st.engine.config().vietnamese_enabled;
-        st.update_foreground(hwnd as usize, proc_name, class_name, is_us);
-        (st.main_window(), st.engine.config().vietnamese_enabled != before)
+    let (hwnd, proc_name, class_name, title, is_us) = query_foreground_info();
+    crate::uia::reset_cached();
+    if let Ok(mut caps) = CAPS_TAP.lock() {
+        caps.reset();
+    }
+    let (notify_hw, changed_ve, is_vi, caret_on) = with_state(|st| {
+        let before_active = st.effective_vietnamese();
+        let before_blacklisted = st.is_blacklisted();
+        st.engine.set_temporary_english(false);
+        st.update_foreground(hwnd as usize, proc_name, class_name, title, is_us);
+        let after_active = st.effective_vietnamese();
+        let after_blacklisted = st.is_blacklisted();
+        (
+            st.main_window(),
+            after_active != before_active || after_blacklisted != before_blacklisted,
+            after_active,
+            st.engine.config().show_caret_osd,
+        )
     });
-    if changed_ve.1 && !changed_ve.0.is_null() {
-        unsafe {
-            PostMessageW(changed_ve.0, WM_APP_SYNC_UI, 0, 0);
+    if !notify_hw.is_null() {
+        if changed_ve {
+            unsafe {
+                PostMessageW(notify_hw, WM_APP_SYNC_UI, 0, 0);
+            }
         }
+        post_caret_osd_if_enabled(notify_hw, is_vi, false, caret_on);
     }
 }
 
 unsafe extern "system" fn win_event_proc(
     _hook: HWINEVENTHOOK,
-    _event: u32,
-    _hwnd: HWND,
-    _id_object: i32,
-    _id_child: i32,
+    event: u32,
+    hwnd: HWND,
+    id_object: i32,
+    id_child: i32,
     _thread: u32,
     _time: u32,
 ) {
+    if event == EVENT_OBJECT_NAMECHANGE {
+        if id_object != 0 || id_child != 0 || hwnd.is_null() {
+            return;
+        }
+        let fg = unsafe { GetForegroundWindow() };
+        if hwnd != fg {
+            return;
+        }
+        let title = query_window_title(hwnd);
+        let notify = with_state(|st| {
+            if st.fg_hwnd == hwnd as usize && st.update_foreground_title(title) {
+                Some((
+                    st.main_window(),
+                    st.effective_vietnamese(),
+                    st.engine.config().show_caret_osd,
+                ))
+            } else {
+                None
+            }
+        });
+        if let Some((hw, is_vi, caret_on)) = notify
+            && !hw.is_null()
+        {
+            unsafe {
+                PostMessageW(hw, WM_APP_SYNC_UI, 0, 0);
+            }
+            post_caret_osd_if_enabled(hw, is_vi, false, caret_on);
+        }
+        return;
+    }
     refresh_foreground();
 }
 
@@ -104,7 +212,18 @@ unsafe extern "system" fn mouse_proc(code: i32, wparam: WPARAM, lparam: LPARAM) 
             WM_LBUTTONDOWN | WM_RBUTTONDOWN | WM_MBUTTONDOWN
         )
     {
-        with_state(|st| st.engine.reset_all());
+        crate::uia::notify_focus_check();
+        let caret_info = with_state(|st| {
+            st.engine.reset_all();
+            if st.engine.config().show_caret_osd {
+                Some((st.main_window(), st.effective_vietnamese()))
+            } else {
+                None
+            }
+        });
+        if let Some((hw, is_vi)) = caret_info {
+            post_caret_osd_if_enabled(hw, is_vi, false, true);
+        }
     }
     unsafe { CallNextHookEx(ptr::null_mut(), code, wparam, lparam) }
 }
@@ -130,6 +249,10 @@ unsafe extern "system" fn keyboard_proc(code: i32, wparam: WPARAM, lparam: LPARA
         KeyDecision::Consume => 1,
         KeyDecision::Inject(payload) => {
             dispatch_payload(payload);
+            let steps = with_state(|st| st.engine.take_pending_cursor_left());
+            if steps > 0 {
+                send_cursor_left(steps);
+            }
             1
         }
     }
@@ -158,7 +281,54 @@ fn is_modifier_vk(vk: u16) -> bool {
     )
 }
 
-fn update_modifier_flags(st: &mut AppState, vk: u16, is_down: bool) {
+struct KeySideEffects {
+    notify_hwnd: HWND,
+    sync_ui: bool,
+    should_beep: bool,
+    should_save: bool,
+    osd_next: Option<bool>,
+    caret_osd: Option<(bool, bool)>,
+    post_convert_selection: Option<usize>,
+    send_os_capslock: bool,
+}
+
+impl KeySideEffects {
+    fn new() -> Self {
+        Self {
+            notify_hwnd: ptr::null_mut(),
+            sync_ui: false,
+            should_beep: false,
+            should_save: false,
+            osd_next: None,
+            caret_osd: None,
+            post_convert_selection: None,
+            send_os_capslock: false,
+        }
+    }
+}
+
+fn hold_english_vk(key: HoldEnglishKey) -> Option<u16> {
+    match key {
+        HoldEnglishKey::None => None,
+        HoldEnglishKey::RightShift => Some(VK_RSHIFT),
+        HoldEnglishKey::LeftShift => Some(VK_LSHIFT),
+        HoldEnglishKey::RightAlt => Some(VK_RMENU),
+        HoldEnglishKey::RightCtrl => Some(VK_RCONTROL),
+        HoldEnglishKey::CapsLock => Some(VK_CAPITAL),
+    }
+}
+
+fn is_modifier_swallowed_for_hold(hold_key: HoldEnglishKey, vk: u16) -> bool {
+    matches!(
+        (hold_key, vk),
+        (HoldEnglishKey::RightCtrl, VK_RCONTROL) | (HoldEnglishKey::RightAlt, VK_RMENU)
+    )
+}
+
+fn update_modifier_flags(st: &mut AppState, hold_key: HoldEnglishKey, vk: u16, is_down: bool) {
+    if is_modifier_swallowed_for_hold(hold_key, vk) {
+        return;
+    }
     if vk == VK_CONTROL || vk == VK_LCONTROL || vk == VK_RCONTROL {
         st.ctrl_down = is_down;
     } else if vk == VK_SHIFT || vk == VK_LSHIFT || vk == VK_RSHIFT {
@@ -170,37 +340,143 @@ fn update_modifier_flags(st: &mut AppState, vk: u16, is_down: bool) {
     }
 }
 
-fn trigger_ve_toggle(
-    st: &mut AppState,
-    next: bool,
-    notify_hwnd: &mut HWND,
-    should_beep: &mut bool,
-    should_save: &mut bool,
-    osd_next: &mut Option<bool>,
-) {
+fn trigger_ve_toggle(st: &mut AppState, next: bool, fx: &mut KeySideEffects) {
     let cfg = st.engine.config().clone();
     st.set_user_vietnamese(next);
     if cfg.smart_app_switch && !st.fg_process.is_empty() {
         crate::platform_extra::record_app_ve_memory(&st.fg_process, next);
     }
-    *notify_hwnd = st.main_window();
-    *should_beep = cfg.beep_on_switch;
-    *should_save = true;
+    fx.notify_hwnd = st.main_window();
+    fx.sync_ui = true;
+    fx.should_beep = cfg.beep_on_switch;
+    fx.should_save = true;
     if cfg.show_switch_osd {
-        *osd_next = Some(next);
+        fx.osd_next = Some(next);
+    }
+    if cfg.show_caret_osd {
+        fx.caret_osd = Some((st.effective_vietnamese(), st.engine.is_temporary_english()));
     }
 }
 
-#[allow(clippy::too_many_arguments)]
+fn handle_hold_english(
+    st: &mut AppState,
+    hold_key: HoldEnglishKey,
+    vk: u16,
+    is_down: bool,
+    is_up: bool,
+    fx: &mut KeySideEffects,
+) -> Option<KeyDecision> {
+    let target_vk = hold_english_vk(hold_key)?;
+    if vk != target_vk {
+        return None;
+    }
+    let swallow = matches!(
+        hold_key,
+        HoldEnglishKey::RightCtrl | HoldEnglishKey::RightAlt | HoldEnglishKey::CapsLock
+    );
+    if is_down {
+        let mods_ok = match hold_key {
+            HoldEnglishKey::LeftShift | HoldEnglishKey::RightShift => {
+                !st.ctrl_down && !st.alt_down && !st.win_down
+            }
+            HoldEnglishKey::RightCtrl
+            | HoldEnglishKey::RightAlt
+            | HoldEnglishKey::CapsLock => {
+                !st.shift_down && !st.ctrl_down && !st.alt_down && !st.win_down
+            }
+            HoldEnglishKey::None => false,
+        };
+        if mods_ok {
+            if !st.engine.is_temporary_english() {
+                st.engine.set_temporary_english(true);
+                fx.notify_hwnd = st.main_window();
+                fx.sync_ui = true;
+                fx.caret_osd = Some((st.effective_vietnamese(), true));
+            }
+            if swallow {
+                return Some(KeyDecision::Consume);
+            }
+        }
+    } else if is_up {
+        let was_temp = st.engine.is_temporary_english();
+        if was_temp {
+            st.engine.set_temporary_english(false);
+            fx.notify_hwnd = st.main_window();
+            fx.sync_ui = true;
+            fx.caret_osd = Some((st.effective_vietnamese(), false));
+        }
+        if swallow && (was_temp || hold_key != HoldEnglishKey::CapsLock) {
+            return Some(KeyDecision::Consume);
+        }
+    }
+    None
+}
+
+fn handle_quick_capslock(
+    st: &mut AppState,
+    vk: u16,
+    is_down: bool,
+    is_up: bool,
+    fx: &mut KeySideEffects,
+) -> Option<KeyDecision> {
+    let cfg = st.engine.config().clone();
+    if !cfg.quick_capslock_switch || cfg.hold_english_key == HoldEnglishKey::CapsLock {
+        return None;
+    }
+    let Ok(mut caps) = CAPS_TAP.lock() else {
+        return None;
+    };
+    if vk != VK_CAPITAL {
+        if is_down && caps.down_at.is_some() && !is_modifier_swallowed_for_hold(cfg.hold_english_key, vk)
+            && !is_modifier_vk(vk)
+        {
+            caps.had_other_key = true;
+        }
+        return None;
+    }
+    if is_down {
+        if caps.down_at.is_none() {
+            if st.shift_down || st.ctrl_down || st.alt_down || st.win_down {
+                return None;
+            }
+            caps.down_at = Some(Instant::now());
+            caps.had_other_key = false;
+            caps.toggled_os = false;
+            return Some(KeyDecision::Consume);
+        }
+        if !caps.toggled_os
+            && !caps.had_other_key
+            && caps.down_at.is_some_and(|t| t.elapsed().as_millis() >= 250)
+        {
+            caps.toggled_os = true;
+            fx.send_os_capslock = true;
+        }
+        return Some(KeyDecision::Consume);
+    }
+    if is_up && let Some(down_at) = caps.down_at.take() {
+        let had_other = caps.had_other_key;
+        let already_os = caps.toggled_os;
+        caps.had_other_key = false;
+        caps.toggled_os = false;
+        drop(caps);
+        if !already_os {
+            if !had_other && !st.shift_down && down_at.elapsed().as_millis() < 250 {
+                trigger_ve_toggle(st, !cfg.vietnamese_enabled, fx);
+            } else if !had_other {
+                fx.send_os_capslock = true;
+            }
+        }
+        return Some(KeyDecision::Consume);
+    }
+    None
+}
+
 fn check_hotkey_decision(
     st: &mut AppState,
     vk: u16,
     is_down: bool,
     is_up: bool,
-    notify_hwnd: &mut HWND,
-    should_beep: &mut bool,
-    should_save: &mut bool,
-    osd_next: &mut Option<bool>,
+    fx: &mut KeySideEffects,
 ) -> Option<KeyDecision> {
     let cfg = st.engine.config().clone();
     let double_shift = crate::platform_extra::update_shift_tap_state(
@@ -212,17 +488,23 @@ fn check_hotkey_decision(
         st.win_down,
     );
     if cfg.switch_preset == SwitchPreset::ShiftShift && double_shift {
-        trigger_ve_toggle(st, !cfg.vietnamese_enabled, notify_hwnd, should_beep, should_save, osd_next);
+        trigger_ve_toggle(st, !cfg.vietnamese_enabled, fx);
         return Some(KeyDecision::Pass);
     }
     if cfg.switch_preset == SwitchPreset::CtrlShift {
-        if is_down && is_modifier_vk(vk) && st.ctrl_down && st.shift_down && !st.alt_down && !st.win_down {
+        if is_down
+            && is_modifier_vk(vk)
+            && st.ctrl_down
+            && st.shift_down
+            && !st.alt_down
+            && !st.win_down
+        {
             st.pending_ctrl_shift = true;
         } else if is_down && !is_modifier_vk(vk) {
             st.pending_ctrl_shift = false;
         } else if is_up && st.pending_ctrl_shift && is_modifier_vk(vk) {
             st.pending_ctrl_shift = false;
-            trigger_ve_toggle(st, !cfg.vietnamese_enabled, notify_hwnd, should_beep, should_save, osd_next);
+            trigger_ve_toggle(st, !cfg.vietnamese_enabled, fx);
             return Some(KeyDecision::Pass);
         }
     }
@@ -237,7 +519,7 @@ fn check_hotkey_decision(
         && vk == 0x20;
     if ctrl_space {
         if crate::platform_extra::take_fresh_ctrl_space_press() {
-            trigger_ve_toggle(st, !cfg.vietnamese_enabled, notify_hwnd, should_beep, should_save, osd_next);
+            trigger_ve_toggle(st, !cfg.vietnamese_enabled, fx);
         }
         return Some(KeyDecision::Consume);
     }
@@ -248,17 +530,72 @@ fn check_hotkey_decision(
         && !st.win_down
         && vk == b'Z' as u16;
     let custom_sw = cfg.switch_preset == SwitchPreset::Custom
-        && combo_matches(&cfg.custom_switch_hotkey, st.ctrl_down, st.alt_down, st.shift_down, st.win_down, vk as u32);
+        && combo_matches(
+            &cfg.custom_switch_hotkey,
+            st.ctrl_down,
+            st.alt_down,
+            st.shift_down,
+            st.win_down,
+            vk as u32,
+        );
     if alt_z || custom_sw {
-        trigger_ve_toggle(st, !cfg.vietnamese_enabled, notify_hwnd, should_beep, should_save, osd_next);
+        trigger_ve_toggle(st, !cfg.vietnamese_enabled, fx);
         return Some(KeyDecision::Consume);
     }
-    if combo_matches(&cfg.clipboard_convert_hotkey, st.ctrl_down, st.alt_down, st.shift_down, st.win_down, vk as u32) {
+    if combo_matches(
+        &cfg.clipboard_convert_hotkey,
+        st.ctrl_down,
+        st.alt_down,
+        st.shift_down,
+        st.win_down,
+        vk as u32,
+    ) {
         convert_clipboard_now(cfg.charset);
-        *should_beep = cfg.beep_on_switch;
+        fx.should_beep = cfg.beep_on_switch;
+        return Some(KeyDecision::Consume);
+    }
+    if combo_matches(
+        &cfg.undo_last_word_hotkey,
+        st.ctrl_down,
+        st.alt_down,
+        st.shift_down,
+        st.win_down,
+        vk as u32,
+    ) {
+        let act = st.engine.toggle_last_committed_word();
+        if let Some(payload) = crate::hook_send::build_replace_payload(act, None, &cfg, &st.fg_class)
+        {
+            return Some(KeyDecision::Inject(payload));
+        }
+        return Some(KeyDecision::Pass);
+    }
+    if combo_matches(
+        &cfg.convert_selection_hotkey,
+        st.ctrl_down,
+        st.alt_down,
+        st.shift_down,
+        st.win_down,
+        vk as u32,
+    ) {
+        fx.notify_hwnd = st.main_window();
+        fx.post_convert_selection = Some(st.fg_hwnd);
         return Some(KeyDecision::Consume);
     }
     None
+}
+
+fn maybe_preload_macro_clipboard(st: &mut AppState) {
+    let cfg = st.engine.config();
+    if cfg.macro_enabled
+        && !st.engine.raw_word().is_empty()
+        && cfg
+            .macros
+            .iter()
+            .any(|m| m.enabled && m.expansion.contains("{clipboard}"))
+    {
+        st.engine
+            .set_clipboard_text(crate::platform_extra::read_clipboard_text());
+    }
 }
 
 fn dispatch_typing_key(st: &mut AppState, vk: u16, scan: u32) -> KeyDecision {
@@ -294,20 +631,28 @@ fn dispatch_typing_key(st: &mut AppState, vk: u16, scan: u32) -> KeyDecision {
         return KeyDecision::Pass;
     }
     if vk == VK_RETURN {
+        maybe_preload_macro_clipboard(st);
         return map_action(st.engine.process_delimiter('\n'), Some(VK_RETURN), &cfg, &st.fg_class);
     }
     if vk == VK_TAB {
+        maybe_preload_macro_clipboard(st);
         return map_action(st.engine.process_delimiter('\t'), Some(VK_TAB), &cfg, &st.fg_class);
     }
     let Some(ch) = translate_vk_to_char(vk, scan, st.shift_down) else {
         return KeyDecision::Pass;
     };
+    if st.engine.is_active_delimiter(ch) {
+        maybe_preload_macro_clipboard(st);
+    }
     let trailing = if ch == ' ' { Some(VK_SPACE) } else { None };
     map_action(st.engine.process_key(ch), trailing, &cfg, &st.fg_class)
 }
 
 fn handle_key_event(vk: u16, scan: u32, is_down: bool, is_up: bool) -> KeyDecision {
     let fg_now = unsafe { GetForegroundWindow() } as usize;
+    if crate::ui_popup::is_popup_hwnd(fg_now) {
+        return KeyDecision::Pass;
+    }
     let cached_fg = with_state(|st| st.fg_hwnd);
     if fg_now != 0 && fg_now != cached_fg {
         refresh_foreground();
@@ -315,65 +660,97 @@ fn handle_key_event(vk: u16, scan: u32, is_down: bool, is_up: bool) -> KeyDecisi
             let cfg = st.engine.config().clone();
             if cfg.smart_app_switch
                 && !st.fg_process.is_empty()
-                && cfg.behavior_for_app(&st.fg_process)
-                    == cfg.behavior_for_app("__mskey_no_rule__")
+                && st.current_window_behavior() == AppBehavior::Default
                 && let Some(mem_ve) =
                     crate::platform_extra::recalled_app_ve_memory(&st.fg_process)
-                    && cfg.vietnamese_enabled != mem_ve {
-                        let mut next_cfg = cfg;
-                        next_cfg.vietnamese_enabled = mem_ve;
-                        st.engine.update_config(next_cfg);
-                        return Some(st.main_window());
-                    }
+                && cfg.vietnamese_enabled != mem_ve
+            {
+                let mut next_cfg = cfg;
+                next_cfg.vietnamese_enabled = mem_ve;
+                st.engine.update_config(next_cfg);
+                return Some((
+                    st.main_window(),
+                    st.effective_vietnamese(),
+                    st.engine.config().show_caret_osd,
+                ));
+            }
             None
         });
-        if let Some(hw) = sync_hw
-            && !hw.is_null() {
-                unsafe {
-                    PostMessageW(hw, WM_APP_SYNC_UI, 0, 0);
-                }
+        if let Some((hw, is_vi, caret_on)) = sync_hw
+            && !hw.is_null()
+        {
+            unsafe {
+                PostMessageW(hw, WM_APP_SYNC_UI, 0, 0);
             }
+            post_caret_osd_if_enabled(hw, is_vi, false, caret_on);
+        }
     }
 
-    let mut notify_hwnd: HWND = ptr::null_mut();
-    let mut should_beep = false;
-    let mut should_save = false;
-    let mut osd_next: Option<bool> = None;
+    if is_down && matches!(vk, VK_TAB | VK_RETURN) {
+        crate::uia::notify_focus_check();
+    }
+
+    let mut fx = KeySideEffects::new();
 
     let decision = with_state(|st| {
-        update_modifier_flags(st, vk, is_down);
+        let hold_key = st.engine.config().hold_english_key;
+        update_modifier_flags(st, hold_key, vk, is_down);
         if st.suspend_typing_for_hotkey {
             return KeyDecision::Pass;
         }
-        if let Some(d) = check_hotkey_decision(
-            st,
-            vk,
-            is_down,
-            is_up,
-            &mut notify_hwnd,
-            &mut should_beep,
-            &mut should_save,
-            &mut osd_next,
-        ) {
+        if let Some(d) = handle_hold_english(st, hold_key, vk, is_down, is_up, &mut fx) {
+            return d;
+        }
+        if let Some(d) = handle_quick_capslock(st, vk, is_down, is_up, &mut fx) {
+            return d;
+        }
+        if is_down && matches!(vk, VK_TAB | VK_RETURN) && st.engine.config().show_caret_osd {
+            fx.notify_hwnd = st.main_window();
+            if fx.caret_osd.is_none() {
+                fx.caret_osd = Some((st.effective_vietnamese(), st.engine.is_temporary_english()));
+            }
+        }
+        if let Some(d) = check_hotkey_decision(st, vk, is_down, is_up, &mut fx) {
             return d;
         }
         dispatch_typing_key(st, vk, scan)
     });
 
-    if should_beep {
+    if fx.send_os_capslock {
+        send_capslock_tap();
+    }
+    if fx.should_beep {
         play_switch_beep();
     }
-    if should_save {
+    if fx.should_save {
         with_state(|st| save_config(st.engine.config()));
     }
-    if !notify_hwnd.is_null() {
+    if !fx.notify_hwnd.is_null() {
         unsafe {
-            PostMessageW(notify_hwnd, WM_APP_SYNC_UI, 0, 0);
-            if let Some(is_vi) = osd_next {
+            if fx.sync_ui {
+                PostMessageW(fx.notify_hwnd, WM_APP_SYNC_UI, 0, 0);
+            }
+            if let Some(is_vi) = fx.osd_next {
                 PostMessageW(
-                    notify_hwnd,
+                    fx.notify_hwnd,
                     crate::state::WM_APP_SHOW_OSD,
                     if is_vi { 1 } else { 0 },
+                    0,
+                );
+            }
+            if let Some((is_vi, force_show)) = fx.caret_osd {
+                PostMessageW(
+                    fx.notify_hwnd,
+                    WM_APP_UPDATE_CARET_OSD,
+                    if is_vi { 1 } else { 0 },
+                    if force_show { 1 } else { 0 },
+                );
+            }
+            if let Some(target_fg) = fx.post_convert_selection {
+                PostMessageW(
+                    fx.notify_hwnd,
+                    WM_APP_CONVERT_SELECTION,
+                    target_fg,
                     0,
                 );
             }

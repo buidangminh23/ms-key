@@ -11,6 +11,8 @@ public enum ActiveSheetKind: String, Identifiable, Sendable {
     case userDict
     case captureSwitchHotkey
     case captureConvertHotkey
+    case captureUndoHotkey
+    case captureConvertSelectionHotkey
 
     public var id: String { rawValue }
 }
@@ -49,7 +51,7 @@ public final class MSKeyStore: ObservableObject {
                     self.config.vietnamese_enabled = ve
                     MacConfigStore.save(self.config)
                     if self.config.show_switch_osd {
-                        MacOSDHud.shared.show(vietnamese: ve)
+                        MacOSDHud.shared.show(vietnamese: ve, nearCaret: self.config.showCaretOsd)
                     }
                 }
                 self.menuBar?.updateStatusIcon(vietnamese: ve)
@@ -64,10 +66,10 @@ public final class MSKeyStore: ObservableObject {
 
     public func startRuntime() {
         menuBar = MenuBarController(store: self)
-        let current = MacAppDetector.frontmostAppIdentifier()
-        if !current.isEmpty {
-            lastActiveApp = current
-            tapManager.notifyAppActivated(current)
+        let current = MacAppDetector.frontmostAppAndWindowTitle()
+        if !current.appName.isEmpty {
+            lastActiveApp = current.appName
+            tapManager.notifyAppActivated(current.appName, windowTitle: current.windowTitle)
         }
         workspaceObserver = NSWorkspace.shared.notificationCenter.addObserver(
             forName: NSWorkspace.didActivateApplicationNotification,
@@ -76,9 +78,13 @@ public final class MSKeyStore: ObservableObject {
         ) { [weak self] note in
             let app = note.userInfo?[NSWorkspace.applicationUserInfoKey] as? NSRunningApplication
             let name = app.map(MacAppDetector.canonicalName(for:)) ?? ""
+            let pid = app?.processIdentifier ?? 0
             DispatchQueue.main.async {
                 guard let self, !name.isEmpty else { return }
-                self.tapManager.notifyAppActivated(name)
+                let title = AXIsProcessTrusted() && pid > 0
+                    ? MacAppDetector.focusedWindowTitle(of: AXUIElementCreateApplication(pid))
+                    : ""
+                self.tapManager.notifyAppActivated(name, windowTitle: title)
             }
         }
         if !tapManager.start() {
@@ -86,6 +92,11 @@ public final class MSKeyStore: ObservableObject {
         }
         if config.show_on_startup {
             showMainWindow()
+        }
+        if config.checkUpdatesOnStart {
+            DispatchQueue.main.asyncAfter(deadline: .now() + .seconds(1)) {
+                UpdateChecker.shared.checkForUpdates(manual: false)
+            }
         }
     }
 
@@ -122,7 +133,7 @@ public final class MSKeyStore: ObservableObject {
             NSSound.beep()
         }
         if config.show_switch_osd {
-            MacOSDHud.shared.show(vietnamese: next)
+            MacOSDHud.shared.show(vietnamese: next, nearCaret: config.showCaretOsd)
         }
     }
 
@@ -133,6 +144,7 @@ public final class MSKeyStore: ObservableObject {
         tapManager.updateConfig(config)
         MacConfigStore.save(config)
         menuBar?.updateStatusIcon(vietnamese: effectiveVE)
+        menuBar?.refreshProfilesMenu()
         applyTheme(config.theme)
         if config.auto_start != prevAuto {
             MacConfigStore.syncAutoStart(enable: config.auto_start)
@@ -150,18 +162,97 @@ public final class MSKeyStore: ObservableObject {
         MacConfigStore.save(config)
         MacConfigStore.syncAutoStart(enable: config.auto_start)
         menuBar?.updateStatusIcon(vietnamese: effectiveVE)
+        menuBar?.refreshProfilesMenu()
+    }
+
+    @discardableResult
+    public func applyProfile(_ name: String) -> Bool {
+        rust.setConfig(config)
+        guard rust.applyProfile(name) else { return false }
+        let json = rust.getConfigJSON()
+        guard let data = json.data(using: .utf8),
+              let decoded = try? JSONDecoder().decode(MSKeyConfig.self, from: data) else {
+            return false
+        }
+        updateConfig { $0 = decoded }
+        return true
+    }
+
+    public func saveCurrentAsProfile(named rawName: String) {
+        let trimmed = rawName.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmed.isEmpty else { return }
+        updateConfig { $0.saveCurrentAsProfile(trimmed) }
+    }
+
+    public func deleteCustomProfile(named name: String) {
+        let trimmed = name.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmed.isEmpty else { return }
+        updateConfig { cfg in
+            cfg.profiles.removeAll { $0.name.caseInsensitiveCompare(trimmed) == .orderedSame }
+            if cfg.activeProfile.caseInsensitiveCompare(trimmed) == .orderedSame {
+                cfg.activeProfile = "Mặc định"
+            }
+        }
     }
 
     public func addLastAppForceEnglish() {
         let app = lastActiveApp.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !app.isEmpty else { return }
         updateConfig { cfg in
-            if let idx = cfg.app_rules.firstIndex(where: { $0.process_name.caseInsensitiveCompare(app) == .orderedSame }) {
+            if let idx = cfg.app_rules.firstIndex(where: {
+                $0.process_name.caseInsensitiveCompare(app) == .orderedSame && $0.titlePattern.isEmpty
+            }) {
                 cfg.app_rules[idx].behavior = .forceEnglish
             } else {
-                cfg.app_rules.append(AppRuleItem(process_name: app, behavior: .forceEnglish))
+                cfg.app_rules.append(AppRuleItem(process_name: app, titlePattern: "", behavior: .forceEnglish))
             }
         }
+    }
+
+    @discardableResult
+    public func addLastEscWordToUserDict() -> String? {
+        guard let raw = rust.lastWordForDict()?.trimmingCharacters(in: .whitespacesAndNewlines),
+              !raw.isEmpty else {
+            return nil
+        }
+        updateConfig { cfg in
+            if !cfg.user_dict_words.contains(where: { $0.caseInsensitiveCompare(raw) == .orderedSame }) {
+                cfg.user_dict_words.append(raw)
+            }
+        }
+        return raw
+    }
+
+    public func chooseSyncConfigPath() {
+        let panel = NSOpenPanel()
+        panel.title = "Chọn file JSON hoặc thư mục đồng bộ cấu hình"
+        panel.canChooseFiles = true
+        panel.canChooseDirectories = true
+        panel.canCreateDirectories = true
+        panel.allowsMultipleSelection = false
+        guard panel.runModal() == .OK, let url = panel.url else { return }
+        var isDir: ObjCBool = false
+        let exists = FileManager.default.fileExists(atPath: url.path, isDirectory: &isDir)
+        let chosenURL = (exists && isDir.boolValue)
+            ? url.appendingPathComponent("mskey-config.json")
+            : url
+        updateConfig { $0.syncConfigPath = chosenURL.path }
+        let synced = MacConfigStore.load()
+        if synced != config {
+            updateConfig { $0 = synced }
+        }
+    }
+
+    public func clearSyncConfigPath() {
+        updateConfig { $0.syncConfigPath = "" }
+    }
+
+    public func triggerConvertSelection() {
+        tapManager.triggerConvertSelection(fromMenuBar: true)
+    }
+
+    public func checkForUpdates(manual: Bool = true) {
+        UpdateChecker.shared.checkForUpdates(manual: manual)
     }
 
     public func quickConvertPasteboard() {

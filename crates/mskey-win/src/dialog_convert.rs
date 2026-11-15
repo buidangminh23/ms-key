@@ -81,13 +81,15 @@ unsafe extern "system" fn conv_wnd_proc(
                 "Hoa đầu câu",
                 "Hoa Mỗi Từ",
                 "Bỏ dấu tiếng Việt",
+                "Chuẩn hóa dấu mới (hoà)",
+                "Chuẩn hóa dấu cũ (hòa)",
             ];
             make_child(hwnd, "STATIC", "Bảng mã nguồn", 0, 16, 16, 120, 24, 0, font, dpi);
-            let from_cb = make_combo(hwnd, 140, 12, 152, 28, ID_CONV_FROM, cs, 0, font, dpi);
+            let from_cb = make_combo(hwnd, 140, 12, 228, 28, ID_CONV_FROM, cs, 0, font, dpi);
             make_child(hwnd, "STATIC", "Bảng mã đích", 0, 16, 52, 120, 24, 0, font, dpi);
-            let to_cb = make_combo(hwnd, 140, 48, 152, 28, ID_CONV_TO, cs, 0, font, dpi);
+            let to_cb = make_combo(hwnd, 140, 48, 228, 28, ID_CONV_TO, cs, 0, font, dpi);
             make_child(hwnd, "STATIC", "Chuyển hoa/thường", 0, 16, 88, 120, 24, 0, font, dpi);
-            let case_cb = make_combo(hwnd, 140, 84, 152, 28, ID_CONV_CASE, cases, 0, font, dpi);
+            let case_cb = make_combo(hwnd, 140, 84, 228, 28, ID_CONV_CASE, cases, 0, font, dpi);
             let initial = read_clipboard_text().unwrap_or_default();
             let edit = make_edit(hwnd, &initial, 16, 124, 432, 140, ID_CONV_INPUT, true, font, dpi);
             make_owner_button(hwnd, "Đọc Clipboard", 16, 276, 128, 32, ID_CONV_READ, font, dpi);
@@ -156,6 +158,8 @@ unsafe extern "system" fn conv_wnd_proc(
                             3 => CaseTransform::Sentence,
                             4 => CaseTransform::Title,
                             5 => CaseTransform::StripDiacritics,
+                            6 => CaseTransform::NormalizeModernTone,
+                            7 => CaseTransform::NormalizeClassicTone,
                             _ => CaseTransform::None,
                         };
                         let out = mskey_core::convert_with_encoding(

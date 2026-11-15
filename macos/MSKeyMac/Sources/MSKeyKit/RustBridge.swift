@@ -158,17 +158,89 @@ public final class RustEngine: @unchecked Sendable {
         return res
     }
 
-    public func behavior(for appName: String) -> AppBehaviorKind {
+    public func toggleLastCommittedWord() -> KeyActionResult {
         lock.lock()
         defer { lock.unlock() }
-        guard let h = handle else { return .default }
-        let code = appName.withCString { mskey_behavior_for_app(h, $0) }
+        guard let h = handle else { return .passThrough }
+        let act = mskey_toggle_last_committed_word(h)
+        let res = KeyActionResult(from: act)
+        mskey_free_action(act)
+        return res
+    }
+
+    public func setTemporaryEnglish(_ enabled: Bool) {
+        lock.lock()
+        defer { lock.unlock() }
+        if let h = handle {
+            mskey_set_temporary_english(h, enabled)
+        }
+    }
+
+    public func hydrateWord(_ word: String) {
+        lock.lock()
+        defer { lock.unlock() }
+        guard let h = handle else { return }
+        word.withCString { mskey_hydrate_word(h, $0) }
+    }
+
+    public func setClipboardText(_ text: String) {
+        lock.lock()
+        defer { lock.unlock() }
+        guard let h = handle else { return }
+        text.withCString { mskey_set_clipboard_text(h, $0) }
+    }
+
+    public func takePendingCursorLeft() -> Int {
+        lock.lock()
+        defer { lock.unlock() }
+        guard let h = handle else { return 0 }
+        return Int(mskey_take_pending_cursor_left(h))
+    }
+
+    public func lastWordForDict() -> String? {
+        lock.lock()
+        defer { lock.unlock() }
+        guard let h = handle, let ptr = mskey_last_word_for_dict(h) else { return nil }
+        defer { mskey_free_string(ptr) }
+        let word = String(cString: ptr)
+        return word.isEmpty ? nil : word
+    }
+
+    @discardableResult
+    public func applyProfile(_ name: String) -> Bool {
+        lock.lock()
+        defer { lock.unlock() }
+        guard let h = handle else { return false }
+        return name.withCString { mskey_apply_profile(h, $0) }
+    }
+
+    private func behaviorKind(forCode code: UInt8) -> AppBehaviorKind {
         switch code {
         case 1: return .forceEnglish
         case 2: return .forceVietnamese
         case 3: return .blacklist
         default: return .default
         }
+    }
+
+    public func behavior(for appName: String) -> AppBehaviorKind {
+        lock.lock()
+        defer { lock.unlock() }
+        guard let h = handle else { return .default }
+        let code = appName.withCString { mskey_behavior_for_app(h, $0) }
+        return behaviorKind(forCode: code)
+    }
+
+    public func behaviorForWindow(processName: String, windowTitle: String) -> AppBehaviorKind {
+        lock.lock()
+        defer { lock.unlock() }
+        guard let h = handle else { return .default }
+        let code = processName.withCString { procPtr in
+            windowTitle.withCString { titlePtr in
+                mskey_behavior_for_window(h, procPtr, titlePtr)
+            }
+        }
+        return behaviorKind(forCode: code)
     }
 
     public static func convertText(_ input: String, from: CharsetKind, to: CharsetKind, caseMode: UInt8 = 0) -> String {
@@ -179,6 +251,15 @@ public final class RustEngine: @unchecked Sendable {
             defer { mskey_free_string(out) }
             return String(cString: out)
         }
+    }
+
+    public static func convertText(
+        _ input: String,
+        from: CharsetKind,
+        to: CharsetKind,
+        caseTransform: CaseTransformKind
+    ) -> String {
+        convertText(input, from: from, to: to, caseMode: caseTransform.rawValue)
     }
 
     public static func detectCharset(_ input: String) -> ConvertEncodingKind {
@@ -200,6 +281,33 @@ public final class RustEngine: @unchecked Sendable {
             }
             defer { mskey_free_string(out) }
             return String(cString: out)
+        }
+    }
+
+    public static func convertWithEncoding(
+        _ input: String,
+        from: ConvertEncodingKind,
+        to: ConvertEncodingKind,
+        caseTransform: CaseTransformKind
+    ) -> String {
+        convertWithEncoding(input, from: from, to: to, caseMode: caseTransform.rawValue)
+    }
+
+    public static func normalizeToneStyle(_ input: String, modernTone: Bool) -> String {
+        input.withCString { ptr in
+            guard let out = mskey_normalize_tone_style(ptr, modernTone) else {
+                return input
+            }
+            defer { mskey_free_string(out) }
+            return String(cString: out)
+        }
+    }
+
+    public static func isNewerVersion(current: String, candidate: String) -> Bool {
+        current.withCString { curPtr in
+            candidate.withCString { candPtr in
+                mskey_is_newer_version(curPtr, candPtr)
+            }
         }
     }
 

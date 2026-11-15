@@ -10,14 +10,15 @@ pub mod syllable;
 mod syllable_rimes;
 pub mod tables;
 pub mod transform;
+pub mod update;
 
 pub use config::{
-    AppBehavior, AppRule, Charset, Config, CustomKeyMap, HotkeyCombo, InputMethod, MacroEntry,
-    Mechanism, SwitchPreset, ThemeMode,
+    AppBehavior, AppRule, Charset, Config, ConfigProfile, CustomKeyMap, HoldEnglishKey,
+    HotkeyCombo, InputMethod, MacroEntry, Mechanism, SwitchPreset, ThemeMode,
 };
 pub use converter::{CaseTransform, apply_case_transform, convert_text};
 pub use converter_extra::{
     ConvertEncoding, convert_with_encoding, detect_charset, detect_convert_encoding,
-    strip_vietnamese_diacritics,
+    normalize_tone_style, strip_vietnamese_diacritics,
 };
 pub use engine::{Engine, EngineAction};

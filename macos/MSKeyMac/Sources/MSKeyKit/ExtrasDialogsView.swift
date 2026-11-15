@@ -239,48 +239,125 @@ public struct ExtrasSandboxView: View {
 public struct UserDictView: View {
     @ObservedObject public var store: MSKeyStore
     @Environment(\.dismiss) private var dismiss
-    @State private var text = ""
+    @State private var searchQuery = ""
+    @State private var newWord = ""
+    @State private var statusText = ""
 
     public init(store: MSKeyStore) {
         self.store = store
     }
 
+    private var filteredWords: [String] {
+        let q = searchQuery.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !q.isEmpty else { return store.config.user_dict_words }
+        return store.config.user_dict_words.filter { $0.localizedCaseInsensitiveContains(q) }
+    }
+
     public var body: some View {
         VStack(alignment: .leading, spacing: 12) {
             Text("Từ điển cá nhân").font(.headline)
-            Text("Mỗi dòng một từ (giúp giữ nguyên tên riêng/từ chuyên ngành khi kiểm tra chính tả):")
+            Text("Giữ nguyên tên riêng / từ chuyên ngành khi kiểm tra chính tả.")
                 .font(.caption)
                 .foregroundStyle(.secondary)
-            TextEditor(text: $text)
-                .font(.body)
-                .frame(height: 220)
-                .overlay(RoundedRectangle(cornerRadius: 6).stroke(Color.secondary.opacity(0.3)))
+
+            TextField("Tìm kiếm trong từ điển...", text: $searchQuery)
+
+            List {
+                ForEach(filteredWords, id: \.self) { word in
+                    HStack(spacing: 8) {
+                        Text(word).frame(maxWidth: .infinity, alignment: .leading)
+                        Button("Xoá") {
+                            store.updateConfig { cfg in
+                                cfg.user_dict_words.removeAll { $0.caseInsensitiveCompare(word) == .orderedSame }
+                            }
+                        }
+                        .frame(height: 22)
+                    }
+                }
+            }
+            .frame(height: 190)
 
             HStack(spacing: 8) {
-                Button("Xoá hết") { text = "" }.frame(height: 32)
-                Spacer()
-                Button("Huỷ") { dismiss() }.frame(height: 32)
-                Button("Lưu") {
-                    var seen = Set<String>()
-                    var cleaned: [String] = []
-                    for line in text.components(separatedBy: .newlines) {
-                        let trimmed = line.trimmingCharacters(in: .whitespacesAndNewlines)
-                        let key = trimmed.lowercased()
-                        if !trimmed.isEmpty && seen.insert(key).inserted {
-                            cleaned.append(trimmed)
+                TextField("Thêm từ mới...", text: $newWord)
+                Button("Thêm") {
+                    let w = newWord.trimmingCharacters(in: .whitespacesAndNewlines)
+                    guard !w.isEmpty else { return }
+                    store.updateConfig { cfg in
+                        if !cfg.user_dict_words.contains(where: { $0.caseInsensitiveCompare(w) == .orderedSame }) {
+                            cfg.user_dict_words.append(w)
                         }
                     }
-                    store.updateConfig { $0.user_dict_words = cleaned }
-                    dismiss()
+                    newWord = ""
+                    statusText = "Đã thêm từ mới"
                 }
-                .buttonStyle(.borderedProminent)
-                .frame(height: 32)
+                .disabled(newWord.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
+                .frame(height: 28)
+
+                Button("Thêm từ Esc gần nhất") {
+                    if let added = store.addLastEscWordToUserDict() {
+                        statusText = "Đã thêm: \(added)"
+                    } else {
+                        statusText = "Chưa có từ Esc gần nhất"
+                    }
+                }
+                .frame(height: 28)
+            }
+
+            HStack(spacing: 8) {
+                Button("Nhập .txt...") { importDictTxt() }.frame(height: 28)
+                Button("Xuất .txt...") { exportDictTxt() }.frame(height: 28)
+                Button("Xoá hết") {
+                    store.updateConfig { $0.user_dict_words.removeAll() }
+                    statusText = "Đã xoá toàn bộ từ điển"
+                }
+                .frame(height: 28)
+                if !statusText.isEmpty {
+                    Text(statusText).font(.caption).foregroundStyle(.secondary).lineLimit(1)
+                }
+                Spacer()
+                Button("Đóng") { dismiss() }.frame(height: 32)
             }
         }
         .padding(16)
-        .frame(width: 440)
-        .onAppear {
-            text = store.config.user_dict_words.joined(separator: "\n")
+        .frame(width: 520)
+    }
+
+    private func importDictTxt() {
+        let panel = NSOpenPanel()
+        panel.title = "Nhập từ điển cá nhân (.txt)"
+        panel.allowsMultipleSelection = false
+        panel.canChooseDirectories = false
+        guard panel.runModal() == .OK, let url = panel.url,
+              let raw = try? String(contentsOf: url, encoding: .utf8) else {
+            return
+        }
+        let parsed = MacConfigStore.parseUserDictText(raw)
+        guard !parsed.isEmpty else {
+            statusText = "Không tìm thấy từ hợp lệ"
+            return
+        }
+        store.updateConfig { cfg in
+            var seen = Set(cfg.user_dict_words.map { $0.lowercased() })
+            for w in parsed {
+                if seen.insert(w.lowercased()).inserted {
+                    cfg.user_dict_words.append(w)
+                }
+            }
+        }
+        statusText = "Đã nhập \(parsed.count) từ"
+    }
+
+    private func exportDictTxt() {
+        let panel = NSSavePanel()
+        panel.title = "Xuất từ điển cá nhân (.txt)"
+        panel.nameFieldStringValue = "mskey-user-dict.txt"
+        guard panel.runModal() == .OK, let url = panel.url else { return }
+        let body = MacConfigStore.formatUserDictText(store.config.user_dict_words)
+        do {
+            try body.write(to: url, atomically: true, encoding: .utf8)
+            statusText = "Đã xuất \(url.lastPathComponent)"
+        } catch {
+            statusText = "Lỗi xuất file"
         }
     }
 }

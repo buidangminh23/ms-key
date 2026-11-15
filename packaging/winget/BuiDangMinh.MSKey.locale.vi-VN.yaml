@@ -1,0 +1,21 @@
+PackageIdentifier: BuiDangMinh.MSKey
+PackageVersion: 0.1.2
+PackageLocale: vi-VN
+Publisher: Bui Dang Minh
+PublisherUrl: https://github.com/buidangminh23
+PublisherSupportUrl: https://github.com/buidangminh23/ms-key/issues
+PackageName: MS Key
+PackageUrl: https://github.com/buidangminh23/ms-key
+License: MIT
+LicenseUrl: https://github.com/buidangminh23/ms-key/blob/main/LICENSE
+ShortDescription: Bộ gõ tiếng Việt mã nguồn mở gọn nhẹ cho Windows, Linux và macOS
+Description: MS Key là bộ gõ tiếng Việt mã nguồn mở gọn nhẹ dùng chung lõi Rust trên Windows, Linux và macOS, hỗ trợ Telex, VNI, VIQR, Simple Telex, bảng gõ tùy chỉnh, gõ tắt động, chuyển mã, quy tắc theo ứng dụng và hồ sơ cấu hình.
+Tags:
+  - tieng-viet
+  - bo-go
+  - ime
+  - telex
+  - vni
+ReleaseNotesUrl: https://github.com/buidangminh23/ms-key/releases/tag/v0.1.2
+ManifestType: locale
+ManifestVersion: 1.6.0

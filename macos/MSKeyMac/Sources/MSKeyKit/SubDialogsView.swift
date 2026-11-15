@@ -4,6 +4,7 @@ import SwiftUI
 public struct MacroManagerView: View {
     @ObservedObject public var store: MSKeyStore
     @Environment(\.dismiss) private var dismiss
+    @State private var searchQuery = ""
     @State private var shortcut = ""
     @State private var expansion = ""
     @State private var statusText = ""
@@ -12,11 +13,21 @@ public struct MacroManagerView: View {
         self.store = store
     }
 
+    private var filteredMacros: [MacroItem] {
+        let q = searchQuery.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !q.isEmpty else { return store.config.macros }
+        return store.config.macros.filter {
+            $0.shortcut.localizedCaseInsensitiveContains(q)
+                || $0.expansion.localizedCaseInsensitiveContains(q)
+        }
+    }
+
     public var body: some View {
         VStack(alignment: .leading, spacing: 12) {
             Text("Bảng gõ tắt").font(.headline)
+            TextField("Tìm kiếm từ tắt hoặc nội dung...", text: $searchQuery)
             List {
-                ForEach(store.config.macros) { item in
+                ForEach(filteredMacros) { item in
                     HStack(spacing: 8) {
                         Text(item.shortcut).fontWeight(.semibold).frame(width: 110, alignment: .leading)
                         Text("→").foregroundStyle(.secondary)
@@ -46,7 +57,7 @@ public struct MacroManagerView: View {
                     }
                 }
             }
-            .frame(height: 200)
+            .frame(height: 190)
 
             HStack(spacing: 8) {
                 TextField("Từ tắt", text: $shortcut).frame(width: 110)
@@ -128,66 +139,115 @@ public struct AppRulesView: View {
     @ObservedObject public var store: MSKeyStore
     @Environment(\.dismiss) private var dismiss
     @State private var processName = ""
+    @State private var titlePattern = ""
     @State private var behavior: AppBehaviorKind = .forceEnglish
+    @State private var runningWindows: [RunningWindowInfo] = []
 
     public init(store: MSKeyStore) {
         self.store = store
     }
 
+    private func isSelectedRule(_ rule: AppRuleItem) -> Bool {
+        rule.process_name.caseInsensitiveCompare(processName.trimmingCharacters(in: .whitespaces)) == .orderedSame
+            && rule.titlePattern.caseInsensitiveCompare(titlePattern.trimmingCharacters(in: .whitespaces)) == .orderedSame
+    }
+
     public var body: some View {
         VStack(alignment: .leading, spacing: 12) {
-            Text("Danh sách ứng dụng").font(.headline)
-            Text("Hỗ trợ dấu * đại diện (vd: *code*, *.terminal) • Nhấn dòng để sửa")
+            Text("Danh sách ứng dụng & cửa sổ").font(.headline)
+            Text("Hỗ trợ dấu * đại diện cho tên app và tiêu đề cửa sổ (vd: *GitHub*) • Nhấn dòng để sửa")
                 .font(.caption)
                 .foregroundStyle(.secondary)
             List {
                 ForEach(store.config.app_rules) { rule in
                     HStack(spacing: 8) {
-                        Text(rule.process_name).frame(maxWidth: .infinity, alignment: .leading)
+                        VStack(alignment: .leading, spacing: 2) {
+                            Text(rule.process_name)
+                            if !rule.titlePattern.isEmpty {
+                                Text("Tiêu đề: \(rule.titlePattern)")
+                                    .font(.caption)
+                                    .foregroundStyle(.secondary)
+                            }
+                        }
+                        .frame(maxWidth: .infinity, alignment: .leading)
                         Text(rule.behavior.label).foregroundStyle(.secondary)
                         Button("Xoá") {
-                            store.updateConfig { $0.app_rules.removeAll { $0.process_name == rule.process_name } }
+                            store.updateConfig { cfg in
+                                cfg.app_rules.removeAll { $0.id == rule.id }
+                            }
                         }
                         .frame(height: 24)
                     }
                     .padding(.vertical, 2)
                     .background(
-                        processName.caseInsensitiveCompare(rule.process_name) == .orderedSame
-                            ? Color.accentColor.opacity(0.12)
-                            : Color.clear,
+                        isSelectedRule(rule) ? Color.accentColor.opacity(0.12) : Color.clear,
                         in: RoundedRectangle(cornerRadius: 4)
                     )
                     .contentShape(Rectangle())
                     .onTapGesture {
                         processName = rule.process_name
+                        titlePattern = rule.titlePattern
                         behavior = rule.behavior
                     }
                 }
             }
-            .frame(height: 200)
+            .frame(height: 190)
 
             HStack(spacing: 8) {
-                TextField("Tên app / binary (vd: Terminal)", text: $processName)
-                Picker("", selection: $behavior) {
-                    ForEach(AppBehaviorKind.allCases) { b in
-                        Text(b.label).tag(b)
-                    }
-                }
-                .labelsHidden()
-                .frame(width: 160)
-                Button("Lưu") {
-                    let p = processName.trimmingCharacters(in: .whitespaces)
-                    guard !p.isEmpty else { return }
-                    store.updateConfig { cfg in
-                        if let idx = cfg.app_rules.firstIndex(where: { $0.process_name.caseInsensitiveCompare(p) == .orderedSame }) {
-                            cfg.app_rules[idx].behavior = behavior
-                        } else {
-                            cfg.app_rules.append(AppRuleItem(process_name: p, behavior: behavior))
+                Menu("Chọn cửa sổ đang mở...") {
+                    if runningWindows.isEmpty {
+                        Text("Không có cửa sổ nào")
+                    } else {
+                        ForEach(runningWindows) { win in
+                            let label = win.windowTitle.isEmpty
+                                ? win.processName
+                                : "\(win.processName) — \(win.windowTitle)"
+                            Button(label) {
+                                processName = win.processName
+                                titlePattern = win.windowTitle
+                            }
                         }
                     }
-                    processName = ""
                 }
-                .frame(height: 28)
+                Button("Làm mới") {
+                    runningWindows = MacAppDetector.listRunningWindows()
+                }
+                .frame(height: 26)
+                Spacer()
+            }
+
+            VStack(spacing: 8) {
+                HStack(spacing: 8) {
+                    TextField("Tên app / binary (vd: Code, Chrome)", text: $processName)
+                    Picker("", selection: $behavior) {
+                        ForEach(AppBehaviorKind.allCases) { b in
+                            Text(b.label).tag(b)
+                        }
+                    }
+                    .labelsHidden()
+                    .frame(width: 160)
+                }
+                HStack(spacing: 8) {
+                    TextField("Mẫu tiêu đề cửa sổ (tùy chọn, vd: *GitHub*)", text: $titlePattern)
+                    Button("Lưu") {
+                        let p = processName.trimmingCharacters(in: .whitespaces)
+                        let t = titlePattern.trimmingCharacters(in: .whitespaces)
+                        guard !p.isEmpty else { return }
+                        store.updateConfig { cfg in
+                            if let idx = cfg.app_rules.firstIndex(where: {
+                                $0.process_name.caseInsensitiveCompare(p) == .orderedSame
+                                    && $0.titlePattern.caseInsensitiveCompare(t) == .orderedSame
+                            }) {
+                                cfg.app_rules[idx].behavior = behavior
+                            } else {
+                                cfg.app_rules.append(AppRuleItem(process_name: p, titlePattern: t, behavior: behavior))
+                            }
+                        }
+                        processName = ""
+                        titlePattern = ""
+                    }
+                    .frame(height: 28)
+                }
             }
 
             HStack {
@@ -196,7 +256,10 @@ public struct AppRulesView: View {
             }
         }
         .padding(16)
-        .frame(width: 500)
+        .frame(width: 540)
+        .onAppear {
+            runningWindows = MacAppDetector.listRunningWindows()
+        }
     }
 }
 
@@ -280,7 +343,7 @@ public struct ConverterView: View {
     @Environment(\.dismiss) private var dismiss
     @State private var fromCharset: ConvertEncodingKind = .auto
     @State private var toCharset: ConvertEncodingKind = .unicode
-    @State private var caseMode: UInt8 = 0
+    @State private var caseTransform: CaseTransformKind = .none
     @State private var text = ""
     @State private var detectedNote = ""
 
@@ -306,13 +369,10 @@ public struct ConverterView: View {
                 Picker("Đích", selection: $toCharset) {
                     ForEach(ConvertEncodingKind.targetCases) { cs in Text(cs.label).tag(cs) }
                 }
-                Picker("Chữ", selection: $caseMode) {
-                    Text("Giữ nguyên").tag(UInt8(0))
-                    Text("CHỮ HOA").tag(UInt8(1))
-                    Text("chữ thường").tag(UInt8(2))
-                    Text("Hoa đầu câu").tag(UInt8(3))
-                    Text("Hoa Mỗi Từ").tag(UInt8(4))
-                    Text("Bỏ dấu tiếng Việt").tag(UInt8(5))
+                Picker("Chữ", selection: $caseTransform) {
+                    ForEach(CaseTransformKind.allCases) { kind in
+                        Text(kind.label).tag(kind)
+                    }
                 }
             }
             TextEditor(text: $text)
@@ -329,7 +389,12 @@ public struct ConverterView: View {
 
                 Button("Chuyển mã") {
                     updateDetectedNote()
-                    text = RustEngine.convertWithEncoding(text, from: fromCharset, to: toCharset, caseMode: caseMode)
+                    text = RustEngine.convertWithEncoding(
+                        text,
+                        from: fromCharset,
+                        to: toCharset,
+                        caseTransform: caseTransform
+                    )
                 }
                 .buttonStyle(.borderedProminent)
                 .frame(height: 32)
@@ -368,6 +433,8 @@ public struct ConverterView: View {
 public enum HotkeyCaptureTarget: Sendable {
     case switchHotkey
     case convertHotkey
+    case undoHotkey
+    case convertSelectionHotkey
 }
 
 public struct HotkeyCaptureView: View {
@@ -399,11 +466,16 @@ public struct HotkeyCaptureView: View {
                 Button("Huỷ") { dismiss() }.frame(height: 32)
                 Button("Lưu") {
                     store.updateConfig { cfg in
-                        if target == .switchHotkey {
+                        switch target {
+                        case .switchHotkey:
                             cfg.custom_switch_hotkey = captured
                             cfg.switch_preset = .custom
-                        } else {
+                        case .convertHotkey:
                             cfg.clipboard_convert_hotkey = captured
+                        case .undoHotkey:
+                            cfg.undoLastWordHotkey = captured
+                        case .convertSelectionHotkey:
+                            cfg.convertSelectionHotkey = captured
                         }
                     }
                     dismiss()
@@ -415,9 +487,16 @@ public struct HotkeyCaptureView: View {
         .padding(16)
         .frame(width: 340)
         .onAppear {
-            captured = target == .switchHotkey
-                ? store.config.custom_switch_hotkey
-                : store.config.clipboard_convert_hotkey
+            switch target {
+            case .switchHotkey:
+                captured = store.config.custom_switch_hotkey
+            case .convertHotkey:
+                captured = store.config.clipboard_convert_hotkey
+            case .undoHotkey:
+                captured = store.config.undoLastWordHotkey
+            case .convertSelectionHotkey:
+                captured = store.config.convertSelectionHotkey
+            }
             monitor = NSEvent.addLocalMonitorForEvents(matching: .keyDown) { ev in
                 let vk = MacKeycode.toPortableVK(ev.keyCode)
                 let flags = ev.modifierFlags

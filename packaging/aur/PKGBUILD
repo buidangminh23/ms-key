@@ -1,0 +1,73 @@
+pkgname=mskey
+pkgver=0.1.2
+pkgrel=1
+pkgdesc="Lightweight open-source Vietnamese input method (IBus engine, Fcitx5 addon, and CLI)"
+arch=('x86_64' 'aarch64')
+url="https://github.com/buidangminh23/ms-key"
+license=('MIT')
+depends=('gtk3' 'ibus')
+makedepends=('cargo' 'cmake' 'pkgconf')
+optdepends=(
+  'fcitx5: build and run the optional Fcitx5 addon'
+  'xdotool: X11 direct key injection fallback'
+  'wtype: Wayland direct key injection fallback'
+)
+provides=('mskey' 'mskey-cli')
+conflicts=('mskey-bin' 'mskey-git')
+options=('!lto')
+source=("$pkgname-$pkgver.tar.gz::$url/archive/refs/tags/v$pkgver.tar.gz")
+sha256sums=('SKIP')
+
+prepare() {
+  cd "ms-key-$pkgver"
+  export RUSTUP_TOOLCHAIN=stable
+  cargo fetch --locked --target "$(rustc -vV | sed -n 's/host: //p')"
+}
+
+build() {
+  cd "ms-key-$pkgver"
+  export RUSTUP_TOOLCHAIN=stable
+  export CARGO_TARGET_DIR=target
+  cargo build --frozen --release -p mskey-linux -p mskey-cli -p mskey-ffi
+  for fcitx_dir in linux/fcitx5 linux; do
+    if [[ -f "$fcitx_dir/CMakeLists.txt" ]] && pkg-config --exists Fcitx5Core; then
+      cmake -B build-fcitx5 -S "$fcitx_dir" \
+        -DCMAKE_BUILD_TYPE=Release \
+        -DCMAKE_INSTALL_PREFIX=/usr \
+        -DMSKEY_FFI_LIB_DIR="$PWD/target/release" \
+        -DMSKEY_FFI_INCLUDE_DIR="$PWD/crates/mskey-ffi/include"
+      cmake --build build-fcitx5
+      break
+    fi
+  done
+}
+
+check() {
+  cd "ms-key-$pkgver"
+  export RUSTUP_TOOLCHAIN=stable
+  export CARGO_TARGET_DIR=target
+  cargo test --frozen -p mskey-core -p mskey-ffi -p mskey-cli -p mskey-linux
+}
+
+package() {
+  cd "ms-key-$pkgver"
+  install -Dm755 target/release/mskey-linux "$pkgdir/usr/bin/mskey-linux"
+  install -Dm755 target/release/mskey "$pkgdir/usr/bin/mskey"
+
+  install -d "$pkgdir/usr/share/ibus/component" "$pkgdir/usr/share/applications"
+  sed 's|/usr/local/bin/mskey-linux|/usr/bin/mskey-linux|g' data/mskey.xml > "$pkgdir/usr/share/ibus/component/mskey.xml"
+  sed 's|/usr/local/bin/mskey-linux|/usr/bin/mskey-linux|g' data/mskey.desktop > "$pkgdir/usr/share/applications/mskey.desktop"
+  chmod 644 "$pkgdir/usr/share/ibus/component/mskey.xml" "$pkgdir/usr/share/applications/mskey.desktop"
+
+  for sz in 16 24 32 48 64 128 256 512; do
+    install -Dm644 "assets/branding/mskey-${sz}.png" \
+      "$pkgdir/usr/share/icons/hicolor/${sz}x${sz}/apps/mskey.png"
+  done
+
+  if [[ -d build-fcitx5 ]]; then
+    DESTDIR="$pkgdir" cmake --install build-fcitx5
+  fi
+
+  install -Dm644 LICENSE "$pkgdir/usr/share/licenses/$pkgname/LICENSE"
+  install -Dm644 THIRD-PARTY-NOTICES.md "$pkgdir/usr/share/licenses/$pkgname/THIRD-PARTY-NOTICES.md"
+}

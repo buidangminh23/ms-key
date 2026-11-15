@@ -9,7 +9,7 @@ use windows_sys::Win32::Graphics::Gdi::{
 use windows_sys::Win32::UI::Controls::{DRAWITEMSTRUCT, ODT_BUTTON};
 use windows_sys::Win32::UI::Shell::Shell_NotifyIconW;
 use windows_sys::Win32::UI::WindowsAndMessaging::{
-    GetClientRect, GetDlgCtrlID, DrawIconEx, DI_NORMAL,
+    DI_NORMAL, DrawIconEx, GetClientRect, GetDlgCtrlID, WM_CTLCOLOREDIT, WM_CTLCOLORLISTBOX,
 };
 
 use crate::dialog_helpers::{handle_draw_combo_or_btn, read_window_text, scale_px, window_dpi};
@@ -20,9 +20,7 @@ use crate::theme::{
     draw_owner_button, draw_radio, draw_round_box, fill_solid, palette_for, rgb,
 };
 use crate::tray::TrayController;
-use crate::ui_controls::{
-    MainUiCtrls, apply_tab_visibility, sync_controls_from_config, *,
-};
+use crate::ui_controls::{MainUiCtrls, apply_tab_visibility, *};
 
 pub struct MainWinData {
     pub font: HFONT,
@@ -87,19 +85,17 @@ pub fn rebuild_theme_resources(hwnd: HWND) {
 }
 
 pub fn refresh_ui_and_tray(hwnd: HWND) {
-    let (cfg, fg_proc) = with_state(|st| (st.engine.config().clone(), st.fg_process.clone()));
-    if let Some(targets) = with_main_data(|d| d.ctrls.sync_targets()) {
-        sync_controls_from_config(targets, &cfg, &fg_proc);
-    }
-    let tray_req = with_main_data(|d| d.tray.prepare_update(cfg.vietnamese_enabled));
+    let effective_vi = with_state(|st| st.effective_vietnamese());
+    with_main_data_mut(|d| d.ctrls.sync_from_state());
+    let tray_req = with_main_data(|d| d.tray.prepare_update(effective_vi));
     if let Some((msg, nid, _)) = tray_req {
         let updated = unsafe { Shell_NotifyIconW(msg, &nid) } != 0;
         if updated {
             with_main_data_mut(|d| d.tray.mark_installed());
         }
-        unsafe {
-            InvalidateRect(hwnd, ptr::null(), 1);
-        }
+    }
+    unsafe {
+        InvalidateRect(hwnd, ptr::null(), 0);
     }
 }
 
@@ -129,32 +125,32 @@ pub fn paint_main_window(hwnd: HWND) {
     let progress = reveal_started.map_or(1.0, |start| (start.elapsed().as_secs_f32() / 0.48).min(1.0));
     let eased = 1.0 - (1.0 - progress).powi(3);
     let size = s((32.0 + 12.0 * eased).round() as i32);
-    unsafe { DrawIconEx(hdc, s(502) - size / 2, s(120) - size / 2, crate::tray::app_icon(64), size, size, 0, ptr::null_mut(), DI_NORMAL) };
+    unsafe { DrawIconEx(hdc, s(520) - size / 2, s(114) - size / 2, crate::tray::app_icon(64), size, size, 0, ptr::null_mut(), DI_NORMAL) };
     if reveal_started.is_some() {
-        let track = RECT { left: s(464), top: s(144), right: s(540), bottom: s(146) };
+        let track = RECT { left: s(482), top: s(138), right: s(558), bottom: s(140) };
         fill_solid(hdc, &track, pal.border);
         let bar = RECT { right: track.left + ((track.right - track.left) as f32 * eased) as i32, ..track };
         fill_solid(hdc, &bar, pal.accent);
     }
-    let top_gb = RECT { left: s(16), top: s(12), right: s(444), bottom: s(140) };
+    let top_gb = RECT { left: s(16), top: s(12), right: s(460), bottom: s(140) };
     draw_group_box(hdc, &top_gb, "Điều khiển", pal, bold_font);
 
-    let card = RECT { left: s(16), top: s(184), right: s(544), bottom: s(512) };
+    let card = RECT { left: s(16), top: s(190), right: s(564), bottom: s(580) };
     draw_round_box(hdc, &card, s(8), pal.card_bg, pal.border);
 
     match active_tab {
         0 => {
-            let mg = RECT { left: s(32), top: s(376), right: s(528), bottom: s(496) };
+            let mg = RECT { left: s(32), top: s(404), right: s(548), bottom: s(566) };
             draw_group_box(hdc, &mg, "Gõ tắt & phím tắt nhanh", pal, bold_font);
         }
         1 => {
-            let sg = RECT { left: s(32), top: s(200), right: s(528), bottom: s(308) };
+            let sg = RECT { left: s(32), top: s(200), right: s(548), bottom: s(304) };
             draw_group_box(hdc, &sg, "Phím chuyển V/E", pal, bold_font);
-            let cg = RECT { left: s(32), top: s(384), right: s(528), bottom: s(496) };
-            draw_group_box(hdc, &cg, "Chuyển mã & Nhập EVKey", pal, bold_font);
+            let cg = RECT { left: s(32), top: s(404), right: s(548), bottom: s(568) };
+            draw_group_box(hdc, &cg, "Phím tắt nhanh & Nhập EVKey", pal, bold_font);
         }
         _ => {
-            let ag = RECT { left: s(32), top: s(332), right: s(528), bottom: s(496) };
+            let ag = RECT { left: s(32), top: s(374), right: s(548), bottom: s(568) };
             draw_group_box(hdc, &ag, "Tự động chuyển V/E theo ứng dụng", pal, bold_font);
         }
     }
@@ -166,7 +162,7 @@ pub fn draw_main_item(hwnd: HWND, lparam: LPARAM) -> Option<LRESULT> {
     let (pal, font, bold_font, active_tab) = snapshot?;
     let dis = unsafe { &*(lparam as *const DRAWITEMSTRUCT) };
     let dpi = window_dpi(hwnd);
-    let cfg = with_state(|st| st.engine.config().clone());
+    let (cfg, effective_vi) = with_state(|st| (st.engine.config().clone(), st.effective_vietnamese()));
     if dis.CtlType == ODT_BUTTON {
         let txt = read_window_text(dis.hwndItem);
         if let Some(checked) = MainUiCtrls::is_checkbox_checked(dis.CtlID, &cfg) {
@@ -181,7 +177,7 @@ pub fn draw_main_item(hwnd: HWND, lparam: LPARAM) -> Option<LRESULT> {
         }
         let id = dis.CtlID as usize;
         if id == IDC_VE_PILL {
-            let fill = if cfg.vietnamese_enabled { pal.danger_badge } else { pal.accent };
+            let fill = if effective_vi { pal.danger_badge } else { pal.accent };
             draw_round_box(dis.hDC, &dis.rcItem, 6, fill, fill);
             draw_centered_label(dis.hDC, &dis.rcItem, &txt, bold_font, rgb(255, 255, 255));
             return Some(1);
@@ -218,9 +214,17 @@ fn draw_centered_label(hdc: HDC, rc: &RECT, txt: &str, font: HFONT, fg: u32) {
     }
 }
 
-pub fn ctl_color_main(wparam: WPARAM, lparam: LPARAM) -> Option<LRESULT> {
-    let snapshot = with_main_data(|d| (d.pal, d.card_brush, d.bg_brush));
-    let (pal, card_brush, bg_brush) = snapshot?;
+pub fn ctl_color_main(msg: u32, wparam: WPARAM, lparam: LPARAM) -> Option<LRESULT> {
+    let snapshot = with_main_data(|d| (d.pal, d.card_brush, d.bg_brush, d.in_brush));
+    let (pal, card_brush, bg_brush, in_brush) = snapshot?;
+    let hdc = wparam as HDC;
+    if matches!(msg, WM_CTLCOLOREDIT | WM_CTLCOLORLISTBOX) {
+        unsafe {
+            SetTextColor(hdc, pal.text);
+            SetBkColor(hdc, pal.input_bg);
+        }
+        return Some(in_brush as LRESULT);
+    }
     let child = lparam as HWND;
     let id = unsafe { GetDlgCtrlID(child) } as usize;
     let in_card = matches!(
@@ -228,12 +232,15 @@ pub fn ctl_color_main(wparam: WPARAM, lparam: LPARAM) -> Option<LRESULT> {
         0 | IDC_LBL_ACTIVE_APP
             | IDC_LBL_SUGGEST_TIP
             | IDC_LBL_SWITCH_CUSTOM
+            | IDC_LBL_HOLD_EN
             | IDC_LBL_CONV_HOTKEY
+            | IDC_LBL_UNDO_HOTKEY
+            | IDC_LBL_CONV_SEL_HOTKEY
             | IDC_LBL_THEME
+            | IDC_LBL_SYNC_PATH
             | IDC_LBL_CUR_APP
             | IDC_LBL_APP_HINT
     );
-    let hdc = wparam as HDC;
     let fg = if matches!(id, IDC_LBL_FOOTER_VER | IDC_LBL_SUGGEST_TIP | IDC_LBL_APP_HINT) {
         pal.subtle_text
     } else {

@@ -47,7 +47,12 @@ pub const ID_TRAY_EXTRAS: usize = 4033;
 pub const ID_TRAY_USER_DICT: usize = 4034;
 pub const ID_TRAY_QUICK_TELEX: usize = 4035;
 pub const ID_TRAY_SHOW_OSD: usize = 4036;
+pub const ID_TRAY_CONVERT_SELECTION: usize = 4037;
+pub const ID_TRAY_ADD_LAST_ESC: usize = 4038;
+pub const ID_TRAY_CHECK_UPDATE: usize = 4039;
 pub const ID_TRAY_EXIT: usize = 4099;
+pub const ID_TRAY_PROFILE_BASE: usize = 4100;
+pub const ID_TRAY_PROFILE_MAX: usize = 4199;
 
 pub struct TrayController {
     hwnd: HWND,
@@ -166,10 +171,41 @@ pub fn show_tray_menu(hwnd: HWND, vietnamese: bool, charset: Charset, method: In
         AppendMenuW(menu, MF_POPUP, method_menu as usize, m_lbl.as_ptr());
 
         AppendMenuW(menu, MF_SEPARATOR, 0, ptr::null());
-        let (qt, osd) = crate::state::with_state(|st| {
+        let (qt, osd, active_profile, profile_names, last_word) = crate::state::with_state(|st| {
             let c = st.engine.config();
-            (c.quick_telex, c.show_switch_osd)
+            (
+                c.quick_telex,
+                c.show_switch_osd,
+                c.active_profile.clone(),
+                c.all_profile_names(),
+                st.engine.last_word_for_dict(),
+            )
         });
+        let profile_menu = CreatePopupMenu();
+        for (idx, name) in profile_names.iter().enumerate() {
+            let id = ID_TRAY_PROFILE_BASE + idx;
+            if id <= ID_TRAY_PROFILE_MAX {
+                append_item(
+                    profile_menu,
+                    id,
+                    name,
+                    name.eq_ignore_ascii_case(&active_profile),
+                );
+            }
+        }
+        let p_lbl = to_wide("Hồ sơ");
+        AppendMenuW(menu, MF_POPUP, profile_menu as usize, p_lbl.as_ptr());
+
+        if let Some(word) = last_word {
+            let preview: String = word.chars().take(24).collect();
+            append_item(
+                menu,
+                ID_TRAY_ADD_LAST_ESC,
+                &format!("Thêm từ Esc gần nhất ({})", preview),
+                false,
+            );
+        }
+        append_item(menu, ID_TRAY_CONVERT_SELECTION, "Chuyển đổi vùng chọn", false);
         append_item(menu, ID_TRAY_MACROS, "Bảng gõ tắt...", false);
         append_item(menu, ID_TRAY_CONVERT, "Chuyển mã Clipboard...", false);
         append_item(menu, ID_TRAY_APPS, "Danh sách ứng dụng...", false);
@@ -178,6 +214,7 @@ pub fn show_tray_menu(hwnd: HWND, vietnamese: bool, charset: Charset, method: In
         AppendMenuW(menu, MF_SEPARATOR, 0, ptr::null());
         append_item(menu, ID_TRAY_QUICK_TELEX, "Gõ nhanh (Quick Telex)", qt);
         append_item(menu, ID_TRAY_SHOW_OSD, "Hiện OSD khi chuyển V/E", osd);
+        append_item(menu, ID_TRAY_CHECK_UPDATE, "Kiểm tra cập nhật...", false);
         AppendMenuW(menu, MF_SEPARATOR, 0, ptr::null());
         append_item(menu, ID_TRAY_EXIT, "Thoát MS Key", false);
 

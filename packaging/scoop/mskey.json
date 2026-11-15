@@ -1,0 +1,58 @@
+{
+  "version": "0.1.2",
+  "description": "Lightweight open-source Vietnamese input method for Windows, Linux, and macOS",
+  "homepage": "https://github.com/buidangminh23/ms-key",
+  "license": "MIT",
+  "architecture": {
+    "64bit": {
+      "url": [
+        "https://github.com/buidangminh23/ms-key/releases/download/v0.1.2/MSKey-0.1.2-windows-x64-portable.zip",
+        "https://github.com/buidangminh23/ms-key/releases/download/v0.1.2/mskey-cli-0.1.2-windows-x64.zip"
+      ],
+      "hash": [
+        "45d9a94332c04aa797652a27031bb6e62495c485b7352eade94a6c6cd33f6db1",
+        "0000000000000000000000000000000000000000000000000000000000000000"
+      ]
+    },
+    "arm64": {
+      "url": [
+        "https://github.com/buidangminh23/ms-key/releases/download/v0.1.2/MSKey-0.1.2-windows-arm64-portable.zip",
+        "https://github.com/buidangminh23/ms-key/releases/download/v0.1.2/mskey-cli-0.1.2-windows-arm64.zip"
+      ],
+      "hash": [
+        "0000000000000000000000000000000000000000000000000000000000000000",
+        "0000000000000000000000000000000000000000000000000000000000000000"
+      ]
+    }
+  },
+  "bin": [
+    "MSKey.exe",
+    "mskey.exe"
+  ],
+  "shortcuts": [
+    [
+      "MSKey.exe",
+      "MS Key"
+    ]
+  ],
+  "checkver": "github",
+  "autoupdate": {
+    "architecture": {
+      "64bit": {
+        "url": [
+          "https://github.com/buidangminh23/ms-key/releases/download/v$version/MSKey-$version-windows-x64-portable.zip",
+          "https://github.com/buidangminh23/ms-key/releases/download/v$version/mskey-cli-$version-windows-x64.zip"
+        ]
+      },
+      "arm64": {
+        "url": [
+          "https://github.com/buidangminh23/ms-key/releases/download/v$version/MSKey-$version-windows-arm64-portable.zip",
+          "https://github.com/buidangminh23/ms-key/releases/download/v$version/mskey-cli-$version-windows-arm64.zip"
+        ]
+      }
+    },
+    "hash": {
+      "url": "$baseurl/SHA256SUMS"
+    }
+  }
+}

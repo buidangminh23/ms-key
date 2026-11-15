@@ -152,6 +152,7 @@ unsafe extern "C" {
 
     pub fn gtk_combo_box_text_new() -> *mut GtkWidget;
     pub fn gtk_combo_box_text_append_text(cb: *mut GtkComboBoxText, text: *const c_char);
+    pub fn gtk_combo_box_text_remove_all(cb: *mut GtkComboBoxText);
     pub fn gtk_combo_box_set_active(cb: *mut GtkComboBox, index: c_int);
     pub fn gtk_combo_box_get_active(cb: *mut GtkComboBox) -> c_int;
 
@@ -173,6 +174,7 @@ unsafe extern "C" {
     pub fn gtk_entry_set_text(entry: *mut GtkEntry, text: *const c_char);
     pub fn gtk_entry_get_text(entry: *mut GtkEntry) -> *const c_char;
     pub fn gtk_entry_set_max_length(entry: *mut GtkEntry, max: c_int);
+    pub fn gtk_entry_set_placeholder_text(entry: *mut GtkEntry, text: *const c_char);
     pub fn gtk_spin_button_new_with_range(min: f64, max: f64, step: f64) -> *mut GtkWidget;
     pub fn gtk_spin_button_set_value(sb: *mut GtkSpinButton, value: f64);
     pub fn gtk_spin_button_get_value_as_int(sb: *mut GtkSpinButton) -> c_int;
@@ -224,6 +226,7 @@ unsafe extern "C" {
     pub fn gtk_widget_show(w: *mut GtkWidget);
     pub fn gtk_widget_hide(w: *mut GtkWidget);
     pub fn gtk_widget_show_all(w: *mut GtkWidget);
+    pub fn gtk_widget_set_sensitive(w: *mut GtkWidget, sensitive: c_int);
     pub fn gtk_widget_set_size_request(w: *mut GtkWidget, width: c_int, height: c_int);
     pub fn gtk_widget_set_hexpand(w: *mut GtkWidget, expand: c_int);
     pub fn gtk_widget_set_vexpand(w: *mut GtkWidget, expand: c_int);

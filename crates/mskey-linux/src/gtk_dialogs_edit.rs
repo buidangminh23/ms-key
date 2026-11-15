@@ -16,9 +16,10 @@ use crate::gtk_ffi::{
 };
 use crate::gtk_helpers::{
     append_listbox_row, clear_listbox, create_modal_gtk, get_combo, make_button, make_combo,
-    make_entry, make_grid, make_hbox, make_label, make_vbox, pack, read_entry, run_modal_gtk,
-    set_combo, write_entry,
+    make_entry, make_entry_placeholder, make_grid, make_hbox, make_label, make_vbox, pack,
+    read_entry, refill_combo, run_modal_gtk, set_combo, write_entry,
 };
+use crate::linux_extra::{ActiveWindowInfo, list_running_windows};
 
 struct MacroWidgets {
     dlg: *mut GtkWidget,
@@ -26,6 +27,8 @@ struct MacroWidgets {
     list: *mut GtkWidget,
     key_ed: *mut GtkWidget,
     val_ed: *mut GtkWidget,
+    search_ed: *mut GtkWidget,
+    filtered_indices: Vec<usize>,
 }
 
 struct AppWidgets {
@@ -33,7 +36,10 @@ struct AppWidgets {
     cfg: Config,
     list: *mut GtkWidget,
     name_ed: *mut GtkWidget,
+    title_ed: *mut GtkWidget,
     mode_cb: *mut GtkWidget,
+    running_cb: *mut GtkWidget,
+    running_windows: Vec<ActiveWindowInfo>,
 }
 
 struct CustomWidgets {
@@ -83,6 +89,13 @@ pub fn show_macro_dialog(parent: *mut GtkWindow, cfg: &mut Config) -> bool {
     pack(bar2, b_close, false, false, 0);
     pack(root, bar2, false, false, 0);
 
+    let search_bar = make_hbox(6);
+    let search_ed = make_entry_placeholder("", "Tìm từ viết tắt hoặc nội dung...");
+    unsafe { gtk_widget_set_hexpand(search_ed, 1) };
+    pack(search_bar, make_label("Tìm kiếm:", false), false, false, 0);
+    pack(search_bar, search_ed, true, true, 0);
+    pack(root, search_bar, false, false, 0);
+
     let sw = unsafe { gtk_scrolled_window_new(ptr::null_mut(), ptr::null_mut()) };
     let list = unsafe { gtk_list_box_new() };
     unsafe {
@@ -96,9 +109,18 @@ pub fn show_macro_dialog(parent: *mut GtkWindow, cfg: &mut Config) -> bool {
     unsafe { gtk_container_add(dlg, root) };
 
     MACRO_DLG.with(|c| {
-        *c.borrow_mut() = Some(MacroWidgets { dlg, cfg: cfg.clone(), list, key_ed, val_ed });
+        *c.borrow_mut() = Some(MacroWidgets {
+            dlg,
+            cfg: cfg.clone(),
+            list,
+            key_ed,
+            val_ed,
+            search_ed,
+            filtered_indices: Vec::new(),
+        });
     });
     reload_macro_list();
+    connect_signal(search_ed, "changed", on_macro_search as *const c_void, 0);
     connect_signal(b_add, "clicked", on_macro_add as *const c_void, 0);
     connect_signal(b_tgl, "clicked", on_macro_toggle as *const c_void, 0);
     connect_signal(b_del, "clicked", on_macro_del as *const c_void, 0);
@@ -115,16 +137,42 @@ pub fn show_macro_dialog(parent: *mut GtkWindow, cfg: &mut Config) -> bool {
 }
 
 fn reload_macro_list() {
-    MACRO_DLG.with(|c| {
+    let mut rows: Vec<(usize, String)> = Vec::new();
+    let list = MACRO_DLG.with(|c| {
         if let Some(st) = c.borrow().as_ref() {
-            clear_listbox(st.list);
-            for m in &st.cfg.macros {
+            let q = read_entry(st.search_ed).trim().to_lowercase();
+            for (idx, m) in st.cfg.macros.iter().enumerate() {
+                if !q.is_empty()
+                    && !m.shortcut.to_lowercase().contains(&q)
+                    && !m.expansion.to_lowercase().contains(&q)
+                {
+                    continue;
+                }
                 let prefix = if m.enabled { "" } else { "[Tắt] " };
                 let exp = m.expansion.replace('\n', "\\n");
-                append_listbox_row(st.list, &format!("{prefix}{}  ->  {exp}", m.shortcut));
+                rows.push((idx, format!("{prefix}{}  ->  {exp}", m.shortcut)));
             }
+            st.list
+        } else {
+            ptr::null_mut()
         }
     });
+    if list.is_null() {
+        return;
+    }
+    MACRO_DLG.with(|c| {
+        if let Some(st) = c.borrow_mut().as_mut() {
+            st.filtered_indices = rows.iter().map(|(i, _)| *i).collect();
+        }
+    });
+    clear_listbox(list);
+    for (_, text) in &rows {
+        append_listbox_row(list, text);
+    }
+}
+
+unsafe extern "C" fn on_macro_search(_: *mut GtkWidget, _: *mut c_void) {
+    reload_macro_list();
 }
 
 unsafe extern "C" fn on_macro_sel(_: *mut GtkWidget, _: *mut GtkWidget, _: *mut c_void) {
@@ -132,8 +180,11 @@ unsafe extern "C" fn on_macro_sel(_: *mut GtkWidget, _: *mut GtkWidget, _: *mut 
         if let Some(st) = c.borrow().as_ref() {
             let row = unsafe { gtk_list_box_get_selected_row(st.list) };
             if !row.is_null() {
-                let idx = unsafe { gtk_list_box_row_get_index(row) };
-                if let Some(entry) = st.cfg.macros.get(idx as usize) {
+                let row_idx = unsafe { gtk_list_box_row_get_index(row) };
+                if row_idx >= 0
+                    && let Some(&real_idx) = st.filtered_indices.get(row_idx as usize)
+                    && let Some(entry) = st.cfg.macros.get(real_idx)
+                {
                     write_entry(st.key_ed, &entry.shortcut);
                     write_entry(st.val_ed, &entry.expansion.replace('\n', "\\n"));
                 }
@@ -166,8 +217,11 @@ unsafe extern "C" fn on_macro_toggle(_: *mut GtkWidget, _: *mut c_void) {
         if let Some(st) = c.borrow_mut().as_mut() {
             let row = unsafe { gtk_list_box_get_selected_row(st.list) };
             if !row.is_null() {
-                let idx = unsafe { gtk_list_box_row_get_index(row) } as usize;
-                if let Some(m) = st.cfg.macros.get_mut(idx) {
+                let row_idx = unsafe { gtk_list_box_row_get_index(row) };
+                if row_idx >= 0
+                    && let Some(&real_idx) = st.filtered_indices.get(row_idx as usize)
+                    && let Some(m) = st.cfg.macros.get_mut(real_idx)
+                {
                     m.enabled = !m.enabled;
                 }
             }
@@ -215,9 +269,12 @@ unsafe extern "C" fn on_macro_del(_: *mut GtkWidget, _: *mut c_void) {
         if let Some(st) = c.borrow_mut().as_mut() {
             let row = unsafe { gtk_list_box_get_selected_row(st.list) };
             if !row.is_null() {
-                let idx = unsafe { gtk_list_box_row_get_index(row) } as usize;
-                if idx < st.cfg.macros.len() {
-                    st.cfg.macros.remove(idx);
+                let row_idx = unsafe { gtk_list_box_row_get_index(row) };
+                if row_idx >= 0
+                    && let Some(&real_idx) = st.filtered_indices.get(row_idx as usize)
+                    && real_idx < st.cfg.macros.len()
+                {
+                    st.cfg.macros.remove(real_idx);
                 }
             }
         }
@@ -231,18 +288,47 @@ unsafe extern "C" fn on_macro_close(_: *mut GtkWidget, _: *mut c_void) {
     }
 }
 
+fn populate_running_windows(cb: *mut GtkWidget) -> Vec<ActiveWindowInfo> {
+    let wins = list_running_windows();
+    let mut items = Vec::with_capacity(wins.len() + 1);
+    items.push(String::from("-- Chọn cửa sổ đang mở --"));
+    for w in &wins {
+        if w.title.is_empty() {
+            items.push(w.app.clone());
+        } else {
+            let short_title: String = w.title.chars().take(48).collect();
+            items.push(format!("{} — {short_title}", w.app));
+        }
+    }
+    refill_combo(cb, &items, 0);
+    wins
+}
+
 pub fn show_app_rules_dialog(parent: *mut GtkWindow, cfg: &mut Config) -> bool {
-    let dlg = create_modal_gtk(parent, "Danh sách ứng dụng thông minh", 484, 340);
+    let dlg = create_modal_gtk(parent, "Danh sách ứng dụng thông minh", 580, 380);
     let root = make_vbox(8);
+
+    let pick_bar = make_hbox(6);
+    let running_cb = make_combo(&["-- Chọn cửa sổ đang mở --"]);
+    let b_refresh = make_button("Làm mới", false);
+    pack(pick_bar, make_label("Cửa sổ đang chạy:", false), false, false, 0);
+    pack(pick_bar, running_cb, true, true, 0);
+    pack(pick_bar, b_refresh, false, false, 0);
+    pack(root, pick_bar, false, false, 0);
+
     let grid = make_grid(4, 8);
-    let name_ed = make_entry("");
+    let name_ed = make_entry_placeholder("", "vd: code, firefox, *");
+    let title_ed = make_entry_placeholder("", "vd: *GitHub* (để trống = tất cả)");
     let mode_cb = make_combo(&["Luôn Tiếng Anh (E)", "Luôn Tiếng Việt (V)", "Bỏ qua (Blacklist)"]);
     unsafe {
         gtk_widget_set_hexpand(name_ed, 1);
-        gtk_grid_attach(grid, make_label("Tên ứng dụng / WM_CLASS (hỗ trợ *)", false), 0, 0, 1, 1);
-        gtk_grid_attach(grid, make_label("Quy tắc", false), 1, 0, 1, 1);
+        gtk_widget_set_hexpand(title_ed, 1);
+        gtk_grid_attach(grid, make_label("Tên ứng dụng / WM_CLASS (*)", false), 0, 0, 1, 1);
+        gtk_grid_attach(grid, make_label("Mẫu tiêu đề (*)", false), 1, 0, 1, 1);
+        gtk_grid_attach(grid, make_label("Quy tắc", false), 2, 0, 1, 1);
         gtk_grid_attach(grid, name_ed, 0, 1, 1, 1);
-        gtk_grid_attach(grid, mode_cb, 1, 1, 1, 1);
+        gtk_grid_attach(grid, title_ed, 1, 1, 1, 1);
+        gtk_grid_attach(grid, mode_cb, 2, 1, 1, 1);
     }
     pack(root, grid, false, false, 0);
 
@@ -268,10 +354,22 @@ pub fn show_app_rules_dialog(parent: *mut GtkWindow, cfg: &mut Config) -> bool {
     pack(root, sw, true, true, 0);
     unsafe { gtk_container_add(dlg, root) };
 
+    let running_windows = populate_running_windows(running_cb);
     APP_DLG.with(|c| {
-        *c.borrow_mut() = Some(AppWidgets { dlg, cfg: cfg.clone(), list, name_ed, mode_cb });
+        *c.borrow_mut() = Some(AppWidgets {
+            dlg,
+            cfg: cfg.clone(),
+            list,
+            name_ed,
+            title_ed,
+            mode_cb,
+            running_cb,
+            running_windows,
+        });
     });
     reload_app_list();
+    connect_signal(running_cb, "changed", on_app_pick_running as *const c_void, 0);
+    connect_signal(b_refresh, "clicked", on_app_refresh as *const c_void, 0);
     connect_signal(b_add, "clicked", on_app_add as *const c_void, 0);
     connect_signal(b_del, "clicked", on_app_del as *const c_void, 0);
     connect_signal(b_close, "clicked", on_app_close as *const c_void, 0);
@@ -282,6 +380,32 @@ pub fn show_app_rules_dialog(parent: *mut GtkWindow, cfg: &mut Config) -> bool {
         return true;
     }
     false
+}
+
+unsafe extern "C" fn on_app_pick_running(_: *mut GtkWidget, _: *mut c_void) {
+    APP_DLG.with(|c| {
+        if let Some(st) = c.borrow().as_ref() {
+            let idx = get_combo(st.running_cb);
+            if idx > 0
+                && let Some(win) = st.running_windows.get(idx - 1)
+            {
+                write_entry(st.name_ed, &win.app);
+                write_entry(st.title_ed, &win.title);
+            }
+        }
+    });
+}
+
+unsafe extern "C" fn on_app_refresh(_: *mut GtkWidget, _: *mut c_void) {
+    let cb = APP_DLG.with(|c| c.borrow().as_ref().map(|st| st.running_cb));
+    if let Some(cb) = cb {
+        let wins = populate_running_windows(cb);
+        APP_DLG.with(|c| {
+            if let Some(st) = c.borrow_mut().as_mut() {
+                st.running_windows = wins;
+            }
+        });
+    }
 }
 
 fn reload_app_list() {
@@ -295,7 +419,14 @@ fn reload_app_list() {
                     AppBehavior::Blacklist => "Bỏ qua (Blacklist)",
                     AppBehavior::Default => "Mặc định",
                 };
-                append_listbox_row(st.list, &format!("{}  —  {}", r.process_name, tag));
+                let target = if r.title_pattern.trim().is_empty() {
+                    r.process_name.clone()
+                } else if r.process_name.trim().is_empty() {
+                    format!("[Tiêu đề: {}]", r.title_pattern)
+                } else {
+                    format!("{}  [Tiêu đề: {}]", r.process_name, r.title_pattern)
+                };
+                append_listbox_row(st.list, &format!("{target}  —  {tag}"));
             }
         }
     });
@@ -309,6 +440,7 @@ unsafe extern "C" fn on_app_sel(_: *mut GtkWidget, _: *mut GtkWidget, _: *mut c_
                 let idx = unsafe { gtk_list_box_row_get_index(row) } as usize;
                 if let Some(rule) = st.cfg.app_rules.get(idx) {
                     write_entry(st.name_ed, &rule.process_name);
+                    write_entry(st.title_ed, &rule.title_pattern);
                     let mode_idx = match rule.behavior {
                         AppBehavior::ForceVietnamese => 1,
                         AppBehavior::Blacklist => 2,
@@ -325,7 +457,8 @@ unsafe extern "C" fn on_app_add(_: *mut GtkWidget, _: *mut c_void) {
     APP_DLG.with(|c| {
         if let Some(st) = c.borrow_mut().as_mut() {
             let name = read_entry(st.name_ed).trim().to_string();
-            if name.is_empty() {
+            let title = read_entry(st.title_ed).trim().to_string();
+            if name.is_empty() && title.is_empty() {
                 return;
             }
             let b = match get_combo(st.mode_cb) {
@@ -333,7 +466,7 @@ unsafe extern "C" fn on_app_add(_: *mut GtkWidget, _: *mut c_void) {
                 2 => AppBehavior::Blacklist,
                 _ => AppBehavior::ForceEnglish,
             };
-            st.cfg.set_app_rule(&name, b);
+            st.cfg.set_window_rule(&name, &title, b);
         }
     });
     reload_app_list();

@@ -8,14 +8,14 @@ use crate::gtk_ffi::{
     gtk_box_pack_start, gtk_button_new_with_label, gtk_check_button_new_with_label,
     gtk_clipboard_get_for_display, gtk_clipboard_set_text, gtk_clipboard_wait_for_text,
     gtk_combo_box_get_active, gtk_combo_box_set_active, gtk_combo_box_text_append_text,
-    gtk_combo_box_text_new, gtk_container_add, gtk_container_get_children, gtk_container_remove,
-    gtk_container_set_border_width, gtk_entry_get_text, gtk_entry_new, gtk_entry_set_text,
+    gtk_combo_box_text_new, gtk_combo_box_text_remove_all, gtk_container_add, gtk_container_get_children, gtk_container_remove,
+    gtk_container_set_border_width, gtk_entry_get_text, gtk_entry_new, gtk_entry_set_placeholder_text, gtk_entry_set_text,
     gtk_frame_new, gtk_grid_new, gtk_grid_set_column_spacing, gtk_grid_set_row_spacing,
     gtk_label_new, gtk_label_set_text, gtk_label_set_xalign, gtk_list_box_insert, gtk_main,
     gtk_main_quit, gtk_radio_button_new_with_label_from_widget, gtk_text_buffer_get_end_iter,
     gtk_text_buffer_get_start_iter, gtk_text_buffer_get_text, gtk_text_buffer_set_text,
     gtk_text_view_get_buffer, gtk_text_view_set_wrap_mode, gtk_toggle_button_get_active,
-    gtk_toggle_button_set_active, gtk_widget_set_hexpand, gtk_widget_show_all,
+    gtk_toggle_button_set_active, gtk_widget_destroy, gtk_widget_set_hexpand, gtk_widget_show_all,
     gtk_window_set_default_size, gtk_window_set_modal, gtk_window_set_position,
     gtk_window_set_title, gtk_window_set_transient_for, GtkTextIter, gtk_window_new,
 };
@@ -126,6 +126,29 @@ pub fn set_combo(cb: *mut GtkWidget, idx: usize) {
 
 pub fn get_combo(cb: *mut GtkWidget) -> usize {
     unsafe { gtk_combo_box_get_active(cb).max(0) as usize }
+}
+
+pub fn refill_combo(cb: *mut GtkWidget, items: &[String], active_idx: usize) {
+    unsafe {
+        gtk_combo_box_text_remove_all(cb);
+        for it in items {
+            let ct = cstr(it);
+            gtk_combo_box_text_append_text(cb, ct.as_ptr());
+        }
+        if !items.is_empty() {
+            let idx = active_idx.min(items.len() - 1);
+            gtk_combo_box_set_active(cb, idx as i32);
+        }
+    }
+}
+
+pub fn make_entry_placeholder(val: &str, placeholder: &str) -> *mut GtkWidget {
+    let e = make_entry(val);
+    let cp = cstr(placeholder);
+    unsafe {
+        gtk_entry_set_placeholder_text(e, cp.as_ptr());
+    }
+    e
 }
 
 pub fn make_entry(val: &str) -> *mut GtkWidget {
@@ -247,6 +270,24 @@ pub fn create_modal_gtk(parent: *mut GtkWindow, title: &str, w: i32, h: i32) -> 
         connect_signal(win, "destroy", on_modal_destroy as *const c_void, 0);
         win
     }
+}
+
+unsafe extern "C" fn on_msg_close_click(_: *mut GtkWidget, win: *mut c_void) {
+    unsafe { gtk_widget_destroy(win as *mut GtkWidget) };
+}
+
+pub fn show_info_modal(parent: *mut GtkWindow, title: &str, msg: &str) {
+    let dlg = create_modal_gtk(parent, title, 400, 140);
+    let vbox = make_vbox(12);
+    let lbl = make_label(msg, false);
+    let close_btn = make_button("Đóng", true);
+    pack(vbox, lbl, true, true, 0);
+    pack(vbox, close_btn, false, false, 0);
+    unsafe {
+        gtk_container_add(dlg, vbox);
+        connect_signal(close_btn, "clicked", on_msg_close_click as *const c_void, dlg as usize);
+    }
+    run_modal_gtk(dlg);
 }
 
 pub fn run_modal_gtk(modal: *mut GtkWidget) {

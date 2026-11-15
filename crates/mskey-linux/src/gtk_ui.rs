@@ -1,27 +1,37 @@
 use std::cell::{Cell, RefCell};
 use std::ffi::c_void;
 use std::fs;
+use std::os::raw::c_int;
 use std::process::Command;
 use std::ptr;
+use std::thread;
 
-use mskey_core::{AppBehavior, Config, SwitchPreset};
+use mskey_core::{AppBehavior, Config, HotkeyCombo, SwitchPreset};
 
 use crate::config_store::{config_dir, load_config, save_config, sync_linux_autostart};
-use crate::gio_ffi::{cstr, gdk_beep};
-use crate::gtk_dialogs::{capture_hotkey_dialog, pick_and_import_evkey_tree, show_converter_dialog};
+use crate::gio_ffi::{cstr, g_idle_add, gdk_beep};
+use crate::gtk_dialogs::{
+    capture_hotkey_dialog, pick_and_import_evkey_tree, pick_sync_file_path, show_converter_dialog,
+};
 use crate::gtk_dialogs_edit::{show_app_rules_dialog, show_custom_keymap_dialog, show_macro_dialog};
 use crate::gtk_extras::{show_extras_sandbox_dialog, show_user_dict_dialog};
 use crate::gtk_ffi::{
     GTK_WIN_POS_CENTER, GTK_WINDOW_TOPLEVEL, GtkAllocation, GtkWidget, connect_signal,
     gtk_container_add, gtk_container_set_border_width, gtk_init_check, gtk_main, gtk_main_quit,
     gtk_notebook_append_page, gtk_notebook_new, gtk_widget_destroy, gtk_widget_get_allocation,
-    gtk_widget_show_all, gtk_window_new, gtk_window_set_default_size, gtk_window_set_position,
-    gtk_window_set_resizable, gtk_window_set_title,
+    gtk_widget_set_sensitive, gtk_widget_show_all, gtk_window_new, gtk_window_set_default_size,
+    gtk_window_set_position, gtk_window_set_resizable, gtk_window_set_title,
 };
-use crate::gtk_helpers::{make_button, make_hbox, make_label, make_vbox, pack};
+use crate::gtk_helpers::{
+    get_combo, make_button, make_hbox, make_label, make_vbox, pack, read_entry, set_label_text,
+    show_info_modal, write_entry,
+};
 use crate::gtk_theme::apply_gtk_theme;
 use crate::gtk_ui_tabs::{UiState, build_header_box, build_tab_basic, build_tab_hotkey, build_tab_system};
-use crate::linux_extra::{acquire_setup_lock, detect_active_app, show_linux_switch_osd};
+use crate::linux_extra::{
+    acquire_setup_lock, check_latest_release, detect_active_app, format_update_check_message,
+    show_linux_switch_osd,
+};
 
 thread_local! {
     static UI: RefCell<Option<UiState>> = const { RefCell::new(None) };
@@ -72,6 +82,7 @@ pub fn run_setup_ui(smoke_out: Option<&str>) -> i32 {
     let cfg = load_config();
     apply_gtk_theme(cfg.theme);
     LAST_APP.with(|c| *c.borrow_mut() = detect_active_app().unwrap_or_else(|| "-".to_string()));
+    let check_updates_start = cfg.check_updates_on_start;
     let st = build_main_window(cfg, smoke_out.is_none());
     let win = st.win;
     UI.with(|c| {
@@ -91,6 +102,10 @@ pub fn run_setup_ui(smoke_out: Option<&str>) -> i32 {
         return 0;
     }
 
+    if check_updates_start {
+        start_async_update_check(false);
+    }
+
     connect_signal(win, "destroy", on_main_destroy as *const c_void, 0);
     unsafe { gtk_main() };
     0
@@ -101,8 +116,8 @@ fn build_main_window(cfg: Config, animate: bool) -> UiState {
     let win = unsafe {
         let w = gtk_window_new(GTK_WINDOW_TOPLEVEL);
         gtk_window_set_title(w, title.as_ptr());
-        gtk_window_set_default_size(w, 560, 640);
-        gtk_window_set_resizable(w, 0);
+        gtk_window_set_default_size(w, 600, 690);
+        gtk_window_set_resizable(w, 1);
         gtk_window_set_position(w, GTK_WIN_POS_CENTER);
         gtk_container_set_border_width(w, 12);
         w
@@ -139,26 +154,60 @@ fn build_main_window(cfg: Config, animate: bool) -> UiState {
 
 fn connect_main_signals(st: &UiState) {
     let toggles = [
-        st.chk_modern, st.chk_free_tone, st.chk_fjwz, st.chk_autocap, st.chk_clip_send,
-        st.chk_std_send, st.chk_spell, st.chk_restore, st.chk_non_us, st.chk_suggest1,
-        st.chk_suggest2, st.chk_macro, st.chk_macro_en, st.chk_quick_w, st.chk_quick_brk,
-        st.chk_esc, st.chk_beep, st.chk_autostart, st.chk_show_start, st.chk_smart_app,
-        st.rad_ctrl_shift, st.rad_alt_z, st.rad_ctrl_space, st.rad_shift_shift, st.rad_custom,
+        st.chk_modern,
+        st.chk_free_tone,
+        st.chk_fjwz,
+        st.chk_autocap,
+        st.chk_smart_code,
+        st.chk_clip_send,
+        st.chk_std_send,
+        st.chk_spell,
+        st.chk_restore,
+        st.chk_reedit,
+        st.chk_non_us,
+        st.chk_suggest1,
+        st.chk_suggest2,
+        st.chk_caret_osd,
+        st.chk_macro,
+        st.chk_macro_en,
+        st.chk_macro_tab,
+        st.chk_quick_w,
+        st.chk_quick_brk,
+        st.chk_esc,
+        st.chk_beep,
+        st.chk_caps_switch,
+        st.chk_autostart,
+        st.chk_show_start,
+        st.chk_check_updates,
+        st.chk_smart_app,
+        st.rad_ctrl_shift,
+        st.rad_alt_z,
+        st.rad_ctrl_space,
+        st.rad_shift_shift,
+        st.rad_custom,
     ];
     for &w in &toggles {
         connect_signal(w, "toggled", on_widget_changed as *const c_void, 0);
     }
-    for &cb in &[st.cb_charset, st.cb_method, st.cb_mech, st.cb_theme] {
+    for &cb in &[st.cb_charset, st.cb_method, st.cb_mech, st.cb_theme, st.cb_hold_en] {
         connect_signal(cb, "changed", on_widget_changed as *const c_void, 0);
     }
+    connect_signal(st.cb_profile, "changed", on_profile_changed as *const c_void, 0);
+    connect_signal(st.btn_save_profile, "clicked", on_save_profile as *const c_void, 0);
     connect_signal(st.btn_ve, "clicked", on_toggle_ve as *const c_void, 0);
     connect_signal(st.btn_custom, "clicked", on_open_custom as *const c_void, 0);
     connect_signal(st.btn_conv, "clicked", on_open_convert as *const c_void, 0);
     connect_signal(st.btn_macro, "clicked", on_open_macro as *const c_void, 0);
     connect_signal(st.btn_cap_sw, "clicked", on_cap_switch as *const c_void, 0);
     connect_signal(st.btn_cap_conv, "clicked", on_cap_conv as *const c_void, 0);
+    connect_signal(st.btn_cap_sel_conv, "clicked", on_cap_sel_conv as *const c_void, 0);
+    connect_signal(st.btn_cap_undo, "clicked", on_cap_undo as *const c_void, 0);
     connect_signal(st.btn_import, "clicked", on_import_tree as *const c_void, 0);
     connect_signal(st.btn_dir, "clicked", on_open_dir as *const c_void, 0);
+    connect_signal(st.btn_sync_pick, "clicked", on_sync_pick as *const c_void, 0);
+    connect_signal(st.btn_sync_clear, "clicked", on_sync_clear as *const c_void, 0);
+    connect_signal(st.ed_sync_path, "activate", on_widget_changed as *const c_void, 0);
+    connect_signal(st.btn_check_update, "clicked", on_check_update as *const c_void, 0);
     connect_signal(st.btn_apps, "clicked", on_open_apps as *const c_void, 0);
     connect_signal(st.btn_add_app, "clicked", on_add_cur_app as *const c_void, 0);
     connect_signal(st.btn_extras, "clicked", on_open_extras as *const c_void, 0);
@@ -308,33 +357,192 @@ unsafe extern "C" fn on_add_cur_app(_: *mut GtkWidget, _: *mut c_void) {
     });
 }
 
-unsafe extern "C" fn on_cap_switch(_: *mut GtkWidget, _: *mut c_void) {
-    let pair = UI.with(|c| c.borrow().as_ref().map(|s| (s.win, s.cfg.custom_switch_hotkey)));
+fn capture_and_apply_hotkey(
+    extract: impl Fn(&Config) -> HotkeyCombo,
+    apply: impl Fn(&mut Config, HotkeyCombo),
+) {
+    let pair = UI.with(|c| c.borrow().as_ref().map(|s| (s.win, extract(&s.cfg))));
     if let Some((win, cur)) = pair
-        && let Some(combo) = capture_hotkey_dialog(win, cur) {
-            UI.with(|c| {
-                if let Some(st) = c.borrow_mut().as_mut() {
-                    st.cfg.custom_switch_hotkey = combo;
-                    st.cfg.switch_preset = SwitchPreset::Custom;
-                    save_config(&st.cfg);
-                }
-            });
-            sync_widgets_from_config();
-        }
+        && let Some(combo) = capture_hotkey_dialog(win, cur)
+    {
+        UI.with(|c| {
+            if let Some(st) = c.borrow_mut().as_mut() {
+                apply(&mut st.cfg, combo);
+                save_config(&st.cfg);
+            }
+        });
+        sync_widgets_from_config();
+    }
+}
+
+unsafe extern "C" fn on_cap_switch(_: *mut GtkWidget, _: *mut c_void) {
+    capture_and_apply_hotkey(
+        |cfg| cfg.custom_switch_hotkey,
+        |cfg, combo| {
+            cfg.custom_switch_hotkey = combo;
+            cfg.switch_preset = SwitchPreset::Custom;
+        },
+    );
 }
 
 unsafe extern "C" fn on_cap_conv(_: *mut GtkWidget, _: *mut c_void) {
-    let pair = UI.with(|c| c.borrow().as_ref().map(|s| (s.win, s.cfg.clipboard_convert_hotkey)));
-    if let Some((win, cur)) = pair
-        && let Some(combo) = capture_hotkey_dialog(win, cur) {
-            UI.with(|c| {
-                if let Some(st) = c.borrow_mut().as_mut() {
-                    st.cfg.clipboard_convert_hotkey = combo;
-                    save_config(&st.cfg);
-                }
-            });
-            sync_widgets_from_config();
+    capture_and_apply_hotkey(
+        |cfg| cfg.clipboard_convert_hotkey,
+        |cfg, combo| {
+            cfg.clipboard_convert_hotkey = combo;
+        },
+    );
+}
+
+unsafe extern "C" fn on_cap_sel_conv(_: *mut GtkWidget, _: *mut c_void) {
+    capture_and_apply_hotkey(
+        |cfg| cfg.convert_selection_hotkey,
+        |cfg, combo| {
+            cfg.convert_selection_hotkey = combo;
+        },
+    );
+}
+
+unsafe extern "C" fn on_cap_undo(_: *mut GtkWidget, _: *mut c_void) {
+    capture_and_apply_hotkey(
+        |cfg| cfg.undo_last_word_hotkey,
+        |cfg, combo| {
+            cfg.undo_last_word_hotkey = combo;
+        },
+    );
+}
+
+unsafe extern "C" fn on_profile_changed(_: *mut GtkWidget, _: *mut c_void) {
+    if SYNCING.with(|s| s.get()) {
+        return;
+    }
+    let changed = UI.with(|c| {
+        let mut b = c.borrow_mut();
+        let st = b.as_mut()?;
+        if st.syncing {
+            return None;
         }
+        let idx = get_combo(st.cb_profile);
+        let names = st.cfg.all_profile_names();
+        let name = names.get(idx)?.clone();
+        if st.cfg.apply_profile(&name) {
+            save_config(&st.cfg);
+            return Some(());
+        }
+        None
+    });
+    if changed.is_some() {
+        sync_widgets_from_config();
+    }
+}
+
+unsafe extern "C" fn on_save_profile(_: *mut GtkWidget, _: *mut c_void) {
+    let _ = read_widgets_to_config();
+    let updated = UI.with(|c| {
+        let mut b = c.borrow_mut();
+        let st = b.as_mut()?;
+        let typed = read_entry(st.ed_profile).trim().to_string();
+        let target = if !typed.is_empty() {
+            typed
+        } else {
+            let names = st.cfg.all_profile_names();
+            names
+                .get(get_combo(st.cb_profile))
+                .cloned()
+                .unwrap_or_else(|| st.cfg.active_profile.clone())
+        };
+        if target.trim().is_empty() {
+            return None;
+        }
+        st.cfg.save_current_as_profile(&target);
+        save_config(&st.cfg);
+        write_entry(st.ed_profile, "");
+        Some(())
+    });
+    if updated.is_some() {
+        sync_widgets_from_config();
+    }
+}
+
+unsafe extern "C" fn on_sync_pick(_: *mut GtkWidget, _: *mut c_void) {
+    let pair = UI.with(|c| {
+        c.borrow()
+            .as_ref()
+            .map(|s| (s.win, s.cfg.sync_config_path.clone()))
+    });
+    if let Some((win, cur)) = pair
+        && let Some(path) = pick_sync_file_path(win, &cur)
+    {
+        UI.with(|c| {
+            if let Some(st) = c.borrow_mut().as_mut() {
+                st.cfg.sync_config_path = path;
+                save_config(&st.cfg);
+            }
+        });
+        sync_widgets_from_config();
+    }
+}
+
+unsafe extern "C" fn on_sync_clear(_: *mut GtkWidget, _: *mut c_void) {
+    UI.with(|c| {
+        if let Some(st) = c.borrow_mut().as_mut() {
+            st.cfg.sync_config_path.clear();
+            save_config(&st.cfg);
+        }
+    });
+    sync_widgets_from_config();
+}
+
+struct UpdateResultPayload {
+    show_modal: bool,
+    has_newer: bool,
+    msg: String,
+}
+
+unsafe extern "C" fn on_update_check_done(data: *mut c_void) -> c_int {
+    if data.is_null() {
+        return 0;
+    }
+    let payload = unsafe { Box::from_raw(data as *mut UpdateResultPayload) };
+    let modal_win = UI.with(|c| {
+        if let Some(st) = c.borrow().as_ref() {
+            set_label_text(st.lbl_update_status, &payload.msg);
+            unsafe { gtk_widget_set_sensitive(st.btn_check_update, 1) };
+            if payload.show_modal || payload.has_newer {
+                return Some(st.win);
+            }
+        }
+        None
+    });
+    if let Some(win) = modal_win {
+        show_info_modal(win, "Kiểm tra cập nhật", &payload.msg);
+    }
+    0
+}
+
+fn start_async_update_check(show_modal: bool) {
+    UI.with(|c| {
+        if let Some(st) = c.borrow().as_ref() {
+            set_label_text(st.lbl_update_status, "Đang kiểm tra cập nhật...");
+            unsafe { gtk_widget_set_sensitive(st.btn_check_update, 0) };
+        }
+    });
+    thread::spawn(move || {
+        let res = check_latest_release();
+        let (has_newer, msg) = format_update_check_message(env!("CARGO_PKG_VERSION"), res);
+        let payload = Box::into_raw(Box::new(UpdateResultPayload {
+            show_modal,
+            has_newer,
+            msg,
+        }));
+        unsafe {
+            g_idle_add(Some(on_update_check_done), payload as *mut c_void);
+        }
+    });
+}
+
+unsafe extern "C" fn on_check_update(_: *mut GtkWidget, _: *mut c_void) {
+    start_async_update_check(true);
 }
 
 unsafe extern "C" fn on_import_tree(_: *mut GtkWidget, _: *mut c_void) {

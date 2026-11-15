@@ -1,12 +1,13 @@
+use std::collections::HashSet;
 use std::env;
 use std::fs;
 use std::os::windows::ffi::OsStrExt;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::process::Command;
 use std::ptr;
 
 use mskey_core::Config;
-use windows_sys::Win32::Foundation::{CloseHandle, GetLastError, HANDLE, HWND};
+use windows_sys::Win32::Foundation::{CloseHandle, GetLastError, HANDLE, HWND, LPARAM};
 use windows_sys::Win32::Security::{GetTokenInformation, TOKEN_ELEVATION, TOKEN_QUERY, TokenElevation};
 use windows_sys::Win32::System::DataExchange::{
     CloseClipboard, EmptyClipboard, GetClipboardData, OpenClipboard, SetClipboardData,
@@ -24,7 +25,8 @@ use windows_sys::Win32::System::Threading::{
 use windows_sys::Win32::UI::Input::KeyboardAndMouse::GetKeyboardLayout;
 use windows_sys::Win32::UI::Shell::ShellExecuteW;
 use windows_sys::Win32::UI::WindowsAndMessaging::{
-    GetClassNameW, GetForegroundWindow, GetWindowThreadProcessId, SW_SHOWNORMAL,
+    EnumWindows, GetClassNameW, GetForegroundWindow, GetWindowTextW, GetWindowThreadProcessId,
+    IsWindowVisible, SW_SHOWNORMAL,
 };
 
 const ERROR_ALREADY_EXISTS: u32 = 183;
@@ -74,22 +76,65 @@ pub fn config_file_path() -> PathBuf {
     base.join("MSKey").join("config.json")
 }
 
+fn file_mtime(path: &Path) -> Option<std::time::SystemTime> {
+    fs::metadata(path).and_then(|m| m.modified()).ok()
+}
+
 pub fn load_config() -> Config {
     let path = config_file_path();
-    if let Ok(raw) = fs::read_to_string(&path)
-        && let Ok(cfg) = Config::from_json_str(&raw) {
-            return cfg;
+    let local = fs::read_to_string(&path)
+        .ok()
+        .and_then(|raw| Config::from_json_str(&raw).ok())
+        .unwrap_or_default();
+
+    let sync_str = local.sync_config_path.trim().to_string();
+    if !sync_str.is_empty() {
+        let sync_path = PathBuf::from(&sync_str);
+        if sync_path != path
+            && let Ok(raw) = fs::read_to_string(&sync_path)
+            && let Ok(mut synced) = Config::from_json_str(&raw)
+        {
+            let local_t = file_mtime(&path);
+            let sync_t = file_mtime(&sync_path);
+            let use_sync = match (local_t, sync_t) {
+                (Some(lt), Some(st)) => st > lt,
+                (None, Some(_)) => true,
+                _ => false,
+            };
+            if use_sync {
+                synced.sync_config_path = sync_str;
+                if let Ok(json) = synced.to_json_pretty() {
+                    if let Some(parent) = path.parent() {
+                        let _ = fs::create_dir_all(parent);
+                    }
+                    let _ = fs::write(&path, json);
+                }
+                return synced;
+            }
         }
-    Config::default()
+    }
+    local
 }
 
 pub fn save_config(cfg: &Config) {
     let path = config_file_path();
+    let Ok(json) = cfg.to_json_pretty() else {
+        return;
+    };
     if let Some(parent) = path.parent() {
         let _ = fs::create_dir_all(parent);
     }
-    if let Ok(json) = cfg.to_json_pretty() {
-        let _ = fs::write(&path, json);
+    let _ = fs::write(&path, &json);
+
+    let sync_str = cfg.sync_config_path.trim();
+    if !sync_str.is_empty() {
+        let sync_path = PathBuf::from(sync_str);
+        if sync_path != path {
+            if let Some(parent) = sync_path.parent() {
+                let _ = fs::create_dir_all(parent);
+            }
+            let _ = fs::write(&sync_path, &json);
+        }
     }
 }
 
@@ -203,10 +248,46 @@ pub fn sync_startup_setting(auto_start: bool, run_as_admin: bool) {
     }
 }
 
-pub fn query_foreground_info() -> (HWND, String, String, bool) {
+fn process_name_from_pid(pid: u32) -> String {
+    if pid == 0 {
+        return String::new();
+    }
+    let proc_handle = unsafe { OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION, 0, pid) };
+    if proc_handle.is_null() {
+        return String::new();
+    }
+    let mut buf = [0u16; 512];
+    let mut size = buf.len() as u32;
+    let ok = unsafe { QueryFullProcessImageNameW(proc_handle, 0, buf.as_mut_ptr(), &mut size) };
+    unsafe {
+        CloseHandle(proc_handle);
+    }
+    if ok != 0 && size > 0 {
+        let full = from_wide_slice(&buf[..size as usize]);
+        if let Some(name) = PathBuf::from(full).file_name() {
+            return name.to_string_lossy().into_owned();
+        }
+    }
+    String::new()
+}
+
+pub fn query_window_title(hwnd: HWND) -> String {
+    if hwnd.is_null() {
+        return String::new();
+    }
+    let mut buf = [0u16; 512];
+    let len = unsafe { GetWindowTextW(hwnd, buf.as_mut_ptr(), buf.len() as i32) };
+    if len > 0 {
+        from_wide_slice(&buf[..len as usize])
+    } else {
+        String::new()
+    }
+}
+
+pub fn query_foreground_info() -> (HWND, String, String, String, bool) {
     let hwnd = unsafe { GetForegroundWindow() };
     if hwnd.is_null() {
-        return (ptr::null_mut(), String::new(), String::new(), true);
+        return (ptr::null_mut(), String::new(), String::new(), String::new(), true);
     }
     let mut pid = 0u32;
     let tid = unsafe { GetWindowThreadProcessId(hwnd, &mut pid) };
@@ -223,27 +304,53 @@ pub fn query_foreground_info() -> (HWND, String, String, bool) {
         String::new()
     };
 
-    let mut proc_name = String::new();
-    if pid != 0 {
-        let proc_handle = unsafe { OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION, 0, pid) };
-        if !proc_handle.is_null() {
-            let mut buf = [0u16; 512];
-            let mut size = buf.len() as u32;
-            let ok = unsafe {
-                QueryFullProcessImageNameW(proc_handle, 0, buf.as_mut_ptr(), &mut size)
-            };
-            unsafe {
-                CloseHandle(proc_handle);
-            }
-            if ok != 0 && size > 0 {
-                let full = from_wide_slice(&buf[..size as usize]);
-                if let Some(name) = PathBuf::from(full).file_name() {
-                    proc_name = name.to_string_lossy().into_owned();
-                }
-            }
+    let proc_name = process_name_from_pid(pid);
+    let title = query_window_title(hwnd);
+    (hwnd, proc_name, class_name, title, is_latin_us)
+}
+
+unsafe extern "system" fn enum_windows_proc(hwnd: HWND, lparam: LPARAM) -> i32 {
+    if unsafe { IsWindowVisible(hwnd) } == 0 {
+        return 1;
+    }
+    let title = query_window_title(hwnd);
+    if title.trim().is_empty() {
+        return 1;
+    }
+    let mut pid = 0u32;
+    unsafe {
+        GetWindowThreadProcessId(hwnd, &mut pid);
+    }
+    let proc_name = process_name_from_pid(pid);
+    if !proc_name.is_empty() && lparam != 0 {
+        let out = unsafe { &mut *(lparam as *mut Vec<(String, String)>) };
+        out.push((proc_name, title));
+    }
+    1
+}
+
+pub fn enumerate_running_windows() -> Vec<(String, String)> {
+    let mut raw = Vec::<(String, String)>::new();
+    unsafe {
+        EnumWindows(
+            Some(enum_windows_proc),
+            (&mut raw as *mut Vec<(String, String)>) as LPARAM,
+        );
+    }
+    let mut seen = HashSet::new();
+    let mut list = Vec::with_capacity(raw.len());
+    for (proc_name, title) in raw {
+        let key = (proc_name.to_ascii_lowercase(), title.clone());
+        if seen.insert(key) {
+            list.push((proc_name, title));
         }
     }
-    (hwnd, proc_name, class_name, is_latin_us)
+    list.sort_by(|a, b| {
+        a.0.to_ascii_lowercase()
+            .cmp(&b.0.to_ascii_lowercase())
+            .then_with(|| a.1.to_ascii_lowercase().cmp(&b.1.to_ascii_lowercase()))
+    });
+    list
 }
 
 pub fn read_clipboard_text() -> Option<String> {

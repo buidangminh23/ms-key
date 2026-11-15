@@ -28,6 +28,10 @@ public final class MenuBarController: NSObject {
         rebuildMenu()
     }
 
+    public func refreshProfilesMenu() {
+        rebuildMenu()
+    }
+
     public func rebuildMenu() {
         guard let store else { return }
         let menu = NSMenu()
@@ -56,8 +60,20 @@ public final class MenuBarController: NSObject {
         charsetRoot.submenu = charsetMenu
         menu.addItem(charsetRoot)
 
+        let profileMenu = NSMenu()
+        for name in store.config.allProfileNames() {
+            let it = makeItem(name, action: #selector(onPickProfile(_:)), rep: name)
+            it.state = store.config.activeProfile.caseInsensitiveCompare(name) == .orderedSame ? .on : .off
+            profileMenu.addItem(it)
+        }
+        let profileRoot = NSMenuItem(title: "Hồ sơ", action: nil, keyEquivalent: "")
+        profileRoot.submenu = profileMenu
+        menu.addItem(profileRoot)
+
         menu.addItem(.separator())
+        menu.addItem(makeItem("Chuyển đổi vùng chọn", action: #selector(onConvertSelection)))
         menu.addItem(makeItem("Chuyển mã nhanh Clipboard", action: #selector(onQuickConvertClipboard)))
+        menu.addItem(makeItem("Thêm từ Esc gần nhất", action: #selector(onAddLastEscWord)))
         menu.addItem(makeItem("Công cụ chuyển mã...", action: #selector(onOpenConverter)))
         menu.addItem(makeItem("Bảng gõ tắt...", action: #selector(onOpenMacros)))
         menu.addItem(makeItem("Bảng từ điển cá nhân...", action: #selector(onOpenUserDict)))
@@ -66,6 +82,7 @@ public final class MenuBarController: NSObject {
         osdItem.state = store.config.show_switch_osd ? .on : .off
         menu.addItem(osdItem)
         menu.addItem(.separator())
+        menu.addItem(makeItem("Kiểm tra cập nhật...", action: #selector(onCheckUpdates)))
         menu.addItem(makeItem("Thoát MS Key", action: #selector(onQuit), key: "q"))
         self.menu = menu
     }
@@ -117,6 +134,9 @@ public final class MenuBarController: NSObject {
     @objc private func onOpenExtras() { store?.openSheet(.extras) }
     @objc private func onToggleOsd() { store?.updateConfig { $0.show_switch_osd.toggle() } }
     @objc private func onQuickConvertClipboard() { store?.quickConvertPasteboard() }
+    @objc private func onConvertSelection() { store?.triggerConvertSelection() }
+    @objc private func onAddLastEscWord() { _ = store?.addLastEscWordToUserDict() }
+    @objc private func onCheckUpdates() { store?.checkForUpdates(manual: true) }
     @objc private func onQuit() { NSApp.terminate(nil) }
 
     @objc private func onPickMethod(_ sender: NSMenuItem) {
@@ -129,5 +149,10 @@ public final class MenuBarController: NSObject {
         guard let raw = sender.representedObject as? String,
               let cs = CharsetKind(rawValue: raw) else { return }
         store?.updateConfig { $0.charset = cs }
+    }
+
+    @objc private func onPickProfile(_ sender: NSMenuItem) {
+        guard let name = sender.representedObject as? String else { return }
+        _ = store?.applyProfile(name)
     }
 }

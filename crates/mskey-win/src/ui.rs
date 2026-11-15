@@ -8,29 +8,31 @@ use windows_sys::Win32::System::LibraryLoader::GetModuleHandleW;
 use windows_sys::Win32::UI::HiDpi::AdjustWindowRectExForDpi;
 use windows_sys::Win32::UI::WindowsAndMessaging::{
     CreateWindowExW, DefWindowProcW, DestroyWindow, DispatchMessageW, GetMessageW,
-    GetSystemMetrics, ICON_BIG, ICON_SMALL, MSG, PostQuitMessage, RegisterClassExW, SM_CXSCREEN,
-    SM_CYSCREEN, SW_HIDE, SW_RESTORE, SW_SHOW, SendMessageW, SetForegroundWindow, SetWindowPos,
-    ShowWindow, TranslateMessage, WM_CLOSE, WM_COMMAND, WM_CREATE, WM_CTLCOLORSTATIC, WM_DESTROY,
-    WM_DPICHANGED, WM_DRAWITEM, WM_LBUTTONDBLCLK, WM_LBUTTONUP, WM_PAINT, WM_RBUTTONUP, WM_SETICON,
-    WNDCLASSEXW, WS_CAPTION, WS_MINIMIZEBOX, WS_SYSMENU, WM_TIMER, KillTimer, SetTimer,
-    SystemParametersInfoW, SPI_GETCLIENTAREAANIMATION, IsWindowVisible,
+    GetSystemMetrics, ICON_BIG, ICON_SMALL, IsWindowVisible, KillTimer, MSG, PostQuitMessage,
+    RegisterClassExW, SM_CXSCREEN, SM_CYSCREEN, SPI_GETCLIENTAREAANIMATION, SW_HIDE, SW_RESTORE,
+    SW_SHOW, SendMessageW, SetForegroundWindow, SetTimer, SetWindowPos, ShowWindow,
+    SystemParametersInfoW, TranslateMessage, WM_CLOSE, WM_COMMAND, WM_CREATE, WM_CTLCOLOREDIT,
+    WM_CTLCOLORLISTBOX, WM_CTLCOLORSTATIC, WM_DESTROY, WM_DPICHANGED, WM_DRAWITEM, WM_LBUTTONDBLCLK,
+    WM_LBUTTONUP, WM_MBUTTONUP, WM_PAINT, WM_RBUTTONUP, WM_SETICON, WM_TIMER, WNDCLASSEXW,
+    WS_CAPTION, WS_MINIMIZEBOX, WS_SYSMENU,
 };
 
 use crate::dialog_convert::{capture_hotkey_dialog, show_converter_dialog};
 use crate::dialog_custom::show_custom_keymap_dialog;
-use crate::dialog_helpers::{scale_px, window_dpi};
-use crate::dialogs::{show_app_rules_dialog, show_macro_dialog};
+use crate::dialog_helpers::{read_window_text, scale_px, window_dpi};
+use crate::dialogs::{prompt_profile_name_dialog, show_app_rules_dialog, show_macro_dialog};
 use crate::platform::{is_elevated, relaunch_as_admin, save_config, sync_startup_setting, to_wide};
 use crate::state::{
-    WM_APP_OPEN_CONVERT, WM_APP_OPEN_MAIN, WM_APP_SYNC_UI, WM_APP_TOGGLE_VE, WM_APP_TRAY,
-    with_state,
+    WM_APP_CONVERT_SELECTION, WM_APP_OPEN_CONVERT, WM_APP_OPEN_MAIN, WM_APP_SYNC_UI,
+    WM_APP_TOGGLE_VE, WM_APP_TRAY, WM_APP_UPDATE_CARET_OSD, WM_APP_UPDATE_RESULT, with_state,
 };
 use crate::theme::{apply_dwm_dark_titlebar, create_ui_font, palette_for};
 use crate::tray::{
-    ID_TRAY_APPS, ID_TRAY_CHARSET_COMP, ID_TRAY_CHARSET_TCVN, ID_TRAY_CHARSET_UNI,
-    ID_TRAY_CHARSET_VNI, ID_TRAY_CONVERT, ID_TRAY_EXIT, ID_TRAY_MACROS, ID_TRAY_SHOW,
-    ID_TRAY_TOGGLE_VE, ID_TRAY_TYPE_CUSTOM, ID_TRAY_TYPE_SIMPLE, ID_TRAY_TYPE_TELEX,
-    ID_TRAY_TYPE_VIQR, ID_TRAY_TYPE_VNI, TrayController, show_tray_menu,
+    ID_TRAY_ADD_LAST_ESC, ID_TRAY_APPS, ID_TRAY_CHARSET_COMP, ID_TRAY_CHARSET_TCVN,
+    ID_TRAY_CHARSET_UNI, ID_TRAY_CHARSET_VNI, ID_TRAY_CHECK_UPDATE, ID_TRAY_CONVERT,
+    ID_TRAY_CONVERT_SELECTION, ID_TRAY_EXIT, ID_TRAY_MACROS, ID_TRAY_PROFILE_BASE,
+    ID_TRAY_PROFILE_MAX, ID_TRAY_SHOW, ID_TRAY_TOGGLE_VE, ID_TRAY_TYPE_CUSTOM, ID_TRAY_TYPE_SIMPLE,
+    ID_TRAY_TYPE_TELEX, ID_TRAY_TYPE_VIQR, ID_TRAY_TYPE_VNI, TrayController, show_tray_menu,
 };
 use crate::ui_actions::{
     add_current_app_force_english, dump_layout_report, import_evkey_tree_via_dialog,
@@ -42,9 +44,10 @@ use crate::ui_paint::{
     refresh_ui_and_tray, set_main_data, set_tab_redraw, take_main_data, with_main_data,
 };
 
-const MAIN_W: i32 = 560;
-const MAIN_H: i32 = 568;
+const MAIN_W: i32 = 580;
+const MAIN_H: i32 = 636;
 const CBN_SELCHANGE: usize = 1;
+const EN_KILLFOCUS: usize = 0x0200;
 
 pub fn create_and_run_main(show_initially: bool, verify_smoke_path: Option<&str>) {
     let hinst = unsafe { GetModuleHandleW(ptr::null()) };
@@ -111,6 +114,10 @@ pub fn create_and_run_main(show_initially: bool, verify_smoke_path: Option<&str>
         show_and_focus(hwnd);
     }
 
+    if with_state(|st| st.engine.config().check_updates_on_start) {
+        crate::update_win::check_for_updates_async(hwnd, true);
+    }
+
     unsafe {
         let mut msg: MSG = std::mem::zeroed();
         while GetMessageW(&mut msg, ptr::null_mut(), 0, 0) > 0 {
@@ -158,9 +165,9 @@ fn on_main_create(hwnd: HWND) {
     let bg_brush = unsafe { CreateSolidBrush(pal.window_bg) };
     let card_brush = unsafe { CreateSolidBrush(pal.card_bg) };
     let in_brush = unsafe { CreateSolidBrush(pal.input_bg) };
-    let ctrls = MainUiCtrls::build(hwnd, font, dpi);
+    let mut ctrls = MainUiCtrls::build(hwnd, font, dpi);
     let mut tray = TrayController::new(hwnd);
-    let ve = with_state(|st| st.engine.config().vietnamese_enabled);
+    let (ve, show_caret) = with_state(|st| (st.effective_vietnamese(), st.engine.config().show_caret_osd));
     tray.update(ve);
     unsafe {
         SendMessageW(hwnd, WM_SETICON, ICON_BIG as usize, crate::tray::app_icon(32) as LPARAM);
@@ -178,6 +185,9 @@ fn on_main_create(hwnd: HWND) {
         tray,
         reveal_started: None,
     }));
+    if show_caret {
+        crate::ui_osd::update_caret_osd(ve);
+    }
 }
 
 unsafe extern "system" fn main_wnd_proc(
@@ -206,12 +216,12 @@ unsafe extern "system" fn main_wnd_proc(
                 unsafe { KillTimer(hwnd, 92) };
             }
             let dpi = window_dpi(hwnd);
-            let rc = RECT { left: scale_px(450, dpi), top: scale_px(96, dpi), right: scale_px(548, dpi), bottom: scale_px(148, dpi) };
+            let rc = RECT { left: scale_px(472, dpi), top: scale_px(88, dpi), right: scale_px(566, dpi), bottom: scale_px(146, dpi) };
             unsafe { windows_sys::Win32::Graphics::Gdi::InvalidateRect(hwnd, &rc, 0) };
             0
         }
         WM_DRAWITEM => draw_main_item(hwnd, lparam).unwrap_or(0),
-        WM_CTLCOLORSTATIC => ctl_color_main(wparam, lparam).unwrap_or(0),
+        WM_CTLCOLORSTATIC | WM_CTLCOLOREDIT | WM_CTLCOLORLISTBOX => ctl_color_main(msg, wparam, lparam).unwrap_or(0),
         WM_COMMAND => {
             handle_command(hwnd, wparam & 0xFFFF, (wparam >> 16) & 0xFFFF);
             0
@@ -227,10 +237,12 @@ unsafe extern "system" fn main_wnd_proc(
                 let current = with_state(|st| st.engine.config().vietnamese_enabled);
                 set_ve_and_refresh(hwnd, !current, false);
                 show_and_focus(hwnd);
+            } else if ev == WM_MBUTTONUP {
+                toggle_ve_and_refresh(hwnd);
             } else if ev == WM_RBUTTONUP {
                 let (ve, cs, m) = with_state(|st| {
                     let c = st.engine.config();
-                    (c.vietnamese_enabled, c.charset, c.input_method)
+                    (st.effective_vietnamese(), c.charset, c.input_method)
                 });
                 show_tray_menu(hwnd, ve, cs, m);
             }
@@ -254,6 +266,18 @@ unsafe extern "system" fn main_wnd_proc(
         }
         crate::state::WM_APP_SHOW_OSD => {
             crate::ui_osd::show_switch_osd(wparam != 0);
+            0
+        }
+        WM_APP_CONVERT_SELECTION => {
+            crate::ui_popup::handle_convert_selection(wparam as HWND);
+            0
+        }
+        WM_APP_UPDATE_CARET_OSD => {
+            crate::ui_osd::update_caret_osd(wparam != 0);
+            0
+        }
+        WM_APP_UPDATE_RESULT => {
+            crate::update_win::handle_update_result_message(hwnd);
             0
         }
         WM_DPICHANGED => {
@@ -292,7 +316,7 @@ fn toggle_ve_and_refresh(hwnd: HWND) {
 }
 
 fn set_ve_and_refresh(hwnd: HWND, next: bool, announce: bool) {
-    let (beep, osd, fg_proc, smart) = with_state(|st| {
+    let (beep, osd, fg_proc, smart, eff) = with_state(|st| {
         let c = st.engine.config().clone();
         st.set_user_vietnamese(next);
         save_config(st.engine.config());
@@ -301,6 +325,7 @@ fn set_ve_and_refresh(hwnd: HWND, next: bool, announce: bool) {
             c.show_switch_osd && announce,
             st.fg_process.clone(),
             c.smart_app_switch,
+            st.effective_vietnamese(),
         )
     });
     if smart && !fg_proc.is_empty() {
@@ -312,6 +337,7 @@ fn set_ve_and_refresh(hwnd: HWND, next: bool, announce: bool) {
     if osd {
         crate::ui_osd::show_switch_osd(next);
     }
+    crate::ui_osd::update_caret_osd(eff);
     refresh_ui_and_tray(hwnd);
 }
 
@@ -328,13 +354,45 @@ fn handle_command(hwnd: HWND, id: usize, code: usize) {
         },
         ID_TRAY_SHOW => show_and_focus(hwnd),
         IDC_VE_PILL | ID_TRAY_TOGGLE_VE => toggle_ve_and_refresh(hwnd),
+        IDC_BTN_SAVE_PROFILE => {
+            let current = with_state(|st| st.engine.config().active_profile.clone());
+            if let Some(name) = prompt_profile_name_dialog(hwnd, &current) {
+                with_state(|st| {
+                    let mut cfg = st.engine.config().clone();
+                    cfg.save_current_as_profile(&name);
+                    save_config(&cfg);
+                    st.engine.update_config(cfg);
+                });
+                refresh_ui_and_tray(hwnd);
+            }
+        }
         IDC_BTN_CUSTOM_KEY => {
             show_custom_keymap_dialog(hwnd);
             refresh_ui_and_tray(hwnd);
         }
         IDC_BTN_MACRO | ID_TRAY_MACROS => show_macro_dialog(hwnd),
         IDC_BTN_CONVERT | ID_TRAY_CONVERT => show_converter_dialog(hwnd),
-        IDC_BTN_APPS | ID_TRAY_APPS => show_app_rules_dialog(hwnd),
+        ID_TRAY_CONVERT_SELECTION => {
+            let target = with_state(|st| st.last_typing_hwnd as HWND);
+            if !target.is_null() {
+                unsafe {
+                    SetForegroundWindow(target);
+                }
+                std::thread::sleep(std::time::Duration::from_millis(45));
+            }
+            crate::ui_popup::handle_convert_selection(target);
+        }
+        ID_TRAY_ADD_LAST_ESC => {
+            let word = with_state(|st| st.engine.last_word_for_dict());
+            if let Some(w) = word {
+                crate::ui_extras::add_word_to_user_dict(&w);
+                refresh_ui_and_tray(hwnd);
+            }
+        }
+        IDC_BTN_APPS | ID_TRAY_APPS => {
+            show_app_rules_dialog(hwnd);
+            refresh_ui_and_tray(hwnd);
+        }
         IDC_BTN_EXTRAS | crate::tray::ID_TRAY_EXTRAS => {
             if crate::ui_extras::show_extras_sandbox_dialog(hwnd) {
                 rebuild_theme_resources(hwnd);
@@ -343,6 +401,22 @@ fn handle_command(hwnd: HWND, id: usize, code: usize) {
         }
         IDC_BTN_USER_DICT | crate::tray::ID_TRAY_USER_DICT => {
             crate::ui_extras::show_user_dict_dialog(hwnd);
+        }
+        IDC_BTN_CHECK_UPDATE | ID_TRAY_CHECK_UPDATE => {
+            crate::update_win::check_for_updates_async(hwnd, false);
+        }
+        IDC_BTN_BROWSE_SYNC => {
+            let current = with_state(|st| st.engine.config().sync_config_path.clone());
+            if let Some(path) = crate::platform_extra::browse_sync_file_dialog(hwnd, &current) {
+                let path_str = path.to_string_lossy().to_string();
+                with_state(|st| {
+                    let mut cfg = st.engine.config().clone();
+                    cfg.sync_config_path = path_str;
+                    save_config(&cfg);
+                    st.engine.update_config(cfg);
+                });
+                refresh_ui_and_tray(hwnd);
+            }
         }
         crate::tray::ID_TRAY_QUICK_TELEX | crate::tray::ID_TRAY_SHOW_OSD => {
             with_state(|st| {
@@ -359,12 +433,24 @@ fn handle_command(hwnd: HWND, id: usize, code: usize) {
         }
         IDC_BTN_ADD_CUR_EN => {
             add_current_app_force_english();
+            let eff = with_state(|st| {
+                st.reapply_current_window_rule();
+                st.effective_vietnamese()
+            });
+            crate::ui_osd::update_caret_osd(eff);
             refresh_ui_and_tray(hwnd);
         }
-        IDC_BTN_CAP_SWITCH | IDC_BTN_CAP_CONV => handle_capture_hotkey(hwnd, id),
+        IDC_BTN_CAP_SWITCH | IDC_BTN_CAP_CONV | IDC_BTN_CAP_UNDO | IDC_BTN_CAP_CONV_SEL => {
+            handle_capture_hotkey(hwnd, id);
+        }
         IDC_BTN_IMPORT_TREE => {
             import_evkey_tree_via_dialog(hwnd);
+            let eff = with_state(|st| {
+                st.reapply_current_window_rule();
+                st.effective_vietnamese()
+            });
             rebuild_theme_resources(hwnd);
+            crate::ui_osd::update_caret_osd(eff);
             refresh_ui_and_tray(hwnd);
         }
         IDC_BTN_OPEN_CFG_DIR => open_config_directory(),
@@ -379,44 +465,79 @@ fn handle_command(hwnd: HWND, id: usize, code: usize) {
             let def = Config::default();
             sync_startup_setting(def.auto_start, def.run_as_admin);
             save_config(&def);
-            with_state(|st| {
+            let eff = with_state(|st| {
                 st.user_preferred_ve = def.vietnamese_enabled;
                 st.engine.update_config(def);
+                st.reapply_current_window_rule();
+                st.effective_vietnamese()
             });
             rebuild_theme_resources(hwnd);
+            crate::ui_osd::update_caret_osd(eff);
             refresh_ui_and_tray(hwnd);
         }
         IDC_BTN_SAVE => {
-            let cfg = with_state(|st| {
-                let c = st.engine.config().clone();
+            let sync_txt = with_main_data(|d| read_window_text(d.ctrls.edit_sync_path));
+            let (cfg, eff) = with_state(|st| {
+                let mut c = st.engine.config().clone();
+                if let Some(txt) = sync_txt {
+                    c.sync_config_path = txt.trim().to_string();
+                }
                 save_config(&c);
-                c
+                let eff = st.effective_vietnamese();
+                st.engine.update_config(c.clone());
+                (c, eff)
             });
             sync_startup_setting(cfg.auto_start, cfg.run_as_admin);
+            crate::ui_osd::update_caret_osd(eff);
             refresh_ui_and_tray(hwnd);
         }
         ID_TRAY_CHARSET_UNI..=ID_TRAY_TYPE_CUSTOM => handle_tray_preset(hwnd, id),
+        ID_TRAY_PROFILE_BASE..=ID_TRAY_PROFILE_MAX => apply_profile_by_index(hwnd, id - ID_TRAY_PROFILE_BASE),
         _ => handle_control_change(hwnd, id, code),
     }
 }
 
-fn handle_capture_hotkey(hwnd: HWND, id: usize) {
-    let is_switch = id == IDC_BTN_CAP_SWITCH;
-    let cur = with_state(|st| {
-        if is_switch {
-            st.engine.config().custom_switch_hotkey
+fn apply_profile_by_index(hwnd: HWND, idx: usize) {
+    let (changed, eff) = with_state(|st| {
+        let mut cfg = st.engine.config().clone();
+        if MainUiCtrls::apply_combo_selection(IDC_PROFILE_COMBO, idx, &mut cfg) {
+            st.user_preferred_ve = cfg.vietnamese_enabled;
+            save_config(&cfg);
+            st.engine.update_config(cfg);
+            st.reapply_current_window_rule();
+            (true, st.effective_vietnamese())
         } else {
-            st.engine.config().clipboard_convert_hotkey
+            (false, st.effective_vietnamese())
+        }
+    });
+    if changed {
+        rebuild_theme_resources(hwnd);
+        crate::ui_osd::update_caret_osd(eff);
+        refresh_ui_and_tray(hwnd);
+    }
+}
+
+fn handle_capture_hotkey(hwnd: HWND, id: usize) {
+    let cur = with_state(|st| {
+        let c = st.engine.config();
+        match id {
+            IDC_BTN_CAP_SWITCH => c.custom_switch_hotkey,
+            IDC_BTN_CAP_UNDO => c.undo_last_word_hotkey,
+            IDC_BTN_CAP_CONV_SEL => c.convert_selection_hotkey,
+            _ => c.clipboard_convert_hotkey,
         }
     });
     if let Some(combo) = capture_hotkey_dialog(hwnd, cur) {
         with_state(|st| {
             let mut cfg = st.engine.config().clone();
-            if is_switch {
-                cfg.custom_switch_hotkey = combo;
-                cfg.switch_preset = mskey_core::SwitchPreset::Custom;
-            } else {
-                cfg.clipboard_convert_hotkey = combo;
+            match id {
+                IDC_BTN_CAP_SWITCH => {
+                    cfg.custom_switch_hotkey = combo;
+                    cfg.switch_preset = mskey_core::SwitchPreset::Custom;
+                }
+                IDC_BTN_CAP_UNDO => cfg.undo_last_word_hotkey = combo,
+                IDC_BTN_CAP_CONV_SEL => cfg.convert_selection_hotkey = combo,
+                _ => cfg.clipboard_convert_hotkey = combo,
             }
             save_config(&cfg);
             st.engine.update_config(cfg);
@@ -462,6 +583,30 @@ fn handle_tray_preset(hwnd: HWND, id: usize) {
 }
 
 fn handle_control_change(hwnd: HWND, id: usize, code: usize) {
+    if id == IDC_EDIT_SYNC_PATH {
+        if code != EN_KILLFOCUS {
+            return;
+        }
+        let Some(txt) = with_main_data(|d| read_window_text(d.ctrls.edit_sync_path)) else {
+            return;
+        };
+        let trimmed = txt.trim().to_string();
+        let changed = with_state(|st| {
+            let mut cfg = st.engine.config().clone();
+            if cfg.sync_config_path != trimmed {
+                cfg.sync_config_path = trimmed;
+                save_config(&cfg);
+                st.engine.update_config(cfg);
+                true
+            } else {
+                false
+            }
+        });
+        if changed {
+            refresh_ui_and_tray(hwnd);
+        }
+        return;
+    }
     let combo_sel = if code == CBN_SELCHANGE {
         with_main_data(|d| d.ctrls.combo_for_id(id))
             .flatten()
@@ -469,26 +614,40 @@ fn handle_control_change(hwnd: HWND, id: usize, code: usize) {
     } else {
         None
     };
-    let (changed, theme_changed) = with_state(|st| {
+    let (changed, theme_changed, caret_changed, eff) = with_state(|st| {
         let mut cfg = st.engine.config().clone();
         let mut did_change = false;
         let mut is_theme = false;
+        let mut is_caret = false;
         if let Some(idx) = combo_sel {
             if MainUiCtrls::apply_combo_selection(id, idx, &mut cfg) {
-                is_theme = id == IDC_THEME;
+                if id == IDC_PROFILE_COMBO {
+                    st.user_preferred_ve = cfg.vietnamese_enabled;
+                    is_theme = true;
+                    is_caret = true;
+                } else {
+                    is_theme = id == IDC_THEME;
+                }
                 did_change = true;
             }
         } else if MainUiCtrls::toggle_setting_id(id, &mut cfg) {
+            is_caret = id == IDC_CHK_CARET_OSD;
             did_change = true;
         }
         if did_change {
             save_config(&cfg);
             st.engine.update_config(cfg);
+            if id == IDC_PROFILE_COMBO {
+                st.reapply_current_window_rule();
+            }
         }
-        (did_change, is_theme)
+        (did_change, is_theme, is_caret, st.effective_vietnamese())
     });
     if theme_changed {
         rebuild_theme_resources(hwnd);
+    }
+    if caret_changed {
+        crate::ui_osd::update_caret_osd(eff);
     }
     if changed {
         refresh_ui_and_tray(hwnd);

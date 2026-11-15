@@ -1,6 +1,6 @@
 use std::time::Instant;
 
-use mskey_core::{HotkeyCombo, SwitchPreset};
+use mskey_core::{HoldEnglishKey, HotkeyCombo, SwitchPreset};
 
 pub const IBUS_SHIFT_MASK: u32 = 1 << 0;
 pub const IBUS_LOCK_MASK: u32 = 1 << 1;
@@ -150,7 +150,21 @@ pub fn gdk_keyval_to_vk(keyval: u32) -> u32 {
     }
 }
 
+pub fn hold_english_keyval(mode: HoldEnglishKey) -> Option<u32> {
+    match mode {
+        HoldEnglishKey::None => None,
+        HoldEnglishKey::RightShift => Some(KEY_SHIFT_R),
+        HoldEnglishKey::LeftShift => Some(KEY_SHIFT_L),
+        HoldEnglishKey::RightAlt => Some(KEY_ALT_R),
+        HoldEnglishKey::RightCtrl => Some(KEY_CONTROL_R),
+        HoldEnglishKey::CapsLock => Some(KEY_CAPS_LOCK),
+    }
+}
+
 pub fn format_hotkey_linux(combo: HotkeyCombo) -> String {
+    if combo.key_code == 0 {
+        return "Không đặt".to_string();
+    }
     let mut parts = Vec::new();
     if combo.ctrl {
         parts.push("Ctrl".to_string());
@@ -183,6 +197,9 @@ pub fn format_hotkey_linux(combo: HotkeyCombo) -> String {
 }
 
 pub fn matches_combo(combo: HotkeyCombo, keyval: u32, state: u32) -> bool {
+    if combo.key_code == 0 {
+        return false;
+    }
     let ctrl = (state & IBUS_CONTROL_MASK) != 0;
     let shift = (state & IBUS_SHIFT_MASK) != 0;
     let alt = (state & IBUS_MOD1_MASK) != 0;
@@ -207,6 +224,8 @@ pub enum HotkeySignal {
     None,
     ToggleVe,
     ConvertClipboard,
+    ConvertSelection,
+    UndoLastWord,
 }
 
 impl HotkeyTracker {
@@ -218,8 +237,50 @@ impl HotkeyTracker {
         keyval: u32,
         state: u32,
     ) -> HotkeySignal {
+        let disabled = HotkeyCombo {
+            ctrl: false,
+            alt: false,
+            shift: false,
+            win_cmd: false,
+            key_code: 0,
+        };
+        self.process_key_full(
+            preset,
+            custom_switch,
+            convert_hotkey,
+            disabled,
+            disabled,
+            false,
+            HoldEnglishKey::None,
+            keyval,
+            state,
+        )
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    pub fn process_key_full(
+        &mut self,
+        preset: SwitchPreset,
+        custom_switch: HotkeyCombo,
+        convert_hotkey: HotkeyCombo,
+        convert_selection_hotkey: HotkeyCombo,
+        undo_hotkey: HotkeyCombo,
+        quick_capslock_switch: bool,
+        hold_english_key: HoldEnglishKey,
+        keyval: u32,
+        state: u32,
+    ) -> HotkeySignal {
         let is_release = (state & IBUS_RELEASE_MASK) != 0;
         if is_modifier_keyval(keyval) {
+            if quick_capslock_switch
+                && !is_release
+                && keyval == KEY_CAPS_LOCK
+                && hold_english_key != HoldEnglishKey::CapsLock
+                && (state & (IBUS_CONTROL_MASK | IBUS_MOD1_MASK | IBUS_MOD4_MASK | IBUS_SHIFT_MASK)) == 0
+            {
+                self.reset();
+                return HotkeySignal::ToggleVe;
+            }
             return self.handle_modifier(preset, keyval, state, is_release);
         }
 
@@ -230,8 +291,14 @@ impl HotkeyTracker {
         if is_release {
             return HotkeySignal::None;
         }
+        if matches_combo(undo_hotkey, keyval, state) {
+            return HotkeySignal::UndoLastWord;
+        }
         if matches_combo(convert_hotkey, keyval, state) {
             return HotkeySignal::ConvertClipboard;
+        }
+        if matches_combo(convert_selection_hotkey, keyval, state) {
+            return HotkeySignal::ConvertSelection;
         }
         match preset {
             SwitchPreset::AltZ => {

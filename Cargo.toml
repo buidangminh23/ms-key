@@ -3,6 +3,7 @@ resolver = "3"
 members = [
     "crates/mskey-core",
     "crates/mskey-ffi",
+    "crates/mskey-cli",
     "crates/mskey-win",
     "crates/mskey-linux",
 ]

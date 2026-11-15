@@ -6,10 +6,14 @@ use std::process::Command;
 use std::ptr;
 use std::time::Duration;
 
-use mskey_core::{Charset, Config, InputMethod, Mechanism};
+use mskey_core::{
+    CaseTransform, Charset, Config, ConvertEncoding, InputMethod, Mechanism,
+    convert_with_encoding, detect_convert_encoding,
+};
 
 use crate::config_store::{
-    config_mtime_nanos, load_config, resolve_ibus_address, save_config,
+    effective_config_mtime_nanos, load_config, resolve_ibus_address, save_config,
+    save_last_esc_word,
 };
 use crate::gio_ffi::{
     G_DBUS_CONNECTION_FLAGS_AUTHENTICATION_CLIENT, G_DBUS_CONNECTION_FLAGS_MESSAGE_BUS_CONNECTION,
@@ -28,9 +32,11 @@ use crate::ibus_variant::{
     extract_cursor_rect, extract_str_arg, extract_surrounding_args, extract_u32_arg,
     register_panel_properties,
 };
+use crate::keyval::KEY_ESCAPE;
 use crate::linux_extra::{
-    apply_clipboard_paste_linux, detect_active_app, ensure_gtk_init, is_us_keyboard_layout,
-    show_linux_switch_osd,
+    ActiveWindowInfo, apply_clipboard_paste_linux, detect_active_window, ensure_gtk_init,
+    hide_linux_caret_hud, is_terminal_app, is_us_keyboard_layout, read_clipboard_text,
+    show_linux_caret_hud, show_linux_switch_osd, trigger_copy_keystroke, write_clipboard_text,
 };
 
 const FACTORY_XML: &str = "<node><interface name='org.freedesktop.IBus.Factory'><method name='CreateEngine'><arg direction='in' type='s' name='name'/><arg direction='out' type='o'/></method><method name='Destroy'/></interface></node>";
@@ -105,6 +111,7 @@ pub fn run_ibus_service() -> i32 {
     let mut session = IbusSession::new(load_config());
     session.load_persisted_app_memory();
     session.set_us_layout(is_us_keyboard_layout());
+    let initial_mtime = effective_config_mtime_nanos(session.engine.config());
     DAEMON.with(|d| {
         *d.borrow_mut() = Some(DaemonState {
             conn,
@@ -112,7 +119,7 @@ pub fn run_ibus_service() -> i32 {
             engine_seq: 0,
             active_path: String::new(),
             session,
-            last_mtime: config_mtime_nanos(),
+            last_mtime: initial_mtime,
         });
     });
 
@@ -176,24 +183,34 @@ fn request_ibus_name(conn: *mut GDBusConnection) {
 }
 
 unsafe extern "C" fn poll_config_reload(_: *mut c_void) -> c_int {
-    let cur = config_mtime_nanos();
+    let cur = DAEMON.with(|d| {
+        d.borrow()
+            .as_ref()
+            .map(|st| effective_config_mtime_nanos(st.session.engine.config()))
+            .unwrap_or(0)
+    });
     let changed = DAEMON.with(|d| {
         let mut b = d.borrow_mut();
         if let Some(st) = b.as_mut()
-            && cur > 0 && cur != st.last_mtime {
-                st.last_mtime = cur;
-                let fresh = load_config();
-                if fresh.to_json_pretty().ok() != st.session.engine.config().to_json_pretty().ok() {
-                    st.session.update_config(fresh);
-                    return Some((st.conn, st.active_path.clone(), st.session.engine.config().clone()));
-                }
+            && cur > 0
+            && cur != st.last_mtime
+        {
+            let fresh = load_config();
+            let differs = fresh.to_json_pretty().ok() != st.session.engine.config().to_json_pretty().ok();
+            if differs {
+                st.session.update_config(fresh);
+                st.last_mtime = effective_config_mtime_nanos(st.session.engine.config());
+                return Some((st.conn, st.active_path.clone(), st.session.engine.config().clone()));
             }
+            st.last_mtime = cur;
+        }
         None
     });
     if let Some((conn, path, cfg)) = changed
-        && !path.is_empty() {
-            register_panel_properties(conn, &path, &cfg);
-        }
+        && !path.is_empty()
+    {
+        register_panel_properties(conn, &path, &cfg);
+    }
     1
 }
 
@@ -282,12 +299,30 @@ fn handle_process_key(
         g_variant_unref(v2);
         res
     };
-    let res = DAEMON.with(|d| {
+    let need_clip = DAEMON.with(|d| {
+        d.borrow()
+            .as_ref()
+            .is_some_and(|st_d| st_d.session.needs_clipboard_for_key(kv, st))
+    });
+    let clip_opt = if need_clip { read_clipboard_text() } else { None };
+    let (res, esc_word) = DAEMON.with(|d| {
         let mut b = d.borrow_mut();
         let st_d = b.as_mut().expect("daemon state");
         st_d.active_path = path.to_string();
-        st_d.session.process_key(kv, kc, st)
+        if need_clip {
+            st_d.session.set_clipboard_text(clip_opt);
+        }
+        let r = st_d.session.process_key(kv, kc, st);
+        let esc = if kv == KEY_ESCAPE && r.handled {
+            st_d.session.engine.last_word_for_dict()
+        } else {
+            None
+        };
+        (r, esc)
     });
+    if let Some(w) = esc_word {
+        save_last_esc_word(Some(&w));
+    }
     for op in res.ops {
         apply_dbus_op(conn, path, op);
     }
@@ -338,20 +373,32 @@ fn dispatch_non_key_method(
             } else {
                 String::new()
             };
-            let app = detect_active_app().unwrap_or(client);
+            let info = match detect_active_window() {
+                Some(mut w) => {
+                    if w.app.trim().is_empty() {
+                        w.app = client;
+                    }
+                    w
+                }
+                None => ActiveWindowInfo {
+                    app: client,
+                    title: String::new(),
+                },
+            };
             let us = is_us_keyboard_layout();
             let ops = DAEMON.with(|d| {
                 let mut b = d.borrow_mut();
                 let st = b.as_mut().expect("daemon state");
                 st.active_path = path.to_string();
                 st.session.set_us_layout(us);
-                st.session.focus_in(&app)
+                st.session.focus_in_window(&info.app, &info.title)
             });
             for op in ops {
                 apply_dbus_op(conn, path, op);
             }
         }
         "FocusOut" | "FocusOutId" | "Disable" => {
+            hide_linux_caret_hud();
             let ops = DAEMON.with(|d| d.borrow_mut().as_mut().map(|s| s.session.focus_out()).unwrap_or_default());
             for op in ops {
                 apply_dbus_op(conn, path, op);
@@ -369,10 +416,11 @@ fn dispatch_non_key_method(
                 let mut b = d.borrow_mut();
                 let st = b.as_mut().expect("daemon state");
                 st.active_path = path.to_string();
-                st.last_mtime = config_mtime_nanos();
                 st.session.set_us_layout(us);
                 st.session.update_config(load_config());
-                st.session.engine.config().clone()
+                let cur = st.session.engine.config().clone();
+                st.last_mtime = effective_config_mtime_nanos(&cur);
+                cur
             });
             register_panel_properties(conn, path, &cfg);
         }
@@ -406,7 +454,7 @@ fn handle_property_activate(conn: *mut GDBusConnection, path: &str, name: &str) 
                 st.session.set_user_vietnamese(next);
                 let c = st.session.engine.config().clone();
                 save_config(&c);
-                st.last_mtime = config_mtime_nanos();
+                st.last_mtime = effective_config_mtime_nanos(&c);
                 let rect = st.session.cursor_rect;
                 return Some((c, Some((next, (rect.0, rect.1)))));
             }
@@ -424,7 +472,7 @@ fn handle_property_activate(conn: *mut GDBusConnection, path: &str, name: &str) 
             _ => return None,
         }
         save_config(&cfg);
-        st.last_mtime = config_mtime_nanos();
+        st.last_mtime = effective_config_mtime_nanos(&cfg);
         st.session.update_config(cfg.clone());
         Some((cfg, None))
     });
@@ -437,6 +485,9 @@ fn handle_property_activate(conn: *mut GDBusConnection, path: &str, name: &str) 
             if cfg.show_switch_osd {
                 show_linux_switch_osd(next, Some(anchor));
             }
+            if cfg.show_caret_osd {
+                show_linux_caret_hud(next, Some(anchor));
+            }
         }
     }
 }
@@ -444,6 +495,51 @@ fn handle_property_activate(conn: *mut GDBusConnection, path: &str, name: &str) 
 fn spawn_self_arg(arg: &str) {
     let exe = env::current_exe().unwrap_or_else(|_| "mskey-linux".into());
     let _ = Command::new(exe).arg(arg).spawn();
+}
+
+fn daemon_cursor_anchor() -> Option<(i32, i32)> {
+    DAEMON.with(|d| {
+        d.borrow().as_ref().and_then(|s| {
+            let (x, y, _, _) = s.session.cursor_rect;
+            if x > 0 || y > 0 { Some((x, y)) } else { None }
+        })
+    })
+}
+
+fn handle_selection_convert() {
+    let params = DAEMON.with(|d| {
+        d.borrow().as_ref().map(|s| {
+            let cfg = s.session.engine.config();
+            (
+                s.session.active_app.clone(),
+                cfg.charset,
+                cfg.paste_via_shift_insert,
+                cfg.send_delay_ms as u32,
+            )
+        })
+    });
+    let Some((active_app, charset, shift_insert_cfg, delay_ms)) = params else {
+        spawn_self_arg("--convert");
+        return;
+    };
+    let terminal = is_terminal_app(&active_app);
+    trigger_copy_keystroke(terminal);
+    std::thread::sleep(Duration::from_millis(65));
+    let Some(src) = read_clipboard_text() else {
+        spawn_self_arg("--convert");
+        return;
+    };
+    if src.trim().is_empty() {
+        spawn_self_arg("--convert");
+        return;
+    }
+    let from = detect_convert_encoding(&src);
+    let to = ConvertEncoding::from(charset);
+    let converted = convert_with_encoding(&src, from, to, CaseTransform::None);
+    if converted != src {
+        let _ = write_clipboard_text(&converted);
+        apply_clipboard_paste_linux(&converted, shift_insert_cfg || terminal, delay_ms);
+    }
 }
 
 fn apply_dbus_op(conn: *mut GDBusConnection, path: &str, op: IbusOp) {
@@ -458,7 +554,7 @@ fn apply_dbus_op(conn: *mut GDBusConnection, path: &str, op: IbusOp) {
                 d.borrow_mut().as_mut().map(|s| {
                     let c = s.session.engine.config().clone();
                     save_config(&c);
-                    s.last_mtime = config_mtime_nanos();
+                    s.last_mtime = effective_config_mtime_nanos(&c);
                     c
                 })
             }) {
@@ -466,11 +562,10 @@ fn apply_dbus_op(conn: *mut GDBusConnection, path: &str, op: IbusOp) {
             }
         }
         IbusOp::TriggerClipboardConvert => spawn_self_arg("--convert"),
+        IbusOp::TriggerSelectionConvert => handle_selection_convert(),
         IbusOp::Beep => unsafe { gdk_beep() },
-        IbusOp::ShowOsd(vi) => {
-            let anchor = DAEMON.with(|d| d.borrow().as_ref().map(|s| (s.session.cursor_rect.0, s.session.cursor_rect.1)));
-            show_linux_switch_osd(vi, anchor);
-        }
+        IbusOp::ShowOsd(vi) => show_linux_switch_osd(vi, daemon_cursor_anchor()),
+        IbusOp::ShowCaretHud(vi) => show_linux_caret_hud(vi, daemon_cursor_anchor()),
         IbusOp::Delay(ms) => std::thread::sleep(Duration::from_millis(ms as u64)),
         IbusOp::PasteViaClipboard(text, shift_insert) => {
             let delay = DAEMON.with(|d| {

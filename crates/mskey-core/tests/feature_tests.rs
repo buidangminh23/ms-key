@@ -1,7 +1,7 @@
 use mskey_core::{
-    AppBehavior, CaseTransform, Charset, Config, ConvertEncoding, CustomKeyMap, Engine,
+    AppBehavior, AppRule, CaseTransform, Charset, Config, ConvertEncoding, CustomKeyMap, Engine,
     EngineAction, InputMethod, SwitchPreset, convert_text, convert_with_encoding,
-    detect_convert_encoding, strip_vietnamese_diacritics,
+    detect_convert_encoding, normalize_tone_style, strip_vietnamese_diacritics, update,
 };
 
 fn simulate(engine: &mut Engine, input: &str) -> String {
@@ -201,4 +201,158 @@ fn encoding_detect_viqr_strip_title_and_evkey_import() {
     assert_eq!(imported.behavior_for_app("Google-chrome.exe"), AppBehavior::ForceVietnamese);
     assert_eq!(imported.macros.len(), 1);
     assert_eq!(imported.macros[0].expansion, "Đà Nẵng\nVN");
+}
+
+#[test]
+fn smart_code_bypass_handles_code_urls_paths_and_emails() {
+    let cfg = Config {
+        smart_code_bypass: true,
+        quick_w_to_u_horn: true,
+        ..Default::default()
+    };
+    let mut engine = Engine::new(cfg.clone());
+
+    assert_eq!(simulate(&mut engine, "getElementById "), "getElementById ");
+    assert_eq!(simulate(&mut engine, "addEventListener "), "addEventListener ");
+    assert_eq!(simulate(&mut engine, "iOS "), "iOS ");
+    assert_eq!(simulate(&mut engine, "Tooi "), "Tôi ");
+    assert_eq!(simulate(&mut engine, "if_else max_size is_valid as_str or_else "), "if_else max_size is_valid as_str or_else ");
+    assert_eq!(simulate(&mut engine, "too_many __init__ "), "too_many __init__ ");
+    assert_eq!(simulate(&mut engine, "v2s sha256 foo2 "), "v2s sha256 foo2 ");
+    assert_eq!(simulate(&mut engine, "https://example.com/tooi "), "https://example.com/tooi ");
+    assert_eq!(simulate(&mut engine, "wwww.google.com/tooi "), "www.google.com/tooi ");
+    assert_eq!(simulate(&mut engine, "foo@bar.vn "), "foo@bar.vn ");
+    assert_eq!(simulate(&mut engine, "C:\\Users\\tooi\\file "), "C:\\Users\\tooi\\file ");
+    assert_eq!(simulate(&mut engine, "./src/tooi ../docs/vi ~/tooi "), "./src/tooi ../docs/vi ~/tooi ");
+    assert_eq!(simulate(&mut engine, "tooi "), "tôi ");
+
+    let simple_cfg = Config {
+        quick_w_to_u_horn: false,
+        smart_code_bypass: true,
+        ..Default::default()
+    };
+    let mut simple_engine = Engine::new(simple_cfg);
+    assert_eq!(simulate(&mut simple_engine, "www.google.com/tooi "), "www.google.com/tooi ");
+
+    let vni_cfg = Config {
+        input_method: InputMethod::Vni,
+        smart_code_bypass: true,
+        ..Default::default()
+    };
+    let mut vni = Engine::new(vni_cfg);
+    assert_eq!(simulate(&mut vni, "quyt5 "), "quỵt ");
+    assert_eq!(simulate(&mut vni, "quyt1 "), "quýt ");
+}
+
+#[test]
+fn temporary_english_undo_last_word_and_hydrate_reedit() {
+    let mut engine = Engine::new(Config::default());
+    assert_eq!(simulate(&mut engine, "vieetj "), "việt ");
+    engine.set_temporary_english(true);
+    assert!(engine.config().vietnamese_enabled);
+    assert!(engine.is_temporary_english());
+    assert_eq!(simulate(&mut engine, "vieetj "), "vieetj ");
+    engine.set_temporary_english(false);
+    assert_eq!(simulate(&mut engine, "vieetj "), "việt ");
+
+    let mut screen = String::from("việt ");
+    let act1 = engine.toggle_last_committed_word();
+    apply_action(&mut screen, act1, None);
+    assert_eq!(screen, "vieetj ");
+    let act2 = engine.toggle_last_committed_word();
+    apply_action(&mut screen, act2, None);
+    assert_eq!(screen, "việt ");
+
+    let mut reedit = Engine::new(Config::default());
+    reedit.hydrate_word("xin tiếng");
+    assert_eq!(reedit.current_word(), "tiếng");
+    let mut reedit_screen = String::from("xin tiếng");
+    apply_action(&mut reedit_screen, reedit.process_key('f'), Some('f'));
+    assert_eq!(reedit_screen, "xin tiềng");
+}
+
+#[test]
+fn macro_cursor_clipboard_dates_tab_only_and_esc_user_dict() {
+    let cfg = Config {
+        macros: Config::parse_macro_text(
+            "tag:<b>{cursor}</b>\ncb:Hi {clipboard}\ndt:{year}-{month}-{day} {date:YYYYMMDD} {weekday}\n",
+        ),
+        macro_trigger_tab_only: true,
+        ..Default::default()
+    };
+    let mut engine = Engine::new(cfg.clone());
+    engine.set_clock_offset_secs(0);
+    engine.set_clipboard_text(Some("{date} $| raw".to_string()));
+
+    assert_eq!(simulate(&mut engine, "tag "), "tag ");
+    assert_eq!(engine.take_pending_cursor_left(), 0);
+
+    let tab_tag = simulate(&mut engine, "tag\t");
+    assert_eq!(tab_tag, "<b></b>");
+    assert_eq!(engine.take_pending_cursor_left(), 4);
+
+    let cb_out = simulate(&mut engine, "cb\t");
+    assert_eq!(cb_out, "Hi {date} $| raw");
+    assert_eq!(engine.take_pending_cursor_left(), 0);
+
+    let dt_out = simulate(&mut engine, "dt\t");
+    let dt_parts: Vec<&str> = dt_out.split_whitespace().collect();
+    assert!(dt_parts.len() >= 3);
+    assert_eq!(dt_parts[0].replace('-', ""), dt_parts[1]);
+    assert!(dt_out.contains("Thứ ") || dt_out.contains("Chủ Nhật"));
+
+    let mut esc_cfg = Config {
+        auto_restore_wrong_word: true,
+        ..Default::default()
+    };
+    let mut esc_engine = Engine::new(esc_cfg.clone());
+    let s = simulate(&mut esc_engine, "boo\x1B ");
+    assert_eq!(s, "boo ");
+    assert_eq!(esc_engine.last_esc_word(), Some("boo"));
+    assert_eq!(esc_engine.last_word_for_dict().as_deref(), Some("boo"));
+
+    esc_cfg.user_dict_words = Config::parse_user_dict_text(&format!(
+        "{}\n{}",
+        esc_cfg.format_user_dict_text(),
+        "boo"
+    ));
+    let mut dict_engine = Engine::new(esc_cfg);
+    assert_eq!(simulate(&mut dict_engine, "boo "), "boo ");
+}
+
+#[test]
+fn tone_normalization_window_rules_profiles_and_update_helpers() {
+    assert_eq!(normalize_tone_style("hòa khóa thúy English", true), "hoà khoá thuý English");
+    assert_eq!(normalize_tone_style("hoà khoá thuý English", false), "hòa khóa thúy English");
+    assert_eq!(
+        convert_text("hòa", Charset::Unicode, Charset::Unicode, CaseTransform::NormalizeModernTone),
+        "hoà"
+    );
+
+    let mut cfg = Config::default();
+    cfg.app_rules.push(AppRule {
+        process_name: "code.exe".to_string(),
+        title_pattern: "*terminal*".to_string(),
+        behavior: AppBehavior::ForceEnglish,
+    });
+    cfg.set_app_rule("code.exe", AppBehavior::ForceVietnamese);
+    assert_eq!(
+        cfg.behavior_for_window("code.exe", "bash - Terminal"),
+        AppBehavior::ForceEnglish
+    );
+    assert_eq!(
+        cfg.behavior_for_window("code.exe", "README.md"),
+        AppBehavior::ForceVietnamese
+    );
+
+    assert!(cfg.apply_profile("Lập trình"));
+    assert!(cfg.smart_code_bypass);
+    assert!(cfg.macro_trigger_tab_only);
+    cfg.modern_tone = false;
+    cfg.save_current_as_profile("CustomTest");
+    assert!(cfg.apply_profile("Soạn thảo"));
+    assert!(cfg.auto_capitalize_sentence);
+    assert!(cfg.apply_profile("CustomTest"));
+    assert!(!cfg.modern_tone);
+    assert!(update::is_newer_version("0.1.2", "v0.1.3"));
 }

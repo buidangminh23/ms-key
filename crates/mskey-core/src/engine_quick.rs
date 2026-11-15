@@ -114,10 +114,32 @@ pub(crate) fn promote_open_u_ohorn(display: &mut [char], allow_fjwz: bool) {
     }
 }
 
-pub(crate) fn expand_macro_variables(expansion: &str, clock_offset_secs: i64) -> String {
-    if !expansion.contains('{') {
-        return expansion.to_string();
-    }
+pub(crate) struct MacroExpansion {
+    pub text: String,
+    pub cursor_char_idx: Option<usize>,
+}
+
+struct DateParts {
+    year: i64,
+    month: u32,
+    day: u32,
+    hour: i64,
+    minute: i64,
+    second: i64,
+    weekday_idx: usize,
+}
+
+const WEEKDAYS_VI: [&str; 7] = [
+    "Thứ Hai",
+    "Thứ Ba",
+    "Thứ Tư",
+    "Thứ Năm",
+    "Thứ Sáu",
+    "Thứ Bảy",
+    "Chủ Nhật",
+];
+
+fn current_date_parts(clock_offset_secs: i64) -> DateParts {
     let secs = SystemTime::now()
         .duration_since(UNIX_EPOCH)
         .map(|d| d.as_secs() as i64)
@@ -127,14 +149,146 @@ pub(crate) fn expand_macro_variables(expansion: &str, clock_offset_secs: i64) ->
     let rem = secs.rem_euclid(86_400);
     let hour = rem / 3_600;
     let minute = (rem % 3_600) / 60;
+    let second = rem % 60;
     let (year, month, day) = civil_from_days(days);
-    let date_str = format!("{day:02}/{month:02}/{year:04}");
-    let time_str = format!("{hour:02}:{minute:02}");
-    let datetime_str = format!("{date_str} {time_str}");
-    expansion
-        .replace("{datetime}", &datetime_str)
-        .replace("{date}", &date_str)
-        .replace("{time}", &time_str)
+    let weekday_idx = (days + 3).rem_euclid(7) as usize;
+    DateParts {
+        year,
+        month,
+        day,
+        hour,
+        minute,
+        second,
+        weekday_idx,
+    }
+}
+
+fn format_custom_date(fmt: &str, dt: &DateParts) -> String {
+    let mut out = String::with_capacity(fmt.len() + 8);
+    let mut i = 0;
+    while i < fmt.len() {
+        let rest = &fmt[i..];
+        if rest.starts_with("YYYY") {
+            out.push_str(&format!("{:04}", dt.year));
+            i += 4;
+        } else if rest.starts_with("YY") {
+            out.push_str(&format!("{:02}", dt.year.rem_euclid(100)));
+            i += 2;
+        } else if rest.starts_with("MM") {
+            out.push_str(&format!("{:02}", dt.month));
+            i += 2;
+        } else if rest.starts_with('M') {
+            out.push_str(&dt.month.to_string());
+            i += 1;
+        } else if rest.starts_with("DD") {
+            out.push_str(&format!("{:02}", dt.day));
+            i += 2;
+        } else if rest.starts_with('D') {
+            out.push_str(&dt.day.to_string());
+            i += 1;
+        } else if rest.starts_with("HH") {
+            out.push_str(&format!("{:02}", dt.hour));
+            i += 2;
+        } else if rest.starts_with('H') {
+            out.push_str(&dt.hour.to_string());
+            i += 1;
+        } else if rest.starts_with("mm") {
+            out.push_str(&format!("{:02}", dt.minute));
+            i += 2;
+        } else if rest.starts_with('m') {
+            out.push_str(&dt.minute.to_string());
+            i += 1;
+        } else if rest.starts_with("ss") {
+            out.push_str(&format!("{:02}", dt.second));
+            i += 2;
+        } else if rest.starts_with('s') {
+            out.push_str(&dt.second.to_string());
+            i += 1;
+        } else if rest.starts_with("dddd") || rest.starts_with("ddd") {
+            out.push_str(WEEKDAYS_VI[dt.weekday_idx]);
+            i += if rest.starts_with("dddd") { 4 } else { 3 };
+        } else if let Some(ch) = rest.chars().next() {
+            out.push(ch);
+            i += ch.len_utf8();
+        } else {
+            break;
+        }
+    }
+    out
+}
+
+pub(crate) fn expand_macro_variables_with_context(
+    expansion: &str,
+    clock_offset_secs: i64,
+    clipboard: Option<&str>,
+) -> MacroExpansion {
+    if !expansion.contains('{') && !expansion.contains("$|") {
+        return MacroExpansion {
+            text: expansion.to_string(),
+            cursor_char_idx: None,
+        };
+    }
+    let dt = current_date_parts(clock_offset_secs);
+    let mut out = String::with_capacity(expansion.len() + 16);
+    let mut cursor_char_idx = None;
+    let mut i = 0;
+    while i < expansion.len() {
+        let rest = &expansion[i..];
+        if rest.starts_with("$|") {
+            if cursor_char_idx.is_none() {
+                cursor_char_idx = Some(out.chars().count());
+            }
+            i += 2;
+        } else if rest.starts_with("{cursor}") {
+            if cursor_char_idx.is_none() {
+                cursor_char_idx = Some(out.chars().count());
+            }
+            i += "{cursor}".len();
+        } else if rest.starts_with("{clipboard}") {
+            if let Some(cb) = clipboard {
+                out.push_str(cb);
+            }
+            i += "{clipboard}".len();
+        } else if rest.starts_with("{datetime}") {
+            out.push_str(&format!(
+                "{:02}/{:02}/{:04} {:02}:{:02}",
+                dt.day, dt.month, dt.year, dt.hour, dt.minute
+            ));
+            i += "{datetime}".len();
+        } else if rest.starts_with("{date}") {
+            out.push_str(&format!("{:02}/{:02}/{:04}", dt.day, dt.month, dt.year));
+            i += "{date}".len();
+        } else if rest.starts_with("{time}") {
+            out.push_str(&format!("{:02}:{:02}", dt.hour, dt.minute));
+            i += "{time}".len();
+        } else if rest.starts_with("{year}") {
+            out.push_str(&format!("{:04}", dt.year));
+            i += "{year}".len();
+        } else if rest.starts_with("{month}") {
+            out.push_str(&format!("{:02}", dt.month));
+            i += "{month}".len();
+        } else if rest.starts_with("{day}") {
+            out.push_str(&format!("{:02}", dt.day));
+            i += "{day}".len();
+        } else if rest.starts_with("{weekday}") {
+            out.push_str(WEEKDAYS_VI[dt.weekday_idx]);
+            i += "{weekday}".len();
+        } else if let Some(after_prefix) = rest.strip_prefix("{date:")
+            && let Some(end) = after_prefix.find('}')
+        {
+            out.push_str(&format_custom_date(&after_prefix[..end], &dt));
+            i += "{date:".len() + end + 1;
+        } else if let Some(ch) = rest.chars().next() {
+            out.push(ch);
+            i += ch.len_utf8();
+        } else {
+            break;
+        }
+    }
+    MacroExpansion {
+        text: out,
+        cursor_char_idx,
+    }
 }
 
 fn civil_from_days(z: i64) -> (i64, u32, u32) {

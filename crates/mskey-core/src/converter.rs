@@ -9,6 +9,8 @@ pub enum CaseTransform {
     Sentence,
     Title,
     StripDiacritics,
+    NormalizeModernTone,
+    NormalizeClassicTone,
 }
 
 const COMBINING_TONE: [Option<char>; 6] = [
@@ -284,6 +286,12 @@ pub fn apply_case_transform(input: &str, mode: CaseTransform) -> String {
         CaseTransform::Sentence => to_sentence_case(input),
         CaseTransform::Title => to_title_case(input),
         CaseTransform::StripDiacritics => crate::converter_extra::strip_vietnamese_diacritics(input),
+        CaseTransform::NormalizeModernTone => {
+            crate::converter_extra::normalize_tone_style(input, true)
+        }
+        CaseTransform::NormalizeClassicTone => {
+            crate::converter_extra::normalize_tone_style(input, false)
+        }
     }
 }
 

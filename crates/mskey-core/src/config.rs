@@ -74,10 +74,77 @@ pub enum AppBehavior {
     Blacklist,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
+pub enum HoldEnglishKey {
+    #[default]
+    None,
+    RightShift,
+    LeftShift,
+    RightAlt,
+    RightCtrl,
+    CapsLock,
+}
+
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(default)]
 pub struct AppRule {
     pub process_name: String,
+    pub title_pattern: String,
     pub behavior: AppBehavior,
+}
+
+impl Default for AppRule {
+    fn default() -> Self {
+        Self {
+            process_name: String::new(),
+            title_pattern: String::new(),
+            behavior: AppBehavior::Default,
+        }
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(default)]
+pub struct ConfigProfile {
+    pub name: String,
+    pub modern_tone: bool,
+    pub free_tone: bool,
+    pub allow_fjwz: bool,
+    pub auto_capitalize_sentence: bool,
+    pub spelling_check: bool,
+    pub auto_restore_wrong_word: bool,
+    pub smart_code_bypass: bool,
+    pub macro_enabled: bool,
+    pub macro_when_english: bool,
+    pub macro_trigger_tab_only: bool,
+    pub quick_w_to_u_horn: bool,
+    pub quick_brackets: bool,
+    pub quick_telex: bool,
+    pub quick_start_consonant: bool,
+    pub quick_end_consonant: bool,
+}
+
+impl Default for ConfigProfile {
+    fn default() -> Self {
+        Self {
+            name: "Mặc định".to_string(),
+            modern_tone: true,
+            free_tone: true,
+            allow_fjwz: true,
+            auto_capitalize_sentence: false,
+            spelling_check: true,
+            auto_restore_wrong_word: true,
+            smart_code_bypass: true,
+            macro_enabled: true,
+            macro_when_english: false,
+            macro_trigger_tab_only: false,
+            quick_w_to_u_horn: true,
+            quick_brackets: true,
+            quick_telex: false,
+            quick_start_consonant: false,
+            quick_end_consonant: false,
+        }
+    }
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -172,6 +239,18 @@ pub struct Config {
     pub macros: Vec<MacroEntry>,
     pub user_dict_words: Vec<String>,
     pub custom_keymap: CustomKeyMap,
+    pub smart_code_bypass: bool,
+    pub macro_trigger_tab_only: bool,
+    pub hold_english_key: HoldEnglishKey,
+    pub quick_capslock_switch: bool,
+    pub undo_last_word_hotkey: HotkeyCombo,
+    pub convert_selection_hotkey: HotkeyCombo,
+    pub show_caret_osd: bool,
+    pub reedit_surrounding_word: bool,
+    pub check_updates_on_start: bool,
+    pub active_profile: String,
+    pub profiles: Vec<ConfigProfile>,
+    pub sync_config_path: String,
 }
 
 impl Default for Config {
@@ -222,6 +301,30 @@ impl Default for Config {
             macros: Vec::new(),
             user_dict_words: Vec::new(),
             custom_keymap: CustomKeyMap::default(),
+            smart_code_bypass: true,
+            macro_trigger_tab_only: false,
+            hold_english_key: HoldEnglishKey::None,
+            quick_capslock_switch: false,
+            undo_last_word_hotkey: HotkeyCombo {
+                ctrl: true,
+                alt: false,
+                shift: true,
+                win_cmd: false,
+                key_code: 0x5A,
+            },
+            convert_selection_hotkey: HotkeyCombo {
+                ctrl: true,
+                alt: false,
+                shift: true,
+                win_cmd: false,
+                key_code: 0x76,
+            },
+            show_caret_osd: true,
+            reedit_surrounding_word: true,
+            check_updates_on_start: false,
+            active_profile: "Mặc định".to_string(),
+            profiles: Vec::new(),
+            sync_config_path: String::new(),
         }
     }
 }
@@ -236,14 +339,43 @@ impl Config {
     }
 
     pub fn behavior_for_app(&self, process_name: &str) -> AppBehavior {
+        self.behavior_for_window(process_name, "")
+    }
+
+    pub fn behavior_for_window(&self, process_name: &str, window_title: &str) -> AppBehavior {
         let needle = process_name.trim();
+        let title = window_title.trim();
+        if !title.is_empty() {
+            for rule in &self.app_rules {
+                if !rule.title_pattern.trim().is_empty()
+                    && (rule.process_name.trim().is_empty()
+                        || rule.process_name.trim() == "*"
+                        || rule.process_name.eq_ignore_ascii_case(needle))
+                    && wildcard_match(rule.title_pattern.trim(), title)
+                {
+                    return rule.behavior;
+                }
+            }
+            for rule in &self.app_rules {
+                if !rule.title_pattern.trim().is_empty()
+                    && rule.process_name.contains('*')
+                    && wildcard_match(&rule.process_name, needle)
+                    && wildcard_match(rule.title_pattern.trim(), title)
+                {
+                    return rule.behavior;
+                }
+            }
+        }
         for rule in &self.app_rules {
-            if rule.process_name.eq_ignore_ascii_case(needle) {
+            if rule.title_pattern.trim().is_empty() && rule.process_name.eq_ignore_ascii_case(needle) {
                 return rule.behavior;
             }
         }
         for rule in &self.app_rules {
-            if rule.process_name.contains('*') && wildcard_match(&rule.process_name, needle) {
+            if rule.title_pattern.trim().is_empty()
+                && rule.process_name.contains('*')
+                && wildcard_match(&rule.process_name, needle)
+            {
                 return rule.behavior;
             }
         }
@@ -251,19 +383,29 @@ impl Config {
     }
 
     pub fn set_app_rule(&mut self, process_name: &str, behavior: AppBehavior) {
-        let clean = process_name.trim().to_string();
-        if clean.is_empty() {
+        self.set_window_rule(process_name, "", behavior);
+    }
+
+    pub fn set_window_rule(
+        &mut self,
+        process_name: &str,
+        title_pattern: &str,
+        behavior: AppBehavior,
+    ) {
+        let clean_proc = process_name.trim().to_string();
+        let clean_title = title_pattern.trim().to_string();
+        if clean_proc.is_empty() && clean_title.is_empty() {
             return;
         }
-        if let Some(existing) = self
-            .app_rules
-            .iter_mut()
-            .find(|r| r.process_name.eq_ignore_ascii_case(&clean))
-        {
+        if let Some(existing) = self.app_rules.iter_mut().find(|r| {
+            r.process_name.eq_ignore_ascii_case(&clean_proc)
+                && r.title_pattern.eq_ignore_ascii_case(&clean_title)
+        }) {
             if behavior == AppBehavior::Default {
-                let target = clean.clone();
-                self.app_rules
-                    .retain(|r| !r.process_name.eq_ignore_ascii_case(&target));
+                self.app_rules.retain(|r| {
+                    !(r.process_name.eq_ignore_ascii_case(&clean_proc)
+                        && r.title_pattern.eq_ignore_ascii_case(&clean_title))
+                });
             } else {
                 existing.behavior = behavior;
             }
@@ -271,10 +413,150 @@ impl Config {
         }
         if behavior != AppBehavior::Default {
             self.app_rules.push(AppRule {
-                process_name: clean,
+                process_name: clean_proc,
+                title_pattern: clean_title,
                 behavior,
             });
         }
+    }
+
+    pub fn builtin_profile_names() -> [&'static str; 3] {
+        ["Mặc định", "Lập trình", "Soạn thảo"]
+    }
+
+    pub fn all_profile_names(&self) -> Vec<String> {
+        let mut names: Vec<String> = Self::builtin_profile_names()
+            .into_iter()
+            .map(ToOwned::to_owned)
+            .collect();
+        for p in &self.profiles {
+            if !p.name.trim().is_empty()
+                && !names.iter().any(|n| n.eq_ignore_ascii_case(p.name.trim()))
+            {
+                names.push(p.name.trim().to_string());
+            }
+        }
+        names
+    }
+
+    pub fn snapshot_profile(&self, name: &str) -> ConfigProfile {
+        ConfigProfile {
+            name: name.trim().to_string(),
+            modern_tone: self.modern_tone,
+            free_tone: self.free_tone,
+            allow_fjwz: self.allow_fjwz,
+            auto_capitalize_sentence: self.auto_capitalize_sentence,
+            spelling_check: self.spelling_check,
+            auto_restore_wrong_word: self.auto_restore_wrong_word,
+            smart_code_bypass: self.smart_code_bypass,
+            macro_enabled: self.macro_enabled,
+            macro_when_english: self.macro_when_english,
+            macro_trigger_tab_only: self.macro_trigger_tab_only,
+            quick_w_to_u_horn: self.quick_w_to_u_horn,
+            quick_brackets: self.quick_brackets,
+            quick_telex: self.quick_telex,
+            quick_start_consonant: self.quick_start_consonant,
+            quick_end_consonant: self.quick_end_consonant,
+        }
+    }
+
+    pub fn save_current_as_profile(&mut self, name: &str) {
+        let clean = name.trim();
+        if clean.is_empty() {
+            return;
+        }
+        let snap = self.snapshot_profile(clean);
+        if let Some(ex) = self
+            .profiles
+            .iter_mut()
+            .find(|p| p.name.eq_ignore_ascii_case(clean))
+        {
+            *ex = snap;
+        } else {
+            self.profiles.push(snap);
+        }
+        self.active_profile = clean.to_string();
+    }
+
+    pub fn apply_profile(&mut self, name: &str) -> bool {
+        let clean = name.trim();
+        let profile = if let Some(custom) = self
+            .profiles
+            .iter()
+            .find(|p| p.name.eq_ignore_ascii_case(clean))
+            .cloned()
+        {
+            custom
+        } else if clean.eq_ignore_ascii_case("Lập trình") || clean.eq_ignore_ascii_case("coding") {
+            ConfigProfile {
+                name: "Lập trình".to_string(),
+                auto_capitalize_sentence: false,
+                smart_code_bypass: true,
+                auto_restore_wrong_word: true,
+                macro_when_english: true,
+                macro_trigger_tab_only: true,
+                quick_brackets: false,
+                ..ConfigProfile::default()
+            }
+        } else if clean.eq_ignore_ascii_case("Soạn thảo") || clean.eq_ignore_ascii_case("writing") {
+            ConfigProfile {
+                name: "Soạn thảo".to_string(),
+                auto_capitalize_sentence: true,
+                smart_code_bypass: true,
+                spelling_check: true,
+                auto_restore_wrong_word: true,
+                macro_trigger_tab_only: false,
+                quick_brackets: true,
+                ..ConfigProfile::default()
+            }
+        } else if clean.eq_ignore_ascii_case("Mặc định") || clean.eq_ignore_ascii_case("default") {
+            ConfigProfile::default()
+        } else {
+            return false;
+        };
+        self.modern_tone = profile.modern_tone;
+        self.free_tone = profile.free_tone;
+        self.allow_fjwz = profile.allow_fjwz;
+        self.auto_capitalize_sentence = profile.auto_capitalize_sentence;
+        self.spelling_check = profile.spelling_check;
+        self.auto_restore_wrong_word = profile.auto_restore_wrong_word;
+        self.smart_code_bypass = profile.smart_code_bypass;
+        self.macro_enabled = profile.macro_enabled;
+        self.macro_when_english = profile.macro_when_english;
+        self.macro_trigger_tab_only = profile.macro_trigger_tab_only;
+        self.quick_w_to_u_horn = profile.quick_w_to_u_horn;
+        self.quick_brackets = profile.quick_brackets;
+        self.quick_telex = profile.quick_telex;
+        self.quick_start_consonant = profile.quick_start_consonant;
+        self.quick_end_consonant = profile.quick_end_consonant;
+        self.active_profile = profile.name;
+        true
+    }
+
+    pub fn format_user_dict_text(&self) -> String {
+        let mut out = String::from("# MS Key User Dictionary\n");
+        for w in &self.user_dict_words {
+            let t = w.trim();
+            if !t.is_empty() {
+                out.push_str(t);
+                out.push('\n');
+            }
+        }
+        out
+    }
+
+    pub fn parse_user_dict_text(content: &str) -> Vec<String> {
+        let mut words = Vec::new();
+        for raw_line in content.lines() {
+            let line = raw_line.trim();
+            if line.is_empty() || line.starts_with('#') || line.starts_with(';') {
+                continue;
+            }
+            if !words.iter().any(|w: &String| w.eq_ignore_ascii_case(line)) {
+                words.push(line.to_string());
+            }
+        }
+        words
     }
 
     pub fn import_evkey_tree(content: &str) -> Self {

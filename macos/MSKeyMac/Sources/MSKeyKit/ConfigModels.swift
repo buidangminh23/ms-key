@@ -72,6 +72,32 @@ public enum ConvertEncodingKind: UInt8, CaseIterable, Sendable, Identifiable {
     }
 }
 
+public enum CaseTransformKind: UInt8, CaseIterable, Sendable, Identifiable {
+    case none = 0
+    case upper = 1
+    case lower = 2
+    case sentence = 3
+    case title = 4
+    case stripDiacritics = 5
+    case normalizeModernTone = 6
+    case normalizeClassicTone = 7
+
+    public var id: UInt8 { rawValue }
+
+    public var label: String {
+        switch self {
+        case .none: return "Giữ nguyên"
+        case .upper: return "CHỮ HOA"
+        case .lower: return "chữ thường"
+        case .sentence: return "Hoa đầu câu"
+        case .title: return "Hoa Mỗi Từ"
+        case .stripDiacritics: return "Bỏ dấu tiếng Việt"
+        case .normalizeModernTone: return "Chuẩn hóa dấu mới (hoà)"
+        case .normalizeClassicTone: return "Chuẩn hóa dấu cũ (hòa)"
+        }
+    }
+}
+
 public enum MechanismKind: String, Codable, CaseIterable, Sendable, Identifiable {
     case keyboardHook = "KeyboardHook"
     case compatibleHook = "CompatibleHook"
@@ -123,6 +149,27 @@ public enum AppBehaviorKind: String, Codable, CaseIterable, Sendable, Identifiab
         case .forceEnglish: return "Luôn Tiếng Anh"
         case .forceVietnamese: return "Luôn Tiếng Việt"
         case .blacklist: return "Bỏ qua (Blacklist)"
+        }
+    }
+}
+
+public enum HoldEnglishKey: String, Codable, CaseIterable, Sendable, Identifiable {
+    case none = "None"
+    case rightShift = "RightShift"
+    case leftShift = "LeftShift"
+    case rightAlt = "RightAlt"
+    case rightCtrl = "RightCtrl"
+    case capsLock = "CapsLock"
+
+    public var id: String { rawValue }
+    public var label: String {
+        switch self {
+        case .none: return "Không dùng"
+        case .rightShift: return "Shift phải"
+        case .leftShift: return "Shift trái"
+        case .rightAlt: return "Option / Alt phải"
+        case .rightCtrl: return "Ctrl phải"
+        case .capsLock: return "Caps Lock"
         }
     }
 }
@@ -179,13 +226,129 @@ public struct HotkeyComboModel: Codable, Equatable, Sendable {
 
 public struct AppRuleItem: Codable, Equatable, Sendable, Identifiable {
     public var process_name: String
+    public var titlePattern: String
     public var behavior: AppBehaviorKind
 
-    public var id: String { process_name }
+    public var id: String {
+        "\(process_name.lowercased())\u{001F}\(titlePattern.lowercased())"
+    }
 
-    public init(process_name: String, behavior: AppBehaviorKind) {
+    enum CodingKeys: String, CodingKey {
+        case process_name
+        case titlePattern = "title_pattern"
+        case behavior
+    }
+
+    public init(process_name: String, titlePattern: String = "", behavior: AppBehaviorKind) {
         self.process_name = process_name
+        self.titlePattern = titlePattern
         self.behavior = behavior
+    }
+
+    public init(from decoder: Decoder) throws {
+        let c = try decoder.container(keyedBy: CodingKeys.self)
+        process_name = try c.decodeIfPresent(String.self, forKey: .process_name) ?? ""
+        titlePattern = try c.decodeIfPresent(String.self, forKey: .titlePattern) ?? ""
+        behavior = try c.decodeIfPresent(AppBehaviorKind.self, forKey: .behavior) ?? .default
+    }
+}
+
+public typealias AppRule = AppRuleItem
+
+public struct ConfigProfile: Codable, Equatable, Sendable, Identifiable {
+    public var name: String = "Mặc định"
+    public var modernTone: Bool = true
+    public var freeTone: Bool = true
+    public var allowFjwz: Bool = true
+    public var autoCapitalizeSentence: Bool = false
+    public var spellingCheck: Bool = true
+    public var autoRestoreWrongWord: Bool = true
+    public var smartCodeBypass: Bool = true
+    public var macroEnabled: Bool = true
+    public var macroWhenEnglish: Bool = false
+    public var macroTriggerTabOnly: Bool = false
+    public var quickWToUHorn: Bool = true
+    public var quickBrackets: Bool = true
+    public var quickTelex: Bool = false
+    public var quickStartConsonant: Bool = false
+    public var quickEndConsonant: Bool = false
+
+    public var id: String { name }
+
+    enum CodingKeys: String, CodingKey {
+        case name
+        case modernTone = "modern_tone"
+        case freeTone = "free_tone"
+        case allowFjwz = "allow_fjwz"
+        case autoCapitalizeSentence = "auto_capitalize_sentence"
+        case spellingCheck = "spelling_check"
+        case autoRestoreWrongWord = "auto_restore_wrong_word"
+        case smartCodeBypass = "smart_code_bypass"
+        case macroEnabled = "macro_enabled"
+        case macroWhenEnglish = "macro_when_english"
+        case macroTriggerTabOnly = "macro_trigger_tab_only"
+        case quickWToUHorn = "quick_w_to_u_horn"
+        case quickBrackets = "quick_brackets"
+        case quickTelex = "quick_telex"
+        case quickStartConsonant = "quick_start_consonant"
+        case quickEndConsonant = "quick_end_consonant"
+    }
+
+    public init(
+        name: String = "Mặc định",
+        modernTone: Bool = true,
+        freeTone: Bool = true,
+        allowFjwz: Bool = true,
+        autoCapitalizeSentence: Bool = false,
+        spellingCheck: Bool = true,
+        autoRestoreWrongWord: Bool = true,
+        smartCodeBypass: Bool = true,
+        macroEnabled: Bool = true,
+        macroWhenEnglish: Bool = false,
+        macroTriggerTabOnly: Bool = false,
+        quickWToUHorn: Bool = true,
+        quickBrackets: Bool = true,
+        quickTelex: Bool = false,
+        quickStartConsonant: Bool = false,
+        quickEndConsonant: Bool = false
+    ) {
+        self.name = name
+        self.modernTone = modernTone
+        self.freeTone = freeTone
+        self.allowFjwz = allowFjwz
+        self.autoCapitalizeSentence = autoCapitalizeSentence
+        self.spellingCheck = spellingCheck
+        self.autoRestoreWrongWord = autoRestoreWrongWord
+        self.smartCodeBypass = smartCodeBypass
+        self.macroEnabled = macroEnabled
+        self.macroWhenEnglish = macroWhenEnglish
+        self.macroTriggerTabOnly = macroTriggerTabOnly
+        self.quickWToUHorn = quickWToUHorn
+        self.quickBrackets = quickBrackets
+        self.quickTelex = quickTelex
+        self.quickStartConsonant = quickStartConsonant
+        self.quickEndConsonant = quickEndConsonant
+    }
+
+    public init(from decoder: Decoder) throws {
+        let c = try decoder.container(keyedBy: CodingKeys.self)
+        let d = ConfigProfile()
+        name = try c.decodeIfPresent(String.self, forKey: .name) ?? d.name
+        modernTone = try c.decodeIfPresent(Bool.self, forKey: .modernTone) ?? d.modernTone
+        freeTone = try c.decodeIfPresent(Bool.self, forKey: .freeTone) ?? d.freeTone
+        allowFjwz = try c.decodeIfPresent(Bool.self, forKey: .allowFjwz) ?? d.allowFjwz
+        autoCapitalizeSentence = try c.decodeIfPresent(Bool.self, forKey: .autoCapitalizeSentence) ?? d.autoCapitalizeSentence
+        spellingCheck = try c.decodeIfPresent(Bool.self, forKey: .spellingCheck) ?? d.spellingCheck
+        autoRestoreWrongWord = try c.decodeIfPresent(Bool.self, forKey: .autoRestoreWrongWord) ?? d.autoRestoreWrongWord
+        smartCodeBypass = try c.decodeIfPresent(Bool.self, forKey: .smartCodeBypass) ?? d.smartCodeBypass
+        macroEnabled = try c.decodeIfPresent(Bool.self, forKey: .macroEnabled) ?? d.macroEnabled
+        macroWhenEnglish = try c.decodeIfPresent(Bool.self, forKey: .macroWhenEnglish) ?? d.macroWhenEnglish
+        macroTriggerTabOnly = try c.decodeIfPresent(Bool.self, forKey: .macroTriggerTabOnly) ?? d.macroTriggerTabOnly
+        quickWToUHorn = try c.decodeIfPresent(Bool.self, forKey: .quickWToUHorn) ?? d.quickWToUHorn
+        quickBrackets = try c.decodeIfPresent(Bool.self, forKey: .quickBrackets) ?? d.quickBrackets
+        quickTelex = try c.decodeIfPresent(Bool.self, forKey: .quickTelex) ?? d.quickTelex
+        quickStartConsonant = try c.decodeIfPresent(Bool.self, forKey: .quickStartConsonant) ?? d.quickStartConsonant
+        quickEndConsonant = try c.decodeIfPresent(Bool.self, forKey: .quickEndConsonant) ?? d.quickEndConsonant
     }
 }
 
@@ -285,6 +448,72 @@ public struct MSKeyConfig: Codable, Equatable, Sendable {
     public var macros: [MacroItem] = []
     public var user_dict_words: [String] = []
     public var custom_keymap: CustomKeyMapModel = CustomKeyMapModel()
+    public var smartCodeBypass: Bool = true
+    public var macroTriggerTabOnly: Bool = false
+    public var holdEnglishKey: HoldEnglishKey = .none
+    public var quickCapslockSwitch: Bool = false
+    public var undoLastWordHotkey: HotkeyComboModel = HotkeyComboModel(ctrl: true, alt: false, shift: true, win_cmd: false, key_code: 0x5A)
+    public var convertSelectionHotkey: HotkeyComboModel = HotkeyComboModel(ctrl: true, alt: false, shift: true, win_cmd: false, key_code: 0x76)
+    public var showCaretOsd: Bool = true
+    public var reeditSurroundingWord: Bool = true
+    public var checkUpdatesOnStart: Bool = false
+    public var activeProfile: String = "Mặc định"
+    public var profiles: [ConfigProfile] = []
+    public var syncConfigPath: String = ""
+
+    enum CodingKeys: String, CodingKey {
+        case vietnamese_enabled
+        case charset
+        case input_method
+        case mechanism
+        case modern_tone
+        case free_tone
+        case allow_fjwz
+        case auto_capitalize_sentence
+        case use_clipboard_send
+        case standard_key_send
+        case spelling_check
+        case auto_restore_wrong_word
+        case disable_on_non_us_layout
+        case fix_browser_suggest_1
+        case fix_browser_suggest_2
+        case macro_enabled
+        case macro_when_english
+        case quick_w_to_u_horn
+        case quick_brackets
+        case quick_telex
+        case quick_start_consonant
+        case quick_end_consonant
+        case esc_restore
+        case switch_preset
+        case custom_switch_hotkey
+        case clipboard_convert_hotkey
+        case beep_on_switch
+        case show_switch_osd
+        case paste_via_shift_insert
+        case send_delay_ms
+        case auto_start
+        case run_as_admin
+        case show_on_startup
+        case theme
+        case smart_app_switch
+        case app_rules
+        case macros
+        case user_dict_words
+        case custom_keymap
+        case smartCodeBypass = "smart_code_bypass"
+        case macroTriggerTabOnly = "macro_trigger_tab_only"
+        case holdEnglishKey = "hold_english_key"
+        case quickCapslockSwitch = "quick_capslock_switch"
+        case undoLastWordHotkey = "undo_last_word_hotkey"
+        case convertSelectionHotkey = "convert_selection_hotkey"
+        case showCaretOsd = "show_caret_osd"
+        case reeditSurroundingWord = "reedit_surrounding_word"
+        case checkUpdatesOnStart = "check_updates_on_start"
+        case activeProfile = "active_profile"
+        case profiles
+        case syncConfigPath = "sync_config_path"
+    }
 
     public init() {}
 
@@ -330,6 +559,64 @@ public struct MSKeyConfig: Codable, Equatable, Sendable {
         macros = try c.decodeIfPresent([MacroItem].self, forKey: .macros) ?? d.macros
         user_dict_words = try c.decodeIfPresent([String].self, forKey: .user_dict_words) ?? d.user_dict_words
         custom_keymap = try c.decodeIfPresent(CustomKeyMapModel.self, forKey: .custom_keymap) ?? d.custom_keymap
+        smartCodeBypass = try c.decodeIfPresent(Bool.self, forKey: .smartCodeBypass) ?? d.smartCodeBypass
+        macroTriggerTabOnly = try c.decodeIfPresent(Bool.self, forKey: .macroTriggerTabOnly) ?? d.macroTriggerTabOnly
+        holdEnglishKey = try c.decodeIfPresent(HoldEnglishKey.self, forKey: .holdEnglishKey) ?? d.holdEnglishKey
+        quickCapslockSwitch = try c.decodeIfPresent(Bool.self, forKey: .quickCapslockSwitch) ?? d.quickCapslockSwitch
+        undoLastWordHotkey = try c.decodeIfPresent(HotkeyComboModel.self, forKey: .undoLastWordHotkey) ?? d.undoLastWordHotkey
+        convertSelectionHotkey = try c.decodeIfPresent(HotkeyComboModel.self, forKey: .convertSelectionHotkey) ?? d.convertSelectionHotkey
+        showCaretOsd = try c.decodeIfPresent(Bool.self, forKey: .showCaretOsd) ?? d.showCaretOsd
+        reeditSurroundingWord = try c.decodeIfPresent(Bool.self, forKey: .reeditSurroundingWord) ?? d.reeditSurroundingWord
+        checkUpdatesOnStart = try c.decodeIfPresent(Bool.self, forKey: .checkUpdatesOnStart) ?? d.checkUpdatesOnStart
+        activeProfile = try c.decodeIfPresent(String.self, forKey: .activeProfile) ?? d.activeProfile
+        profiles = try c.decodeIfPresent([ConfigProfile].self, forKey: .profiles) ?? d.profiles
+        syncConfigPath = try c.decodeIfPresent(String.self, forKey: .syncConfigPath) ?? d.syncConfigPath
+    }
+
+    public static let builtinProfileNames = ["Mặc định", "Lập trình", "Soạn thảo"]
+
+    public func allProfileNames() -> [String] {
+        var names = Self.builtinProfileNames
+        for p in profiles {
+            let trimmed = p.name.trimmingCharacters(in: .whitespacesAndNewlines)
+            if !trimmed.isEmpty && !names.contains(where: { $0.caseInsensitiveCompare(trimmed) == .orderedSame }) {
+                names.append(trimmed)
+            }
+        }
+        return names
+    }
+
+    public func snapshotProfile(named name: String) -> ConfigProfile {
+        ConfigProfile(
+            name: name.trimmingCharacters(in: .whitespacesAndNewlines),
+            modernTone: modern_tone,
+            freeTone: free_tone,
+            allowFjwz: allow_fjwz,
+            autoCapitalizeSentence: auto_capitalize_sentence,
+            spellingCheck: spelling_check,
+            autoRestoreWrongWord: auto_restore_wrong_word,
+            smartCodeBypass: smartCodeBypass,
+            macroEnabled: macro_enabled,
+            macroWhenEnglish: macro_when_english,
+            macroTriggerTabOnly: macroTriggerTabOnly,
+            quickWToUHorn: quick_w_to_u_horn,
+            quickBrackets: quick_brackets,
+            quickTelex: quick_telex,
+            quickStartConsonant: quick_start_consonant,
+            quickEndConsonant: quick_end_consonant
+        )
+    }
+
+    public mutating func saveCurrentAsProfile(_ name: String) {
+        let clean = name.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !clean.isEmpty else { return }
+        let snap = snapshotProfile(named: clean)
+        if let idx = profiles.firstIndex(where: { $0.name.caseInsensitiveCompare(clean) == .orderedSame }) {
+            profiles[idx] = snap
+        } else {
+            profiles.append(snap)
+        }
+        activeProfile = clean
     }
 }
 
@@ -347,21 +634,95 @@ public enum MacConfigStore {
         configDirectory.appendingPathComponent("app_state.json")
     }
 
-    public static func load() -> MSKeyConfig {
-        guard let data = try? Data(contentsOf: configFile),
-              let cfg = try? JSONDecoder().decode(MSKeyConfig.self, from: data) else {
-            return MSKeyConfig()
+    public static func resolveSyncURL(from rawPath: String) -> URL? {
+        let trimmed = rawPath.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmed.isEmpty else { return nil }
+        let expanded = NSString(string: trimmed).expandingTildeInPath
+        var isDir: ObjCBool = false
+        if FileManager.default.fileExists(atPath: expanded, isDirectory: &isDir), isDir.boolValue {
+            return URL(fileURLWithPath: expanded, isDirectory: true).appendingPathComponent("config.json")
         }
-        return cfg
+        if expanded.hasSuffix("/") {
+            return URL(fileURLWithPath: expanded, isDirectory: true).appendingPathComponent("config.json")
+        }
+        return URL(fileURLWithPath: expanded, isDirectory: false)
+    }
+
+    public static func load() -> MSKeyConfig {
+        load(from: configFile)
+    }
+
+    public static func load(from primaryFile: URL) -> MSKeyConfig {
+        let localCfg: MSKeyConfig
+        let localExists: Bool
+        if let data = try? Data(contentsOf: primaryFile),
+           let cfg = try? JSONDecoder().decode(MSKeyConfig.self, from: data) {
+            localCfg = cfg
+            localExists = true
+        } else {
+            localCfg = MSKeyConfig()
+            localExists = false
+        }
+        if let syncURL = resolveSyncURL(from: localCfg.syncConfigPath),
+           syncURL.standardizedFileURL != primaryFile.standardizedFileURL,
+           let syncData = try? Data(contentsOf: syncURL),
+           var syncCfg = try? JSONDecoder().decode(MSKeyConfig.self, from: syncData) {
+            let localMod = (try? FileManager.default.attributesOfItem(atPath: primaryFile.path)[.modificationDate] as? Date) ?? .distantPast
+            let syncMod = (try? FileManager.default.attributesOfItem(atPath: syncURL.path)[.modificationDate] as? Date) ?? .distantPast
+            if !localExists || syncMod > localMod {
+                syncCfg.syncConfigPath = localCfg.syncConfigPath
+                writeConfigData(syncCfg, to: primaryFile)
+                return syncCfg
+            }
+        }
+        return localCfg
     }
 
     public static func save(_ config: MSKeyConfig) {
-        try? FileManager.default.createDirectory(at: configDirectory, withIntermediateDirectories: true)
+        save(config, to: configFile)
+    }
+
+    public static func save(_ config: MSKeyConfig, to primaryFile: URL) {
+        writeConfigData(config, to: primaryFile)
+        if let syncURL = resolveSyncURL(from: config.syncConfigPath),
+           syncURL.standardizedFileURL != primaryFile.standardizedFileURL {
+            writeConfigData(config, to: syncURL)
+        }
+    }
+
+    private static func writeConfigData(_ config: MSKeyConfig, to fileURL: URL) {
+        try? FileManager.default.createDirectory(at: fileURL.deletingLastPathComponent(), withIntermediateDirectories: true)
         let enc = JSONEncoder()
         enc.outputFormatting = [.prettyPrinted, .sortedKeys]
         if let data = try? enc.encode(config) {
-            try? data.write(to: configFile, options: .atomic)
+            try? data.write(to: fileURL, options: .atomic)
         }
+    }
+
+    public static func formatUserDictText(_ words: [String]) -> String {
+        var out = "# MS Key User Dictionary\n"
+        for word in words {
+            let t = word.trimmingCharacters(in: .whitespacesAndNewlines)
+            if !t.isEmpty {
+                out += t + "\n"
+            }
+        }
+        return out
+    }
+
+    public static func parseUserDictText(_ content: String) -> [String] {
+        var seen = Set<String>()
+        var words: [String] = []
+        for rawLine in content.components(separatedBy: .newlines) {
+            let line = rawLine.trimmingCharacters(in: .whitespacesAndNewlines)
+            if line.isEmpty || line.hasPrefix("#") || line.hasPrefix(";") {
+                continue
+            }
+            if seen.insert(line.lowercased()).inserted {
+                words.append(line)
+            }
+        }
+        return words
     }
 
     public static func loadAppState() -> [String: Bool] {

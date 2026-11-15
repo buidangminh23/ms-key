@@ -13,6 +13,9 @@ mkdir -p "${OUT_DIR}"
 OUT_DIR="$(cd "${OUT_DIR}" && pwd)"
 TARGET_DIR="${CARGO_TARGET_DIR:-${ROOT_DIR}/target}"
 VERSION="$(sed -n 's/^version = "\(.*\)"/\1/p' "${ROOT_DIR}/Cargo.toml" | head -n1)"
+if [ -n "${SOURCE_APP}" ]; then
+    VERSION="$(/usr/libexec/PlistBuddy -c 'Print :CFBundleShortVersionString' "${SOURCE_APP}/Contents/Info.plist")"
+fi
 BUILD_NUMBER="${BUILD_NUMBER:-1}"
 RUST_TARGETS=(aarch64-apple-darwin x86_64-apple-darwin)
 
@@ -32,6 +35,26 @@ create_dmg() (
     trap 'rm -rf "${DMG_WORK}"' EXIT
     mkdir -p "${DMG_WORK}/volume"
     ditto "${SOURCE}" "${DMG_WORK}/volume/MSKey.app"
+    INSTALLER_PACKAGE="${ROOT_DIR}/macos/MSKeyInstaller"
+    MACOSX_DEPLOYMENT_TARGET=13.0 swift build --package-path "${INSTALLER_PACKAGE}" -c release --arch arm64 --arch x86_64
+    INSTALLER_BIN="$(swift build --package-path "${INSTALLER_PACKAGE}" -c release --arch arm64 --arch x86_64 --show-bin-path)/MSKeyInstaller"
+    INSTALLER_APP="${DMG_WORK}/volume/Install MS Key.app"
+    mkdir -p "${INSTALLER_APP}/Contents/MacOS" "${INSTALLER_APP}/Contents/Resources"
+    cp "${INSTALLER_BIN}" "${INSTALLER_APP}/Contents/MacOS/MSKeyInstaller"
+    cp "${INSTALLER_PACKAGE}/Info.plist" "${INSTALLER_APP}/Contents/Info.plist"
+    plutil -replace CFBundleShortVersionString -string "${VERSION}" "${INSTALLER_APP}/Contents/Info.plist"
+    plutil -replace CFBundleVersion -string "${BUILD_NUMBER}" "${INSTALLER_APP}/Contents/Info.plist"
+    cp "${ROOT_DIR}/assets/branding/mskey.icns" "${INSTALLER_APP}/Contents/Resources/mskey.icns"
+    cp "${ROOT_DIR}/assets/branding/mskey-mark.png" "${INSTALLER_APP}/Contents/Resources/mskey-mark.png"
+    ditto "${SOURCE}" "${INSTALLER_APP}/Contents/Resources/MSKey.app"
+    cp "${ROOT_DIR}/LICENSE" "${INSTALLER_APP}/Contents/Resources/LICENSE"
+    codesign --force --sign - "${INSTALLER_APP}"
+    codesign --verify --deep --strict "${INSTALLER_APP}"
+    INSTALLER_ARCHS="$(lipo -archs "${INSTALLER_APP}/Contents/MacOS/MSKeyInstaller")"
+    case "${INSTALLER_ARCHS}" in
+        *arm64*x86_64*|*x86_64*arm64*) ;;
+        *) echo "Expected a universal installer, got: ${INSTALLER_ARCHS}" >&2; exit 1 ;;
+    esac
     ln -s /Applications "${DMG_WORK}/volume/Applications"
     cp "${ROOT_DIR}/assets/branding/mskey.icns" "${DMG_WORK}/volume/.VolumeIcon.icns"
     if command -v SetFile >/dev/null 2>&1; then
@@ -47,14 +70,17 @@ Recommended: install from Terminal instead of this disk image.
 To install from this disk image:
 
 1. Quit MS Key if it is already running.
-2. Drag MSKey.app to Applications, then eject this disk image.
-3. This app is ad-hoc signed and not notarized, and a browser marks the
-   download, so macOS refuses to open it. Clear the mark once in Terminal:
+2. Open Install MS Key.app and click Cai dat (Install) — or drag MSKey.app to
+   Applications using Finder — then eject this disk image.
+3. Both apps are ad-hoc signed and not notarized, and a browser marks the
+   download, so macOS refuses to open them. Clear the mark once in Terminal:
 
      xattr -dr com.apple.quarantine /Applications/MSKey.app
 
 4. Open MS Key from Applications.
 5. Allow MS Key in System Settings > Privacy & Security > Accessibility.
+
+The installer keeps the previous app if copying fails or is cancelled.
 
 After an update, remove the old MS Key Accessibility entry and allow it again.
 EOF

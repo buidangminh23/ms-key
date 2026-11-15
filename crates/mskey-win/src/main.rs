@@ -17,6 +17,9 @@ mod ui_controls;
 mod ui_extras;
 mod ui_osd;
 mod ui_paint;
+mod ui_popup;
+mod uia;
+mod update_win;
 
 use std::env;
 
@@ -55,6 +58,7 @@ fn main() {
 
     let show_gui = cfg.show_on_startup || args.iter().any(|a| a == "--show");
     init_state(cfg);
+    crate::uia::start();
     let _hooks = install_hooks();
     create_and_run_main(show_gui, None);
 }

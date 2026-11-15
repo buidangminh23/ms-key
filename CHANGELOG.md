@@ -2,6 +2,20 @@
 
 All notable changes to MS Key are documented here. The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and the project uses [Semantic Versioning](https://semver.org/).
 
+## [Unreleased]
+
+### Added
+
+- **Smart Code Bypass** (`smart_code_bypass`): automatically leaves camelCase, `snake_case`/`__init__`, alphanumeric tokens (such as `sha256`), URLs, email addresses, and file paths unaccented.
+- **Hold-to-English & CapsLock Quick Switch**: temporarily hold a modifier/key (`RightShift`, `LeftShift`, `RightAlt`, `RightCtrl`, `CapsLock`) for English input, or use single-tap CapsLock quick switching (`quick_capslock_switch`).
+- **Undo Last Word & Selection Converter hotkeys**: `Ctrl+Shift+Z` restores raw keystrokes on the previous committed word; `Ctrl+Shift+F7` converts selected text in-place (with `Ctrl+Shift+F6` preserved for clipboard conversion).
+- **Dynamic Macros**: added `{cursor}` (`$|`), `{clipboard}`, and `{date:FORMAT}` (alongside `{date}`, `{time}`, `{datetime}`, `{year}`, `{month}`, `{day}`, `{weekday}`), plus optional Tab-only macro triggering (`macro_trigger_tab_only`).
+- **Surrounding-text Re-edit & Caret HUD**: re-edit existing words before the cursor (`reedit_surrounding_word`) and show a lightweight V/E indicator near the caret (`show_caret_osd`).
+- **UIA Password detection (Windows)**: queries Windows UI Automation (`IUIAutomation` `IsPassword`) asynchronously so password inputs stay bypassed automatically.
+- **Window Title Rules, Profiles & Config Sync**: added `title_pattern` wildcard rules per app, built-in/custom Configuration Profiles (`Mặc định`, `Lập trình`, `Soạn thảo`), and external config synchronization (`sync_config_path`).
+- **`mskey` CLI (`crates/mskey-cli`)**: added standalone command-line tool with `convert`, `detect`, `check`, `import-evkey`, and `macros export`/`import` subcommands.
+- **Packaging & Release Matrix**: added manifests under `packaging/` for WinGet, Scoop, Homebrew (Cask + CLI Formula), and AUR (`PKGBUILD` + `.SRCINFO`); expanded CI with `cargo test -p mskey-cli` and `cargo clippy -- -D warnings`, and added `windows-arm64`, `linux-arm64`, and universal `mskey-cli` release builds.
+
 ## [0.1.3] - 2026-11-15
 
 ### Changed
@@ -113,6 +127,7 @@ Every file is listed in `SHA256SUMS`.
 - The Linux packages target amd64 with glibc 2.35 or newer (Ubuntu 22.04+, Debian 12+).
 - Real typing through each system's keyboard hook was tested by hand only on the developer's machines; please report problems in GitHub Issues.
 
+[Unreleased]: https://github.com/buidangminh23/ms-key/compare/v0.1.3...HEAD
 [0.1.0]: https://github.com/buidangminh23/ms-key/releases/tag/v0.1.0
 [0.1.1]: https://github.com/buidangminh23/ms-key/releases/tag/v0.1.1
 [0.1.2]: https://github.com/buidangminh23/ms-key/releases/tag/v0.1.2

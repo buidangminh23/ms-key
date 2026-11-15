@@ -12,17 +12,25 @@ jobs:
     steps:
       - uses: actions/checkout@v4
       - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: clippy
       - run: cargo test --workspace
-      - run: cargo build --release -p mskey-win -p mskey-ffi
+      - run: cargo test -p mskey-cli
+      - run: cargo clippy --workspace --all-targets -- -D warnings
+      - run: cargo build --release -p mskey-win -p mskey-ffi -p mskey-cli
 
   rust-linux:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
       - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: clippy
       - run: sudo apt-get update && sudo apt-get install -y libgtk-3-dev pkg-config xvfb
       - run: cargo test -p mskey-core -p mskey-ffi -p mskey-linux
-      - run: cargo build --release -p mskey-linux
+      - run: cargo test -p mskey-cli
+      - run: cargo clippy -p mskey-core -p mskey-ffi -p mskey-cli -p mskey-linux --all-targets -- -D warnings
+      - run: cargo build --release -p mskey-linux -p mskey-cli
       - run: ./target/release/mskey-linux --print-xml
       - run: xvfb-run -a ./target/release/mskey-linux --verify-smoke /tmp/smoke_linux.txt && cat /tmp/smoke_linux.txt
       - uses: actions/setup-node@v4
@@ -36,7 +44,9 @@ jobs:
       - uses: actions/checkout@v4
       - uses: dtolnay/rust-toolchain@stable
       - run: cargo test -p mskey-core -p mskey-ffi
-      - run: cargo build --release -p mskey-ffi
+      - run: cargo test -p mskey-cli
+      - run: cargo build --release -p mskey-ffi -p mskey-cli
       - run: cd macos/MSKeyMac && swift test
+      - run: cd macos/MSKeyInstaller && swift test
       - run: bash scripts/build-macos.sh
       - run: dist/MSKey.app/Contents/MacOS/MSKey --verify-smoke /tmp/smoke_mac.txt && cat /tmp/smoke_mac.txt

@@ -7,4 +7,6 @@ target/
 .DS_Store
 macos/MSKeyMac/.build/
 macos/MSKeyMac/DerivedData/
+macos/MSKeyInstaller/.build/
+macos/MSKeyInstaller/DerivedData/
 dist/

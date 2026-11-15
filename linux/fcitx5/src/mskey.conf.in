@@ -1,0 +1,7 @@
+[InputMethod]
+Name=MS Key (Tiếng Việt)
+Icon=mskey
+Label=V
+LangCode=vi
+Addon=mskey
+Configurable=False

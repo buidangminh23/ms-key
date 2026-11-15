@@ -1,0 +1,25 @@
+PackageIdentifier: BuiDangMinh.MSKey
+PackageVersion: 0.1.2
+PackageLocale: en-US
+Publisher: Bui Dang Minh
+PublisherUrl: https://github.com/buidangminh23
+PublisherSupportUrl: https://github.com/buidangminh23/ms-key/issues
+Author: Bui Dang Minh
+PackageName: MS Key
+PackageUrl: https://github.com/buidangminh23/ms-key
+License: MIT
+LicenseUrl: https://github.com/buidangminh23/ms-key/blob/main/LICENSE
+Copyright: Copyright (c) 2026 Bui Dang Minh
+ShortDescription: Lightweight open-source Vietnamese input method for Windows, Linux, and macOS
+Description: MS Key is a lightweight, open-source Vietnamese input method powered by a shared Rust engine supporting Telex, VNI, VIQR, Simple Telex, custom keymaps, dynamic macros, charset conversion, per-app rules, and configuration profiles.
+Moniker: mskey
+Tags:
+  - vietnamese
+  - ime
+  - input-method
+  - telex
+  - vni
+  - keyboard
+ReleaseNotesUrl: https://github.com/buidangminh23/ms-key/releases/tag/v0.1.2
+ManifestType: defaultLocale
+ManifestVersion: 1.6.0

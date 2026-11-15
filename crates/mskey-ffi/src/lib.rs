@@ -7,7 +7,7 @@ use std::sync::Mutex;
 
 use mskey_core::{
     AppBehavior, CaseTransform, Charset, Config, ConvertEncoding, Engine, EngineAction,
-    convert_text, convert_with_encoding, detect_convert_encoding,
+    convert_text, convert_with_encoding, detect_convert_encoding, normalize_tone_style, update,
 };
 
 pub struct MsKeyHandle {
@@ -79,6 +79,8 @@ fn parse_case(code: u8) -> CaseTransform {
         3 => CaseTransform::Sentence,
         4 => CaseTransform::Title,
         5 => CaseTransform::StripDiacritics,
+        6 => CaseTransform::NormalizeModernTone,
+        7 => CaseTransform::NormalizeClassicTone,
         _ => CaseTransform::None,
     }
 }
@@ -276,6 +278,15 @@ pub unsafe extern "C" fn mskey_behavior_for_app(
     handle: *mut MsKeyHandle,
     process_name: *const c_char,
 ) -> u8 {
+    unsafe { mskey_behavior_for_window(handle, process_name, ptr::null()) }
+}
+
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn mskey_behavior_for_window(
+    handle: *mut MsKeyHandle,
+    process_name: *const c_char,
+    window_title: *const c_char,
+) -> u8 {
     catch_unwind(|| {
         let Some(h) = (unsafe { handle.as_ref() }) else {
             return 0;
@@ -283,8 +294,9 @@ pub unsafe extern "C" fn mskey_behavior_for_app(
         let Some(name) = from_c_str(process_name) else {
             return 0;
         };
+        let title = from_c_str(window_title).unwrap_or_default();
         let guard = h.engine.lock().unwrap_or_else(|e| e.into_inner());
-        match guard.config().behavior_for_app(&name) {
+        match guard.config().behavior_for_window(&name, &title) {
             AppBehavior::Default => 0,
             AppBehavior::ForceEnglish => 1,
             AppBehavior::ForceVietnamese => 2,
@@ -292,6 +304,137 @@ pub unsafe extern "C" fn mskey_behavior_for_app(
         }
     })
     .unwrap_or(0)
+}
+
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn mskey_set_temporary_english(handle: *mut MsKeyHandle, enabled: bool) {
+    let _ = catch_unwind(|| {
+        if let Some(h) = unsafe { handle.as_ref() } {
+            let mut guard = h.engine.lock().unwrap_or_else(|e| e.into_inner());
+            guard.set_temporary_english(enabled);
+        }
+    });
+}
+
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn mskey_take_pending_cursor_left(handle: *mut MsKeyHandle) -> u32 {
+    catch_unwind(|| {
+        let Some(h) = (unsafe { handle.as_ref() }) else {
+            return 0;
+        };
+        let mut guard = h.engine.lock().unwrap_or_else(|e| e.into_inner());
+        guard.take_pending_cursor_left().min(u32::MAX as usize) as u32
+    })
+    .unwrap_or(0)
+}
+
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn mskey_set_clipboard_text(
+    handle: *mut MsKeyHandle,
+    text: *const c_char,
+) {
+    let _ = catch_unwind(|| {
+        if let Some(h) = unsafe { handle.as_ref() } {
+            let mut guard = h.engine.lock().unwrap_or_else(|e| e.into_inner());
+            guard.set_clipboard_text(from_c_str(text));
+        }
+    });
+}
+
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn mskey_toggle_last_committed_word(
+    handle: *mut MsKeyHandle,
+) -> MsKeyAction {
+    catch_unwind(|| {
+        let Some(h) = (unsafe { handle.as_ref() }) else {
+            return MsKeyAction::pass_through();
+        };
+        let mut guard = h.engine.lock().unwrap_or_else(|e| e.into_inner());
+        map_action(guard.toggle_last_committed_word())
+    })
+    .unwrap_or_else(|_| MsKeyAction::pass_through())
+}
+
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn mskey_hydrate_word(handle: *mut MsKeyHandle, word: *const c_char) {
+    let _ = catch_unwind(|| {
+        if let Some(h) = unsafe { handle.as_ref() }
+            && let Some(text) = from_c_str(word)
+        {
+            let mut guard = h.engine.lock().unwrap_or_else(|e| e.into_inner());
+            guard.hydrate_word(&text);
+        }
+    });
+}
+
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn mskey_last_word_for_dict(handle: *mut MsKeyHandle) -> *mut c_char {
+    catch_unwind(|| {
+        let Some(h) = (unsafe { handle.as_ref() }) else {
+            return ptr::null_mut();
+        };
+        let guard = h.engine.lock().unwrap_or_else(|e| e.into_inner());
+        guard
+            .last_word_for_dict()
+            .map(|w| to_c_string(&w))
+            .unwrap_or(ptr::null_mut())
+    })
+    .unwrap_or(ptr::null_mut())
+}
+
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn mskey_apply_profile(
+    handle: *mut MsKeyHandle,
+    name: *const c_char,
+) -> bool {
+    catch_unwind(|| {
+        let Some(h) = (unsafe { handle.as_ref() }) else {
+            return false;
+        };
+        let Some(profile_name) = from_c_str(name) else {
+            return false;
+        };
+        let mut guard = h.engine.lock().unwrap_or_else(|e| e.into_inner());
+        let mut cfg = guard.config().clone();
+        if cfg.apply_profile(&profile_name) {
+            guard.update_config(cfg);
+            true
+        } else {
+            false
+        }
+    })
+    .unwrap_or(false)
+}
+
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn mskey_normalize_tone_style(
+    input: *const c_char,
+    modern_tone: bool,
+) -> *mut c_char {
+    catch_unwind(|| {
+        let Some(text) = from_c_str(input) else {
+            return ptr::null_mut();
+        };
+        to_c_string(&normalize_tone_style(&text, modern_tone))
+    })
+    .unwrap_or(ptr::null_mut())
+}
+
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn mskey_is_newer_version(
+    current: *const c_char,
+    candidate: *const c_char,
+) -> bool {
+    catch_unwind(|| {
+        let Some(cur) = from_c_str(current) else {
+            return false;
+        };
+        let Some(cand) = from_c_str(candidate) else {
+            return false;
+        };
+        update::is_newer_version(&cur, &cand)
+    })
+    .unwrap_or(false)
 }
 
 #[unsafe(no_mangle)]

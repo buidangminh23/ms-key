@@ -7,7 +7,8 @@ use mskey_core::{
 use windows_sys::Win32::UI::Input::KeyboardAndMouse::{
     GetAsyncKeyState, INPUT, INPUT_0, INPUT_KEYBOARD, KEYBDINPUT, KEYEVENTF_EXTENDEDKEY,
     KEYEVENTF_KEYUP, KEYEVENTF_UNICODE, MAPVK_VK_TO_VSC, MapVirtualKeyW, SendInput, VK_BACK,
-    VK_INSERT, VK_LCONTROL, VK_LSHIFT, VK_RIGHT, VK_RSHIFT,
+    VK_CAPITAL, VK_INSERT, VK_LCONTROL, VK_LEFT, VK_LMENU, VK_LSHIFT, VK_LWIN, VK_RCONTROL,
+    VK_RIGHT, VK_RMENU, VK_RSHIFT, VK_RWIN,
 };
 
 use crate::platform::write_clipboard_text;
@@ -28,18 +29,42 @@ pub struct ReplacePayload {
     pub send_delay_ms: u32,
 }
 
+const MODIFIER_VKS: &[(u16, bool)] = &[
+    (VK_LSHIFT, false),
+    (VK_RSHIFT, false),
+    (VK_LCONTROL, false),
+    (VK_RCONTROL, true),
+    (VK_LMENU, false),
+    (VK_RMENU, true),
+];
+
+const ALL_MODIFIER_VKS: &[(u16, bool)] = &[
+    (VK_LSHIFT, false),
+    (VK_RSHIFT, false),
+    (VK_LCONTROL, false),
+    (VK_RCONTROL, true),
+    (VK_LMENU, false),
+    (VK_RMENU, true),
+    (VK_LWIN, true),
+    (VK_RWIN, true),
+];
+
+fn capture_held_modifiers(candidates: &[(u16, bool)]) -> Vec<(u16, bool)> {
+    candidates
+        .iter()
+        .copied()
+        .filter(|&(vk, _)| unsafe { GetAsyncKeyState(vk as i32) } < 0)
+        .collect()
+}
+
 pub fn dispatch_payload(p: ReplacePayload) {
-    let lshift = unsafe { GetAsyncKeyState(VK_LSHIFT as i32) } < 0;
-    let rshift = unsafe { GetAsyncKeyState(VK_RSHIFT as i32) } < 0;
+    let held_mods = capture_held_modifiers(MODIFIER_VKS);
     let scan_mode = p.standard_key_send;
     let step_delay = effective_step_delay(&p);
-    let mut pre = Vec::with_capacity(p.backspaces * 2 + 12);
+    let mut pre = Vec::with_capacity(p.backspaces * 2 + 20);
 
-    if lshift {
-        push_vk(&mut pre, VK_LSHIFT, false, false, scan_mode);
-    }
-    if rshift {
-        push_vk(&mut pre, VK_RSHIFT, false, false, scan_mode);
+    for &(vk, extended) in &held_mods {
+        push_vk(&mut pre, vk, false, extended, scan_mode);
     }
 
     if p.backspaces > 0 {
@@ -56,19 +81,21 @@ pub fn dispatch_payload(p: ReplacePayload) {
     }
 
     let mut did_clip_paste = false;
-    if !p.text.is_empty() && p.use_clipboard
-        && write_clipboard_for_paste_with_restore(&p.text) {
-            send_paced(&pre, step_delay);
-            pre.clear();
-            if step_delay > 0 {
-                std::thread::sleep(Duration::from_millis(6));
-            }
-            send_paste_combo(p.paste_via_shift_insert, scan_mode);
-            if p.trailing_vk.is_some() || lshift || rshift {
-                std::thread::sleep(Duration::from_millis(8));
-            }
-            did_clip_paste = true;
+    if !p.text.is_empty()
+        && p.use_clipboard
+        && write_clipboard_for_paste_with_restore(&p.text)
+    {
+        send_paced(&pre, step_delay);
+        pre.clear();
+        if step_delay > 0 {
+            std::thread::sleep(Duration::from_millis(6));
         }
+        send_paste_combo(p.paste_via_shift_insert, scan_mode);
+        if p.trailing_vk.is_some() || !held_mods.is_empty() {
+            std::thread::sleep(Duration::from_millis(8));
+        }
+        did_clip_paste = true;
+    }
 
     if !did_clip_paste && !p.text.is_empty() {
         for unit in p.text.encode_utf16() {
@@ -79,13 +106,42 @@ pub fn dispatch_payload(p: ReplacePayload) {
     if let Some(vk) = p.trailing_vk {
         push_vk_tap(&mut pre, vk, false, scan_mode);
     }
-    if lshift {
-        push_vk(&mut pre, VK_LSHIFT, true, false, scan_mode);
-    }
-    if rshift {
-        push_vk(&mut pre, VK_RSHIFT, true, false, scan_mode);
+    for &(vk, extended) in &held_mods {
+        push_vk(&mut pre, vk, true, extended, scan_mode);
     }
     send_paced(&pre, step_delay);
+}
+
+pub fn send_cursor_left(steps: usize) {
+    if steps == 0 {
+        return;
+    }
+    let mut inputs = Vec::with_capacity(steps * 2);
+    for _ in 0..steps {
+        push_vk_tap(&mut inputs, VK_LEFT, true, false);
+    }
+    send_slice(&inputs);
+}
+
+pub fn send_capslock_tap() {
+    let mut inputs = Vec::with_capacity(2);
+    push_vk_tap(&mut inputs, VK_CAPITAL, false, false);
+    send_slice(&inputs);
+}
+
+pub fn send_ctrl_key(vk: u16) {
+    let held_mods = capture_held_modifiers(ALL_MODIFIER_VKS);
+    let mut inputs = Vec::with_capacity(held_mods.len() * 2 + 4);
+    for &(m_vk, extended) in &held_mods {
+        push_vk(&mut inputs, m_vk, false, extended, false);
+    }
+    push_vk(&mut inputs, VK_LCONTROL, true, false, false);
+    push_vk_tap(&mut inputs, vk, false, false);
+    push_vk(&mut inputs, VK_LCONTROL, false, false, false);
+    for &(m_vk, extended) in &held_mods {
+        push_vk(&mut inputs, m_vk, true, extended, false);
+    }
+    send_slice(&inputs);
 }
 
 fn effective_step_delay(p: &ReplacePayload) -> u32 {

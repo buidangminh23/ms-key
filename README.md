@@ -35,20 +35,28 @@ The installer shows live download progress in interactive terminals and verifies
 
 Run `MSKey-Setup-<version>-windows-x64.exe`. It installs for your user only and needs no administrator rights. MS Key then sits in the tray as **V** (Vietnamese) or **E** (English).
 
-Windows SmartScreen may warn because the installer is not code-signed: choose **More info > Run anyway**. You can also unzip `MSKey-<version>-windows-x64-portable.zip` and run `MSKey.exe` without installing.
+Windows SmartScreen may warn because the installer is not code-signed: choose **More info > Run anyway**. You can also unzip `MSKey-<version>-windows-x64-portable.zip` (or `MSKey-<version>-windows-arm64-portable.zip` on Windows ARM64) and run `MSKey.exe` without installing. Standalone CLI archives (`mskey-cli-<version>-windows-x64.zip` and `mskey-cli-<version>-windows-arm64.zip`) provide `mskey.exe`.
 
-To remove it, use **Settings > Apps > Installed apps > MS Key > Uninstall**. Your settings in `%APPDATA%\MSKey` are kept.
+Package managers (manifests in `packaging/`):
 
-### Ubuntu / Debian
+- **WinGet**: `winget install BuiDangMinh.MSKey` (or locally with `winget install --manifest packaging\winget`)
+- **Scoop**: `scoop install packaging/scoop/mskey.json` (installs portable `MSKey.exe` and the `mskey.exe` CLI shim)
+
+To remove the installer version, use **Settings > Apps > Installed apps > MS Key > Uninstall**. Your settings in `%APPDATA%\MSKey` are kept.
+
+### Ubuntu / Debian / Arch Linux
 
 ```bash
 sudo apt install ./mskey_<version>_amd64.deb
 ibus restart
 ```
 
-Then add **MS Key (Tiếng Việt)** in **Settings > Keyboard > Input Sources** (or `ibus-setup`). Remove it with `sudo apt remove mskey`.
+For ARM64 Debian/Ubuntu systems, use `mskey_<version>_arm64.deb`. Then add **MS Key (Tiếng Việt)** in **Settings > Keyboard > Input Sources** (or `ibus-setup`). Remove it with `sudo apt remove mskey`.
 
-On other distributions with GTK 3 and IBus, extract `MSKey-<version>-linux-amd64.tar.gz` and run `./install.sh` (and `./uninstall.sh` to remove). The prebuilt binaries need amd64 and glibc 2.35 or newer.
+On other distributions with GTK 3 and IBus, extract `MSKey-<version>-linux-amd64.tar.gz` (or `MSKey-<version>-linux-arm64.tar.gz`) and run `./install.sh` (`./uninstall.sh` to remove). Prebuilt binaries require glibc 2.35 or newer.
+
+- **Arch Linux (AUR)**: build from `packaging/aur/PKGBUILD` (`makepkg -si`), which packages `mskey-linux`, the `mskey` CLI, and optionally compiles the Fcitx5 addon when `fcitx5` headers are installed.
+- **CLI tarball / Homebrew**: use `mskey-cli-<version>-linux-amd64.tar.gz` (`arm64` also available) or `brew install packaging/homebrew/Formula/mskey-cli.rb`.
 
 ### macOS 13+ (Apple Silicon and Intel)
 
@@ -60,7 +68,14 @@ curl -fsSL https://github.com/buidangminh23/ms-key/releases/latest/download/inst
 
 The installer downloads the zip, checks it against `SHA256SUMS`, verifies the app signature, installs `MSKey.app` into `/Applications` (or `~/Applications`) and opens it. Use this method: MS Key is ad-hoc signed and not notarized, so macOS blocks copies that a browser downloaded.
 
-You can also download `MSKey-<version>-macos-universal.dmg` from the latest release and drag **MSKey.app** into **Applications**. A browser marks that copy as downloaded from the internet, and macOS then refuses to open it. Clear the mark once before the first launch:
+You can also install via Homebrew using the manifests in `packaging/`:
+
+```bash
+brew install --cask packaging/homebrew/Casks/mskey.rb
+brew install packaging/homebrew/Formula/mskey-cli.rb
+```
+
+Or download `MSKey-<version>-macos-universal.dmg` from the latest release and open **Install MS Key.app** inside it (or drag **MSKey.app** into **Applications**). A browser marks DMG downloads as downloaded from the internet, so macOS refuses to open unnotarized apps from it until you clear the quarantine attribute once:
 
 ```bash
 xattr -dr com.apple.quarantine /Applications/MSKey.app
@@ -91,32 +106,52 @@ Press **Esc** right after a word to undo the Vietnamese marks and get back the k
 - Telex, VNI, VIQR, Simple Telex and a fully custom keymap.
 - Modern (`hoà`, `thuý`) or classic (`hòa`, `thúy`) tone placement, and free tone placement anywhere in the word.
 - Spelling check, so invalid Vietnamese syllables are left alone.
-- English and code words such as `windows`, `function` or `class` are restored automatically. You can add your own words to a personal dictionary.
+- **Smart Code Bypass** (`smart_code_bypass`): automatically keeps camelCase, `snake_case`/`__init__`, alphanumeric identifiers (`sha256`), URLs, email addresses, and file paths unaccented, plus personal dictionary restore support.
+- **Hold-to-English & CapsLock Quick Switch**: hold `RightShift`, `LeftShift`, `RightAlt`, `RightCtrl`, or `CapsLock` (`hold_english_key`) to temporarily type English, or enable single-tap CapsLock mode switching (`quick_capslock_switch`).
+- **Undo Last Word** (`Ctrl+Shift+Z` by default, alongside `Esc` before delimiters): restores raw keystrokes on the previous committed word.
+- **Surrounding-text Re-edit** (`reedit_surrounding_word`): continues editing marks and tones when returning to an existing word before the cursor.
+- **Caret HUD** (`show_caret_osd`): compact **V**/**E** overlay near the caret on mode switches.
 - Quick typing: `w` → `ư`, `[` → `ơ`, `]` → `ư`, `cc` → `ch`, `nn` → `ng`, `f` → `ph` at the start of a word, and more.
 - Optional capitalisation at the start of a sentence.
 
 **Output**
 
 - Unicode (NFC), Unicode composite (NFD), TCVN3 (ABC) and VNI Windows.
-- Clipboard converter between these charsets, with case conversion and diacritic removal (Ctrl + Shift + F6 by default).
+- **Selection Converter** (`Ctrl+Shift+F7` by default) to convert highlighted text in-place, plus **Clipboard Converter** (`Ctrl+Shift+F6` by default) for charset conversion, case transforms, and diacritic removal.
 
-**Macros**
+**Dynamic Macros**
 
-- Short words that expand into longer text, for example `vn` → `Việt Nam`.
-- Placeholders `{date}`, `{time}` and `{datetime}`.
-- Can stay active while Vietnamese is off.
+- Short triggers that expand into longer text (`vn` → `Việt Nam`), configurable to require `Tab` only (`macro_trigger_tab_only`) or trigger on delimiters/punctuation, optionally even while Vietnamese input is off.
+- Dynamic tokens: `{cursor}` (`$|`) cursor placement after expansion, `{clipboard}` clipboard insertion, and formatted dates `{date:FORMAT}` alongside `{date}`, `{time}`, `{datetime}`, `{year}`, `{month}`, `{day}`, and `{weekday}`.
 
-**Per-app behaviour**
+**Per-app behaviour & Privacy**
 
-- Remember V or E for each app automatically.
-- Rules per app: always English, always Vietnamese, or ignore the app entirely.
+- Remember V or E per application automatically.
+- **Window Title Rules**: match per-app rules against `title_pattern` wildcards (`*`) to force Always English, Always Vietnamese, or Ignore.
+- **UIA Password detection (Windows)**: queries Windows UI Automation (`IUIAutomation` `IsPassword`) asynchronously so password boxes stay bypassed automatically.
 - Fixes for browser address bar suggestions and terminals.
 
-**Settings**
+**Settings, Profiles & Sync**
 
+- **Configuration Profiles & Sync**: switch between built-in presets (`Mặc định`, `Lập trình`, `Soạn thảo`) or custom profiles, and sync changes to a shared config path via `sync_config_path`.
 - Import an existing EVKey `setting.tree`.
 - Light, dark or system theme; start with the system.
 - Settings are stored as JSON: `%APPDATA%\MSKey\config.json` on Windows and `~/.config/mskey/config.json` on Linux and macOS.
+
+## Command-line interface (`mskey`)
+
+`crates/mskey-cli` provides the standalone `mskey` CLI tool backed by `mskey-core`:
+
+```bash
+mskey convert [--from auto|unicode|tcvn3|vni|nfd|viqr] [--to unicode|tcvn3|vni|nfd|viqr] [--case none|upper|lower|sentence|title|strip|modern-tone|classic-tone] [--in <PATH>] [--out <PATH>]
+mskey detect [--in <PATH>] [--json]
+mskey check <WORD>... [--in <PATH>] [--allow-fjwz] [--json]
+mskey import-evkey <TREE_PATH> [--out <PATH>]
+mskey macros export --config <PATH> [--out <PATH>]
+mskey macros import --config <PATH> [--file <PATH>] [--replace]
+mskey help [COMMAND]
+mskey --version
+```
 
 ## How it works on each system
 
@@ -136,25 +171,40 @@ You need Rust 1.90 or newer.
 
 ```powershell
 cargo test --workspace
-cargo build --release -p mskey-win
+cargo build --release -p mskey-win -p mskey-cli
 ```
 
-The app is `target\release\mskey-win.exe`. Run it with `--show` to open the settings panel immediately.
+The GUI app is `target\release\mskey-win.exe` (run with `--show` to open settings immediately) and the CLI is `target\release\mskey.exe`. For Windows ARM64 cross-builds, add `--target aarch64-pc-windows-msvc`.
 
-**Linux** (GTK 3 and IBus development files)
+**Linux** (GTK 3, IBus, and optional Fcitx5 C++ addon)
 
 ```bash
 sudo apt install libgtk-3-dev pkg-config ibus
-cargo test -p mskey-core -p mskey-ffi -p mskey-linux
+cargo test -p mskey-core -p mskey-ffi -p mskey-cli -p mskey-linux
+cargo build --release -p mskey-cli
 bash scripts/install-linux.sh
 ```
 
-`install-linux.sh` builds and installs into `/usr/local`. Run `ibus restart` afterwards.
+`install-linux.sh` builds and installs `mskey-linux` into `/usr/local`. Run `ibus restart` afterwards.
+
+To build the optional Fcitx5 C++ addon (`libmskey_ffi` + CMake):
+
+```bash
+sudo apt install cmake fcitx5 libfcitx5core-dev
+cargo build --release -p mskey-ffi
+cmake -B build-fcitx5 -S linux/fcitx5 \
+  -DCMAKE_BUILD_TYPE=Release \
+  -DCMAKE_INSTALL_PREFIX=/usr \
+  -DMSKEY_FFI_LIB_DIR="$PWD/target/release" \
+  -DMSKEY_FFI_INCLUDE_DIR="$PWD/crates/mskey-ffi/include"
+cmake --build build-fcitx5
+sudo cmake --install build-fcitx5
+```
 
 **macOS** (Xcode or the Swift 6 toolchain)
 
 ```bash
-cargo test -p mskey-core -p mskey-ffi
+cargo test -p mskey-core -p mskey-ffi -p mskey-cli
 bash scripts/build-macos.sh
 open dist/MSKey.app
 ```
@@ -163,25 +213,34 @@ open dist/MSKey.app
 
 Brand assets live in `assets/branding`. `mskey-logo.png` preserves the supplied full logo; `mskey-mark.png` is the transparent symbol used at small sizes. To regenerate ICO, ICNS, PNG sizes and installer bitmaps, install Pillow and run `python scripts/prepare-branding.py`.
 
-| Script | Output |
+| Script / Manifests | Output / Target |
 |---|---|
 | `scripts/package-windows.ps1` | NSIS installer and portable zip (needs NSIS) |
-| `scripts/package-linux.sh` | `.deb` and `.tar.gz` |
-| `scripts/package-macos.sh` | Universal ad-hoc signed `MSKey.app` in a drag-to-install `.dmg`, a zip and `install-macos.sh` |
+| `scripts/package-linux.sh` | `.deb` and `.tar.gz` (`amd64` and `arm64`) |
+| `scripts/package-macos.sh` | Universal ad-hoc signed `MSKey.app`, animated `Install MS Key.app` DMG, zip, and `install-macos.sh` |
+| `packaging/winget/` | WinGet multi-file manifests (`BuiDangMinh.MSKey`) |
+| `packaging/scoop/mskey.json` | Scoop manifest (`x64`/`arm64` portable app + `mskey.exe` CLI shim) |
+| `packaging/homebrew/` | Homebrew Cask (`Casks/mskey.rb`) and CLI Formula (`Formula/mskey-cli.rb`) |
+| `packaging/aur/` | Arch Linux `PKGBUILD` and `.SRCINFO` (`mskey-linux`, `mskey`, optional Fcitx5 addon) |
 
-Pushing a tag such as `v0.1.0` runs `.github/workflows/release.yml`. It builds every package on its own runner, installs it, launches the settings panel in smoke-test mode, uninstalls it, and then publishes the release with `SHA256SUMS` and the matching section of [CHANGELOG.md](CHANGELOG.md). The tag must match the version in `Cargo.toml`.
+Pushing a tag such as `v0.1.3` runs `.github/workflows/release.yml`. It builds desktop packages and `mskey-cli` archives across Windows (`x64` and cross-compiled `arm64`), Linux (`amd64` and `arm64`), and macOS (universal), runs smoke checks, and publishes the release with `SHA256SUMS` and the matching section of [CHANGELOG.md](CHANGELOG.md). The tag must match the version in `Cargo.toml`.
 
-The DMG uses the native Finder drag-to-Applications installation and copy progress. The Terminal installer adds live download progress and activity indicators during unpacking, signature verification and copying.
+The DMG installer animates the MS Key logo while copying, reports bytes copied, verifies the app signature and restores the previous app if the final replacement fails. It supports cancellation and Reduce Motion. Finder drag-to-Applications remains available. The Terminal installer adds live download progress and activity indicators during unpacking, signature verification and copying.
 
 ## Repository layout
 
 ```text
 crates/
   mskey-core/     Typing engine, charset converter, dictionaries, EVKey importer
-  mskey-ffi/      C ABI used by the macOS app (mskey_core.h)
-  mskey-win/      Windows hook, tray icon and settings UI
+  mskey-ffi/      C ABI used by macOS and Fcitx5 (mskey_core.h)
+  mskey-win/      Windows hook, UIA password detection, tray icon, settings UI
   mskey-linux/    IBus engine and GTK settings UI
-macos/MSKeyMac/   Swift menu bar app
+  mskey-cli/      Standalone mskey command-line interface
+macos/
+  MSKeyMac/       Swift menu bar app
+  MSKeyInstaller/ SwiftUI DMG installer app
+linux/fcitx5/     Optional Fcitx5 C++ addon
+packaging/        WinGet, Scoop, Homebrew, and AUR distribution manifests
 data/             IBus component and desktop entry
 scripts/          Build, install and packaging scripts
 ```

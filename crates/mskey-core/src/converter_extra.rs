@@ -354,3 +354,40 @@ fn parse_viqr_tone(ch: char) -> Option<Tone> {
         _ => None,
     }
 }
+
+pub fn normalize_tone_style(input: &str, modern_tone: bool) -> String {
+    let normalized = normalize_nfd_to_nfc(input);
+    let config = crate::config::Config {
+        modern_tone,
+        allow_fjwz: false,
+        ..Default::default()
+    };
+
+    let mut out = String::with_capacity(normalized.len());
+    let mut word = Vec::<char>::new();
+    let flush_word = |buf: &mut Vec<char>, dst: &mut String| {
+        if buf.is_empty() {
+            return;
+        }
+        if let Some(parsed) = crate::syllable::parse_syllable(buf, false)
+            && parsed.active_tone != Tone::None
+            && crate::syllable::is_valid_complete_syllable(&parsed, false)
+        {
+            crate::transform::reanchor_tone(buf, &config);
+        }
+        for ch in buf.drain(..) {
+            dst.push(ch);
+        }
+    };
+
+    for ch in normalized.chars() {
+        if ch.is_alphabetic() {
+            word.push(ch);
+        } else {
+            flush_word(&mut word, &mut out);
+            out.push(ch);
+        }
+    }
+    flush_word(&mut word, &mut out);
+    out
+}

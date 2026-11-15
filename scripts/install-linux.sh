@@ -33,7 +33,8 @@ fi
 
 ${SUDO} install -Dm755 "${BIN_SRC}" "${BIN_DIR}/mskey-linux"
 TMP_XML="$(mktemp)"
-trap 'rm -f "${TMP_XML}"' EXIT
+FCITX_BUILD=""
+trap 'rm -f "${TMP_XML}"; rm -rf "${FCITX_BUILD}"' EXIT
 "${BIN_DIR}/mskey-linux" --print-xml > "${TMP_XML}"
 ${SUDO} install -Dm644 "${TMP_XML}" "${IBUS_COMPONENT_DIR}/mskey.xml"
 ${SUDO} install -Dm644 "${ROOT_DIR}/data/mskey.desktop" "${APP_DIR}/mskey.desktop"
@@ -42,6 +43,28 @@ for size in 32 48 64 128 256 512; do
 done
 if command -v gtk-update-icon-cache >/dev/null 2>&1; then
     ${SUDO} gtk-update-icon-cache -q -t -f "${ICON_DIR}" || true
+fi
+
+if command -v cmake >/dev/null 2>&1 && pkg-config --exists Fcitx5Core; then
+    cargo build --release -p mskey-ffi
+    TARGET_DIR="${CARGO_TARGET_DIR:-${ROOT_DIR}/target}"
+    FFI_LIB="${TARGET_DIR}/release/libmskey_ffi.a"
+    if [ ! -f "${FFI_LIB}" ] && [ -f "${TARGET_DIR}/release/libmskey_ffi.so" ]; then
+        FFI_LIB="${TARGET_DIR}/release/libmskey_ffi.so"
+    fi
+    if [ -f "${FFI_LIB}" ]; then
+        FCITX_BUILD="$(mktemp -d)"
+        cmake -S "${ROOT_DIR}/linux/fcitx5" -B "${FCITX_BUILD}" \
+            -DCMAKE_BUILD_TYPE=Release \
+            -DCMAKE_INSTALL_PREFIX=/usr \
+            -DMSKEY_FFI_LIB="${FFI_LIB}"
+        cmake --build "${FCITX_BUILD}" -j"$(nproc 2>/dev/null || echo 2)"
+        ${SUDO} cmake --install "${FCITX_BUILD}"
+        if command -v fcitx5 >/dev/null 2>&1 && pgrep -x fcitx5 >/dev/null 2>&1; then
+            fcitx5 -r -d >/dev/null 2>&1 || true
+        fi
+        echo "Installed MS Key Fcitx5 addon."
+    fi
 fi
 
 echo "Installed ${BIN_DIR}/mskey-linux"
