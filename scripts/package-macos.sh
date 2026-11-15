@@ -40,15 +40,21 @@ create_dmg() (
     cat > "${DMG_WORK}/volume/Install.txt" <<'EOF'
 MS Key for macOS 13 or later (Apple Silicon and Intel)
 
+Recommended: install from Terminal instead of this disk image.
+
+  curl -fsSL https://github.com/buidangminh23/ms-key/releases/latest/download/install-macos.sh | bash
+
+To install from this disk image:
+
 1. Quit MS Key if it is already running.
 2. Drag MSKey.app to Applications, then eject this disk image.
-3. Open MS Key from Applications.
-4. Allow MS Key in System Settings > Privacy & Security > Accessibility.
+3. This app is ad-hoc signed and not notarized, and a browser marks the
+   download, so macOS refuses to open it. Clear the mark once in Terminal:
 
-This app is ad-hoc signed and has not been notarized by Apple. If macOS
-blocks it, open System Settings > Privacy & Security after attempting to
-launch it, then choose Open Anyway for MS Key.
-https://support.apple.com/en-us/102445
+     xattr -dr com.apple.quarantine /Applications/MSKey.app
+
+4. Open MS Key from Applications.
+5. Allow MS Key in System Settings > Privacy & Security > Accessibility.
 
 After an update, remove the old MS Key Accessibility entry and allow it again.
 EOF

@@ -2,6 +2,29 @@
 
 All notable changes to MS Key are documented here. The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and the project uses [Semantic Versioning](https://semver.org/).
 
+## [0.1.3] - 2026-11-15
+
+### Changed
+
+- The macOS menu bar now shows the same single large letter as Windows: a red **V** for Vietnamese and a blue **E** for English.
+- macOS install instructions now lead with the Terminal installer. A browser-downloaded DMG is quarantined and, because MS Key is not notarized, macOS refuses to open it; the README and the disk image's `Install.txt` give the one-line `xattr` fix.
+
+### Added
+
+- Click the macOS menu bar letter once to switch between Vietnamese and English. Right-click or Control-click opens the menu.
+
+### Known limitations
+
+- Linux: GNOME and other IBus panels draw the `V`/`E` mode symbol themselves in monochrome text, and clicking it opens the input-source menu, so the colored letter and one-click switching are not available there. Switch with the configured hotkey or the **Chế độ** menu item.
+
+### Downloads
+
+- macOS 13+ (Intel and Apple Silicon): run `curl -fsSL https://github.com/buidangminh23/ms-key/releases/latest/download/install-macos.sh | bash`. The DMG `MSKey-0.1.3-macos-universal.dmg` also works after `xattr -dr com.apple.quarantine /Applications/MSKey.app`.
+- Windows 10/11: `MSKey-Setup-0.1.3-windows-x64.exe` or `MSKey-0.1.3-windows-x64-portable.zip`.
+- Linux: `mskey_0.1.3_amd64.deb` or `MSKey-0.1.3-linux-amd64.tar.gz`.
+
+All downloads include SHA-256 checksums.
+
 ## [0.1.2] - 2026-11-15
 
 ### Changed
@@ -93,3 +116,4 @@ Every file is listed in `SHA256SUMS`.
 [0.1.0]: https://github.com/buidangminh23/ms-key/releases/tag/v0.1.0
 [0.1.1]: https://github.com/buidangminh23/ms-key/releases/tag/v0.1.1
 [0.1.2]: https://github.com/buidangminh23/ms-key/releases/tag/v0.1.2
+[0.1.3]: https://github.com/buidangminh23/ms-key/releases/tag/v0.1.3
