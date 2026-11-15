@@ -98,11 +98,11 @@ public final class MenuBarController: NSObject {
         let probe = NSFont.systemFont(ofSize: 100, weight: .bold)
         let font = NSFont.systemFont(ofSize: 100 * letterInkHeight / probe.capHeight, weight: .bold)
         let text = NSAttributedString(string: letter, attributes: [.font: font, .foregroundColor: color])
-        let ink = text.boundingRect(with: NSSize(width: 100, height: 100), options: [.usesLineFragmentOrigin, .usesDeviceMetrics])
+        let ink = text.boundingRect(with: NSSize(width: 100, height: 100), options: [.usesDeviceMetrics])
         let size = NSSize(width: max(18, ceil(ink.width) + 2), height: 22)
         let image = NSImage(size: size, flipped: false) { rect in
-            let origin = NSPoint(x: rect.midX - ink.midX, y: rect.midY - ink.midY)
-            text.draw(with: NSRect(origin: origin, size: NSSize(width: 100, height: 100)), options: [.usesLineFragmentOrigin])
+            let baseline = NSPoint(x: rect.midX - ink.midX, y: rect.midY - ink.midY)
+            text.draw(with: NSRect(origin: baseline, size: NSSize(width: 100, height: 100)), options: [])
             return true
         }
         image.isTemplate = false
