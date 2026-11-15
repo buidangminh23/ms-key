@@ -379,21 +379,29 @@ fn handle_tray_preset(hwnd: HWND, id: usize) {
 }
 
 fn handle_control_change(hwnd: HWND, id: usize, code: usize) {
-    let mut changed = false;
-    let mut theme_changed = false;
-    with_main_data(|d| {
-        with_state(|st| {
-            let mut cfg = st.engine.config().clone();
-            if code == CBN_SELCHANGE && d.ctrls.sync_combos_to_config(id, &mut cfg) {
-                theme_changed = id == IDC_THEME;
-                changed = true;
-            } else if d.ctrls.toggle_setting_id(id, &mut cfg) {
-                changed = true;
+    let combo_sel = if code == CBN_SELCHANGE {
+        with_main_data(|d| d.ctrls.combo_for_id(id))
+            .flatten()
+            .map(crate::dialog_helpers::combo_index)
+    } else {
+        None
+    };
+    let (changed, theme_changed) = with_state(|st| {
+        let mut cfg = st.engine.config().clone();
+        let mut did_change = false;
+        let mut is_theme = false;
+        if let Some(idx) = combo_sel {
+            if MainUiCtrls::apply_combo_selection(id, idx, &mut cfg) {
+                is_theme = id == IDC_THEME;
+                did_change = true;
             }
-            if changed {
-                st.engine.update_config(cfg);
-            }
-        });
+        } else if MainUiCtrls::toggle_setting_id(id, &mut cfg) {
+            did_change = true;
+        }
+        if did_change {
+            st.engine.update_config(cfg);
+        }
+        (did_change, is_theme)
     });
     if theme_changed {
         rebuild_theme_resources(hwnd);

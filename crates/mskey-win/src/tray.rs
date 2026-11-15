@@ -69,14 +69,15 @@ impl TrayController {
         }
     }
 
-    pub fn update(&mut self, vietnamese: bool) {
+    pub fn prepare_update(&self, vietnamese: bool) -> (u32, NOTIFYICONDATAW, HICON) {
         let mut nid: NOTIFYICONDATAW = unsafe { std::mem::zeroed() };
         nid.cbSize = std::mem::size_of::<NOTIFYICONDATAW>() as u32;
         nid.hWnd = self.hwnd;
         nid.uID = 1;
         nid.uFlags = NIF_MESSAGE | NIF_ICON | NIF_TIP;
         nid.uCallbackMessage = WM_APP_TRAY;
-        nid.hIcon = if vietnamese { self.icon_v } else { self.icon_e };
+        let icon = self.current_icon(vietnamese);
+        nid.hIcon = icon;
         let tip = if vietnamese {
             "MS Key - Tiếng Việt (V)"
         } else {
@@ -86,6 +87,15 @@ impl TrayController {
         let copy_len = wide.len().min(nid.szTip.len());
         nid.szTip[..copy_len].copy_from_slice(&wide[..copy_len]);
         let msg = if self.installed { NIM_MODIFY } else { NIM_ADD };
+        (msg, nid, icon)
+    }
+
+    pub fn mark_installed(&mut self) {
+        self.installed = true;
+    }
+
+    pub fn update(&mut self, vietnamese: bool) {
+        let (msg, nid, _) = self.prepare_update(vietnamese);
         if unsafe { Shell_NotifyIconW(msg, &nid) } != 0 {
             self.installed = true;
         }

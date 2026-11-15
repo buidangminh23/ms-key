@@ -7,6 +7,7 @@ use windows_sys::Win32::Graphics::Gdi::{
     InvalidateRect, PAINTSTRUCT, SelectObject, SetBkColor, SetBkMode, SetTextColor,
 };
 use windows_sys::Win32::UI::Controls::{DRAWITEMSTRUCT, ODT_BUTTON};
+use windows_sys::Win32::UI::Shell::Shell_NotifyIconW;
 use windows_sys::Win32::UI::WindowsAndMessaging::{
     GetClientRect, GetDlgCtrlID, ICON_BIG, ICON_SMALL, SendMessageW, WM_SETICON,
 };
@@ -15,11 +16,13 @@ use crate::dialog_helpers::{handle_draw_combo_or_btn, read_window_text, scale_px
 use crate::platform::to_wide;
 use crate::state::with_state;
 use crate::theme::{
-    ThemePalette, apply_dwm_dark_titlebar, draw_checkbox, draw_group_box, draw_owner_button,
-    draw_radio, draw_round_box, fill_solid, palette_for, rgb,
+    ThemePalette, apply_combo_theme, apply_dwm_dark_titlebar, draw_checkbox, draw_group_box,
+    draw_owner_button, draw_radio, draw_round_box, fill_solid, palette_for, rgb,
 };
 use crate::tray::TrayController;
-use crate::ui_controls::*;
+use crate::ui_controls::{
+    MainUiCtrls, apply_tab_visibility, sync_controls_from_config, *,
+};
 
 pub struct MainWinData {
     pub font: HFONT,
@@ -64,6 +67,11 @@ pub fn rebuild_theme_resources(hwnd: HWND) {
     let mode = with_state(|st| st.engine.config().theme);
     let pal = palette_for(mode);
     apply_dwm_dark_titlebar(hwnd, pal.dark);
+    if let Some(combos) = with_main_data(|d| d.ctrls.combo_list()) {
+        for c in combos {
+            apply_combo_theme(c, pal.dark);
+        }
+    }
     with_main_data_mut(|d| {
         d.pal = pal;
         unsafe {
@@ -78,13 +86,16 @@ pub fn rebuild_theme_resources(hwnd: HWND) {
 }
 
 pub fn refresh_ui_and_tray(hwnd: HWND) {
-    let ve = with_state(|st| st.engine.config().vietnamese_enabled);
-    let icon = with_main_data_mut(|d| {
-        d.ctrls.sync_from_state();
-        d.tray.update(ve);
-        d.tray.current_icon(ve)
-    });
-    if let Some(icon) = icon {
+    let (cfg, fg_proc) = with_state(|st| (st.engine.config().clone(), st.fg_process.clone()));
+    if let Some(targets) = with_main_data(|d| d.ctrls.sync_targets()) {
+        sync_controls_from_config(targets, &cfg, &fg_proc);
+    }
+    let tray_req = with_main_data(|d| d.tray.prepare_update(cfg.vietnamese_enabled));
+    if let Some((msg, nid, icon)) = tray_req {
+        let updated = unsafe { Shell_NotifyIconW(msg, &nid) } != 0;
+        if updated {
+            with_main_data_mut(|d| d.tray.mark_installed());
+        }
         unsafe {
             SendMessageW(hwnd, WM_SETICON, ICON_BIG as usize, icon as LPARAM);
             SendMessageW(hwnd, WM_SETICON, ICON_SMALL as usize, icon as LPARAM);
@@ -94,9 +105,10 @@ pub fn refresh_ui_and_tray(hwnd: HWND) {
 }
 
 pub fn set_tab_redraw(hwnd: HWND, tab: usize) {
-    with_main_data_mut(|d| {
-        d.ctrls.set_tab(tab);
-    });
+    let updated = with_main_data_mut(|d| d.ctrls.set_tab_state(tab));
+    if let Some((active, lists)) = updated {
+        apply_tab_visibility(active, &lists);
+    }
     unsafe {
         InvalidateRect(hwnd, ptr::null(), 1);
     }
@@ -192,7 +204,7 @@ fn draw_centered_label(hdc: HDC, rc: &RECT, txt: &str, font: HFONT, fg: u32) {
         let of = SelectObject(hdc, font);
         SetBkMode(hdc, 1);
         SetTextColor(hdc, fg);
-        DrawTextW(hdc, w.as_mut_ptr(), -1, &mut tx, 0x25);
+        DrawTextW(hdc, w.as_mut_ptr(), -1, &mut tx, 0x0825);
         SelectObject(hdc, of);
     }
 }

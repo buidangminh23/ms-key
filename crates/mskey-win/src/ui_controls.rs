@@ -5,7 +5,7 @@ use windows_sys::Win32::UI::WindowsAndMessaging::{
     CB_SETCURSEL, SW_HIDE, SW_SHOW, SendMessageW, ShowWindow,
 };
 
-use crate::dialog_helpers::{combo_index, format_hotkey, make_child, make_combo, make_owner_button, write_window_text};
+use crate::dialog_helpers::{format_hotkey, make_child, make_combo, make_owner_button, write_window_text};
 use crate::platform::is_elevated;
 use crate::state::with_state;
 
@@ -113,63 +113,50 @@ impl MainUiCtrls {
         ctrls
     }
 
-    pub fn set_tab(&mut self, tab: usize) {
+    pub fn set_tab_state(&mut self, tab: usize) -> (usize, [Vec<HWND>; 3]) {
         self.active_tab = tab.min(2);
-        for (idx, list) in [&self.tab0, &self.tab1, &self.tab2].iter().enumerate() {
-            let cmd = if idx == self.active_tab { SW_SHOW } else { SW_HIDE };
-            for &h in *list {
-                unsafe {
-                    ShowWindow(h, cmd);
-                }
-            }
+        (
+            self.active_tab,
+            [self.tab0.clone(), self.tab1.clone(), self.tab2.clone()],
+        )
+    }
+
+    pub fn set_tab(&mut self, tab: usize) {
+        let (active, lists) = self.set_tab_state(tab);
+        apply_tab_visibility(active, &lists);
+    }
+
+    pub fn combo_list(&self) -> [HWND; 4] {
+        [self.cb_charset, self.cb_method, self.cb_mech, self.cb_theme]
+    }
+
+    pub fn combo_for_id(&self, id: usize) -> Option<HWND> {
+        match id {
+            IDC_CHARSET => Some(self.cb_charset),
+            IDC_METHOD => Some(self.cb_method),
+            IDC_MECHANISM => Some(self.cb_mech),
+            IDC_THEME => Some(self.cb_theme),
+            _ => None,
+        }
+    }
+
+    pub fn sync_targets(&self) -> SyncTargets {
+        SyncTargets {
+            cb_charset: self.cb_charset,
+            cb_method: self.cb_method,
+            cb_mech: self.cb_mech,
+            cb_theme: self.cb_theme,
+            ve_pill: self.ve_pill,
+            lbl_active_app: self.lbl_active_app,
+            lbl_cur_app: self.lbl_cur_app,
+            lbl_switch_custom: self.lbl_switch_custom,
+            lbl_conv_hotkey: self.lbl_conv_hotkey,
         }
     }
 
     pub fn sync_from_state(&self) {
         let (cfg, fg_proc) = with_state(|st| (st.engine.config().clone(), st.fg_process.clone()));
-        let cs_idx = match cfg.charset {
-            Charset::Unicode => 0,
-            Charset::Tcvn3 => 1,
-            Charset::VniWindows => 2,
-            Charset::UnicodeComposite => 3,
-        };
-        let m_idx = match cfg.input_method {
-            InputMethod::Telex => 0,
-            InputMethod::Vni => 1,
-            InputMethod::Viqr => 2,
-            InputMethod::SimpleTelex => 3,
-            InputMethod::Custom => 4,
-        };
-        let mech_idx = match cfg.mechanism {
-            Mechanism::KeyboardHook => 0,
-            Mechanism::CompatibleHook => 1,
-        };
-        let th_idx = match cfg.theme {
-            ThemeMode::System => 0,
-            ThemeMode::Light => 1,
-            ThemeMode::Dark => 2,
-        };
-        unsafe {
-            SendMessageW(self.cb_charset, CB_SETCURSEL, cs_idx, 0);
-            SendMessageW(self.cb_method, CB_SETCURSEL, m_idx, 0);
-            SendMessageW(self.cb_mech, CB_SETCURSEL, mech_idx, 0);
-            SendMessageW(self.cb_theme, CB_SETCURSEL, th_idx, 0);
-        }
-        write_window_text(
-            self.ve_pill,
-            if cfg.vietnamese_enabled { "Tiếng Việt (V)" } else { "Tiếng Anh (E)" },
-        );
-        let app_short = if fg_proc.is_empty() { "-" } else { &fg_proc };
-        write_window_text(self.lbl_active_app, &format!("App: {app_short}"));
-        write_window_text(self.lbl_cur_app, &format!("App gần nhất: {app_short}"));
-        write_window_text(
-            self.lbl_switch_custom,
-            &format!("Tổ hợp tùy chọn: {}", format_hotkey(cfg.custom_switch_hotkey)),
-        );
-        write_window_text(
-            self.lbl_conv_hotkey,
-            &format!("Chuyển mã: {}", format_hotkey(cfg.clipboard_convert_hotkey)),
-        );
+        sync_controls_from_config(self.sync_targets(), &cfg, &fg_proc);
     }
 
     pub fn is_checkbox_checked(id: u32, cfg: &Config) -> Option<bool> {
@@ -208,7 +195,7 @@ impl MainUiCtrls {
         })
     }
 
-    pub fn toggle_setting_id(&self, id: usize, cfg: &mut Config) -> bool {
+    pub fn toggle_setting_id(id: usize, cfg: &mut Config) -> bool {
         match id {
             IDC_CHK_MODERN => cfg.modern_tone = !cfg.modern_tone,
             IDC_CHK_FREE_TONE => cfg.free_tone = !cfg.free_tone,
@@ -239,10 +226,10 @@ impl MainUiCtrls {
         true
     }
 
-    pub fn sync_combos_to_config(&self, id: usize, cfg: &mut Config) -> bool {
+    pub fn apply_combo_selection(id: usize, idx: usize, cfg: &mut Config) -> bool {
         match id {
             IDC_CHARSET => {
-                cfg.charset = match combo_index(self.cb_charset) {
+                cfg.charset = match idx {
                     1 => Charset::Tcvn3,
                     2 => Charset::VniWindows,
                     3 => Charset::UnicodeComposite,
@@ -251,7 +238,7 @@ impl MainUiCtrls {
                 true
             }
             IDC_METHOD => {
-                cfg.input_method = match combo_index(self.cb_method) {
+                cfg.input_method = match idx {
                     1 => InputMethod::Vni,
                     2 => InputMethod::Viqr,
                     3 => InputMethod::SimpleTelex,
@@ -261,14 +248,14 @@ impl MainUiCtrls {
                 true
             }
             IDC_MECHANISM => {
-                cfg.mechanism = match combo_index(self.cb_mech) {
+                cfg.mechanism = match idx {
                     1 => Mechanism::CompatibleHook,
                     _ => Mechanism::KeyboardHook,
                 };
                 true
             }
             IDC_THEME => {
-                cfg.theme = match combo_index(self.cb_theme) {
+                cfg.theme = match idx {
                     1 => ThemeMode::Light,
                     2 => ThemeMode::Dark,
                     _ => ThemeMode::System,
@@ -278,6 +265,76 @@ impl MainUiCtrls {
             _ => false,
         }
     }
+}
+
+#[derive(Clone, Copy)]
+pub struct SyncTargets {
+    pub cb_charset: HWND,
+    pub cb_method: HWND,
+    pub cb_mech: HWND,
+    pub cb_theme: HWND,
+    pub ve_pill: HWND,
+    pub lbl_active_app: HWND,
+    pub lbl_cur_app: HWND,
+    pub lbl_switch_custom: HWND,
+    pub lbl_conv_hotkey: HWND,
+}
+
+pub fn apply_tab_visibility(active: usize, lists: &[Vec<HWND>; 3]) {
+    for (idx, list) in lists.iter().enumerate() {
+        let cmd = if idx == active { SW_SHOW } else { SW_HIDE };
+        for &h in list {
+            unsafe {
+                ShowWindow(h, cmd);
+            }
+        }
+    }
+}
+
+pub fn sync_controls_from_config(t: SyncTargets, cfg: &Config, fg_proc: &str) {
+    let cs_idx = match cfg.charset {
+        Charset::Unicode => 0,
+        Charset::Tcvn3 => 1,
+        Charset::VniWindows => 2,
+        Charset::UnicodeComposite => 3,
+    };
+    let m_idx = match cfg.input_method {
+        InputMethod::Telex => 0,
+        InputMethod::Vni => 1,
+        InputMethod::Viqr => 2,
+        InputMethod::SimpleTelex => 3,
+        InputMethod::Custom => 4,
+    };
+    let mech_idx = match cfg.mechanism {
+        Mechanism::KeyboardHook => 0,
+        Mechanism::CompatibleHook => 1,
+    };
+    let th_idx = match cfg.theme {
+        ThemeMode::System => 0,
+        ThemeMode::Light => 1,
+        ThemeMode::Dark => 2,
+    };
+    unsafe {
+        SendMessageW(t.cb_charset, CB_SETCURSEL, cs_idx, 0);
+        SendMessageW(t.cb_method, CB_SETCURSEL, m_idx, 0);
+        SendMessageW(t.cb_mech, CB_SETCURSEL, mech_idx, 0);
+        SendMessageW(t.cb_theme, CB_SETCURSEL, th_idx, 0);
+    }
+    write_window_text(
+        t.ve_pill,
+        if cfg.vietnamese_enabled { "Tiếng Việt (V)" } else { "Tiếng Anh (E)" },
+    );
+    let app_short = if fg_proc.is_empty() { "-" } else { fg_proc };
+    write_window_text(t.lbl_active_app, &format!("App: {app_short}"));
+    write_window_text(t.lbl_cur_app, &format!("App gần nhất: {app_short}"));
+    write_window_text(
+        t.lbl_switch_custom,
+        &format!("Tổ hợp tùy chọn: {}", format_hotkey(cfg.custom_switch_hotkey)),
+    );
+    write_window_text(
+        t.lbl_conv_hotkey,
+        &format!("Chuyển mã: {}", format_hotkey(cfg.clipboard_convert_hotkey)),
+    );
 }
 
 fn build_header(hwnd: HWND, font: HFONT, dpi: i32) -> (HWND, HWND, HWND, HWND, HWND) {
@@ -404,7 +461,7 @@ fn build_tab2(hwnd: HWND, font: HFONT, dpi: i32) -> (Vec<HWND>, HWND, HWND) {
         lbl_cur_app,
         make_owner_button(hwnd, "Danh sách ứng dụng...", 44, 420, 224, 32, IDC_BTN_APPS, font, dpi),
         make_owner_button(hwnd, "Thêm app vào Tiếng Anh", 284, 420, 232, 32, IDC_BTN_ADD_CUR_EN, font, dpi),
-        make_child(hwnd, "STATIC", "Hỗ trợ Luôn Tiếng Anh, Luôn Tiếng Việt & Blacklist", 0, 44, 460, 472, 24, IDC_LBL_APP_HINT, font, dpi),
+        make_child(hwnd, "STATIC", "Hỗ trợ Luôn Tiếng Anh, Luôn Tiếng Việt & Blacklist", 0x0080, 44, 460, 472, 24, IDC_LBL_APP_HINT, font, dpi),
     ];
     (ctrls, cb_theme, lbl_cur_app)
 }
@@ -412,5 +469,5 @@ fn build_tab2(hwnd: HWND, font: HFONT, dpi: i32) -> (Vec<HWND>, HWND, HWND) {
 fn build_footer(hwnd: HWND, font: HFONT, dpi: i32) {
     make_owner_button(hwnd, "Th.Lập mặc định", 16, 524, 136, 32, IDC_BTN_DEFAULT, font, dpi);
     make_owner_button(hwnd, "Lưu", 164, 524, 96, 32, IDC_BTN_SAVE, font, dpi);
-    make_child(hwnd, "STATIC", "MS Key v0.1 • Tiếng Việt Unicode", 0x0002, 280, 528, 264, 24, IDC_LBL_FOOTER_VER, font, dpi);
+    make_child(hwnd, "STATIC", "MS Key v0.1 • Tiếng Việt Unicode", 0x0082, 280, 528, 264, 24, IDC_LBL_FOOTER_VER, font, dpi);
 }

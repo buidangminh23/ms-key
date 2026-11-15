@@ -3,8 +3,7 @@ use std::ptr;
 use mskey_core::HotkeyCombo;
 use windows_sys::Win32::Foundation::{HWND, LPARAM, LRESULT, RECT, WPARAM};
 use windows_sys::Win32::Graphics::Gdi::{
-    CreatePen, DeleteObject, HBRUSH, HFONT, LineTo, MoveToEx, PS_SOLID, SetBkColor, SetBkMode,
-    SetTextColor, TRANSPARENT,
+    HBRUSH, HFONT, SetBkColor, SetBkMode, SetTextColor, TRANSPARENT,
 };
 use windows_sys::Win32::System::LibraryLoader::GetModuleHandleW;
 use windows_sys::Win32::UI::Controls::{
@@ -25,7 +24,8 @@ use windows_sys::Win32::UI::WindowsAndMessaging::{
 use crate::platform::to_wide;
 use crate::state::with_state;
 use crate::theme::{
-    ThemePalette, apply_dwm_dark_titlebar, draw_owner_button, fill_solid, palette_for, rgb,
+    ThemePalette, apply_combo_theme, apply_dwm_dark_titlebar, draw_owner_button, fill_solid,
+    palette_for, rgb,
 };
 
 pub fn scale_px(px: i32, dpi: i32) -> i32 {
@@ -225,6 +225,7 @@ pub fn make_combo(
         }
         SendMessageW(hw, CB_SETCURSEL, selected, 0);
     }
+    apply_combo_theme(hw, current_palette().dark);
     hw
 }
 
@@ -337,7 +338,7 @@ pub fn handle_draw_combo_or_btn(
                 let s = String::from_utf16_lossy(&buf[..len as usize]);
                 let mut tx = dis.rcItem;
                 tx.left += 8;
-                tx.right -= 18;
+                tx.right -= 4;
                 unsafe {
                     let old_font = windows_sys::Win32::Graphics::Gdi::SelectObject(dis.hDC, font);
                     SetBkMode(dis.hDC, TRANSPARENT as i32);
@@ -348,23 +349,10 @@ pub fn handle_draw_combo_or_btn(
                         w.as_mut_ptr(),
                         -1,
                         &mut tx,
-                        0x24,
+                        0x0824,
                     );
                     windows_sys::Win32::Graphics::Gdi::SelectObject(dis.hDC, old_font);
                 }
-            }
-        }
-        if in_edit {
-            unsafe {
-                let pen = CreatePen(PS_SOLID as i32, 1, pal.subtle_text);
-                let old_pen = windows_sys::Win32::Graphics::Gdi::SelectObject(dis.hDC, pen);
-                let cx = dis.rcItem.right - 10;
-                let cy = (dis.rcItem.top + dis.rcItem.bottom) / 2;
-                MoveToEx(dis.hDC, cx - 3, cy - 2, ptr::null_mut());
-                LineTo(dis.hDC, cx, cy + 2);
-                LineTo(dis.hDC, cx + 4, cy - 2);
-                windows_sys::Win32::Graphics::Gdi::SelectObject(dis.hDC, old_pen);
-                DeleteObject(pen);
             }
         }
         return Some(1);

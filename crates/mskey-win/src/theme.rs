@@ -4,11 +4,12 @@ use mskey_core::ThemeMode;
 use windows_sys::Win32::Foundation::{COLORREF, HWND, RECT};
 use windows_sys::Win32::Graphics::Dwm::DwmSetWindowAttribute;
 use windows_sys::Win32::Graphics::Gdi::{
-    CreateFontW, CreatePen, CreateSolidBrush, DT_CENTER, DT_LEFT, DT_SINGLELINE, DT_VCENTER,
-    DeleteObject, DrawTextW, Ellipse, FillRect, HDC, HFONT, LineTo, MoveToEx, PS_SOLID, RoundRect,
-    SelectObject, SetBkMode, SetTextColor, TRANSPARENT,
+    CreateFontW, CreatePen, CreateSolidBrush, DT_CALCRECT, DT_CENTER, DT_LEFT, DT_NOPREFIX,
+    DT_SINGLELINE, DT_VCENTER, DeleteObject, DrawTextW, Ellipse, FillRect, HDC, HFONT, LineTo,
+    MoveToEx, PS_SOLID, RoundRect, SelectObject, SetBkMode, SetTextColor, TRANSPARENT,
 };
 use windows_sys::Win32::System::Registry::{HKEY, HKEY_CURRENT_USER, KEY_READ, RegCloseKey, RegOpenKeyExW, RegQueryValueExW};
+use windows_sys::Win32::UI::Controls::SetWindowTheme;
 
 use crate::platform::to_wide;
 
@@ -115,6 +116,13 @@ pub fn apply_dwm_dark_titlebar(hwnd: HWND, dark: bool) {
     }
 }
 
+pub fn apply_combo_theme(hwnd: HWND, dark: bool) {
+    let sub = to_wide(if dark { "DarkMode_CFD" } else { "Explorer" });
+    unsafe {
+        SetWindowTheme(hwnd, sub.as_ptr(), ptr::null());
+    }
+}
+
 pub fn create_ui_font(height_px: i32, bold: bool) -> HFONT {
     let name = to_wide("Segoe UI");
     unsafe {
@@ -170,23 +178,37 @@ pub fn draw_group_box(hdc: HDC, rc: &RECT, title: &str, pal: ThemePalette, font:
     unsafe {
         let old_font = SelectObject(hdc, font);
         let pad = 12;
+        let mut w = to_wide(title);
+        let mut calc = RECT { left: 0, top: 0, right: 0, bottom: 0 };
+        DrawTextW(
+            hdc,
+            w.as_mut_ptr(),
+            -1,
+            &mut calc,
+            DT_CALCRECT | DT_SINGLELINE | DT_NOPREFIX,
+        );
         let bg_rect = RECT {
             left: rc.left + pad,
             top: rc.top - 9,
-            right: rc.left + pad + (title.chars().count() as i32) * 7 + 14,
+            right: rc.left + pad + (calc.right - calc.left) + 12,
             bottom: rc.top + 10,
         };
         fill_solid(hdc, &bg_rect, pal.card_bg);
         SetBkMode(hdc, TRANSPARENT as i32);
         SetTextColor(hdc, pal.accent);
-        let mut w = to_wide(title);
         let mut tx = RECT {
-            left: bg_rect.left + 4,
+            left: bg_rect.left + 6,
             top: bg_rect.top,
-            right: bg_rect.right + 16,
+            right: bg_rect.right + 4,
             bottom: bg_rect.bottom,
         };
-        DrawTextW(hdc, w.as_mut_ptr(), -1, &mut tx, DT_LEFT | DT_VCENTER | DT_SINGLELINE);
+        DrawTextW(
+            hdc,
+            w.as_mut_ptr(),
+            -1,
+            &mut tx,
+            DT_LEFT | DT_VCENTER | DT_SINGLELINE | DT_NOPREFIX,
+        );
         SelectObject(hdc, old_font);
     }
 }
@@ -239,7 +261,13 @@ pub fn draw_checkbox(
             bottom: rc.bottom,
         };
         let mut w = to_wide(label);
-        DrawTextW(hdc, w.as_mut_ptr(), -1, &mut tx, DT_LEFT | DT_VCENTER | DT_SINGLELINE);
+        DrawTextW(
+            hdc,
+            w.as_mut_ptr(),
+            -1,
+            &mut tx,
+            DT_LEFT | DT_VCENTER | DT_SINGLELINE | DT_NOPREFIX,
+        );
         SelectObject(hdc, old_font);
     }
 }
@@ -294,7 +322,13 @@ pub fn draw_radio(
             bottom: rc.bottom,
         };
         let mut w = to_wide(label);
-        DrawTextW(hdc, w.as_mut_ptr(), -1, &mut tx, DT_LEFT | DT_VCENTER | DT_SINGLELINE);
+        DrawTextW(
+            hdc,
+            w.as_mut_ptr(),
+            -1,
+            &mut tx,
+            DT_LEFT | DT_VCENTER | DT_SINGLELINE | DT_NOPREFIX,
+        );
         SelectObject(hdc, old_font);
     }
 }
@@ -319,7 +353,13 @@ pub fn draw_owner_button(
         SetTextColor(hdc, fg);
         let mut w = to_wide(text);
         let mut tx = *rc;
-        DrawTextW(hdc, w.as_mut_ptr(), -1, &mut tx, DT_CENTER | DT_VCENTER | DT_SINGLELINE);
+        DrawTextW(
+            hdc,
+            w.as_mut_ptr(),
+            -1,
+            &mut tx,
+            DT_CENTER | DT_VCENTER | DT_SINGLELINE | DT_NOPREFIX,
+        );
         SelectObject(hdc, old_font);
     }
 }
