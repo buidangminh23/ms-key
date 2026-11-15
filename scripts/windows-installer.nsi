@@ -18,6 +18,9 @@ RequestExecutionLevel user
 !ifndef LICENSE_FILE
   !error "LICENSE_FILE is required"
 !endif
+!ifndef NOTICES_FILE
+  !error "NOTICES_FILE is required"
+!endif
 
 !define APP_NAME "MS Key"
 !define APP_EXE "MSKey.exe"
@@ -67,6 +70,7 @@ Section "MS Key" SecMain
   SetOutPath "$INSTDIR"
   File "/oname=${APP_EXE}" "${SRC_EXE}"
   File "/oname=LICENSE.txt" "${LICENSE_FILE}"
+  File "/oname=THIRD-PARTY-NOTICES.txt" "${NOTICES_FILE}"
   WriteUninstaller "$INSTDIR\Uninstall.exe"
 
   CreateDirectory "$SMPROGRAMS\MS Key"
@@ -99,6 +103,7 @@ Section "Uninstall"
   nsExec::Exec 'schtasks /Delete /TN MSKeyAutoStart /F'
   Delete "$INSTDIR\${APP_EXE}"
   Delete "$INSTDIR\LICENSE.txt"
+  Delete "$INSTDIR\THIRD-PARTY-NOTICES.txt"
   Delete "$INSTDIR\Uninstall.exe"
   RMDir "$INSTDIR"
   Delete "$SMPROGRAMS\MS Key\MS Key.lnk"

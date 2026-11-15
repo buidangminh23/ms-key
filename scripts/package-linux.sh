@@ -3,6 +3,8 @@ set -euo pipefail
 
 ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 OUT_DIR="${1:-${ROOT_DIR}/dist}"
+mkdir -p "${OUT_DIR}"
+OUT_DIR="$(cd "${OUT_DIR}" && pwd)"
 TARGET_DIR="${CARGO_TARGET_DIR:-${ROOT_DIR}/target}"
 VERSION="$(sed -n 's/^version = "\(.*\)"/\1/p' "${ROOT_DIR}/Cargo.toml" | head -n1)"
 ARCH="$(dpkg --print-architecture 2>/dev/null || echo amd64)"
@@ -20,8 +22,6 @@ fi
 BIN="${TARGET_DIR}/release/mskey-linux"
 [ -x "${BIN}" ] || { echo "Missing ${BIN}" >&2; exit 1; }
 
-mkdir -p "${OUT_DIR}"
-OUT_DIR="$(cd "${OUT_DIR}" && pwd)"
 WORK="$(mktemp -d)"
 trap 'rm -rf "${WORK}"' EXIT
 
@@ -39,7 +39,7 @@ DEB_ROOT="${WORK}/deb"
 install -Dm755 "${BIN}" "${DEB_ROOT}/usr/bin/mskey-linux"
 render_xml /usr/bin/mskey-linux | install -Dm644 /dev/stdin "${DEB_ROOT}/usr/share/ibus/component/mskey.xml"
 render_desktop /usr/bin/mskey-linux | install -Dm644 /dev/stdin "${DEB_ROOT}/usr/share/applications/mskey.desktop"
-install -Dm644 "${ROOT_DIR}/LICENSE" "${DEB_ROOT}/usr/share/doc/mskey/copyright"
+{ cat "${ROOT_DIR}/LICENSE"; echo; cat "${ROOT_DIR}/THIRD-PARTY-NOTICES.md"; } | install -Dm644 /dev/stdin "${DEB_ROOT}/usr/share/doc/mskey/copyright"
 INSTALLED_KB="$(du -sk "${DEB_ROOT}/usr" | cut -f1)"
 mkdir -p "${DEB_ROOT}/DEBIAN"
 cat > "${DEB_ROOT}/DEBIAN/control" <<EOF
@@ -75,6 +75,7 @@ TAR_ROOT="${WORK}/${TAR_NAME}"
 install -Dm755 "${BIN}" "${TAR_ROOT}/mskey-linux"
 install -Dm644 "${ROOT_DIR}/data/mskey.desktop" "${TAR_ROOT}/mskey.desktop"
 install -Dm644 "${ROOT_DIR}/LICENSE" "${TAR_ROOT}/LICENSE"
+install -Dm644 "${ROOT_DIR}/THIRD-PARTY-NOTICES.md" "${TAR_ROOT}/THIRD-PARTY-NOTICES.md"
 cat > "${TAR_ROOT}/install.sh" <<'EOF'
 #!/usr/bin/env bash
 set -euo pipefail

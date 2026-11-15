@@ -3,6 +3,8 @@ set -euo pipefail
 
 ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 OUT_DIR="${1:-${ROOT_DIR}/dist}"
+mkdir -p "${OUT_DIR}"
+OUT_DIR="$(cd "${OUT_DIR}" && pwd)"
 TARGET_DIR="${CARGO_TARGET_DIR:-${ROOT_DIR}/target}"
 VERSION="$(sed -n 's/^version = "\(.*\)"/\1/p' "${ROOT_DIR}/Cargo.toml" | head -n1)"
 BUILD_NUMBER="${BUILD_NUMBER:-1}"
@@ -28,8 +30,6 @@ export MSKEY_FFI_LIB_DIR="${UNIVERSAL_LIB_DIR}"
 swift build -c release --arch arm64 --arch x86_64
 BIN_PATH="$(swift build -c release --arch arm64 --arch x86_64 --show-bin-path)/MSKeyMac"
 
-mkdir -p "${OUT_DIR}"
-OUT_DIR="$(cd "${OUT_DIR}" && pwd)"
 WORK="$(mktemp -d)"
 trap 'rm -rf "${WORK}"' EXIT
 APP="${WORK}/MSKey.app"
@@ -40,6 +40,7 @@ cp "${ROOT_DIR}/macos/MSKeyMac/Info.plist" "${APP}/Contents/Info.plist"
 plutil -replace CFBundleShortVersionString -string "${VERSION}" "${APP}/Contents/Info.plist"
 plutil -replace CFBundleVersion -string "${BUILD_NUMBER}" "${APP}/Contents/Info.plist"
 cp "${ROOT_DIR}/LICENSE" "${APP}/Contents/Resources/LICENSE"
+cp "${ROOT_DIR}/THIRD-PARTY-NOTICES.md" "${APP}/Contents/Resources/THIRD-PARTY-NOTICES.md"
 codesign --force --deep --sign - "${APP}"
 codesign --verify --deep --strict "${APP}"
 
