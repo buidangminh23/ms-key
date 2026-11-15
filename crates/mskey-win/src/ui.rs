@@ -11,7 +11,7 @@ use windows_sys::Win32::UI::WindowsAndMessaging::{
     GetSystemMetrics, ICON_BIG, ICON_SMALL, MSG, PostQuitMessage, RegisterClassExW, SM_CXSCREEN,
     SM_CYSCREEN, SW_HIDE, SW_RESTORE, SW_SHOW, SendMessageW, SetForegroundWindow, SetWindowPos,
     ShowWindow, TranslateMessage, WM_CLOSE, WM_COMMAND, WM_CREATE, WM_CTLCOLORSTATIC, WM_DESTROY,
-    WM_DPICHANGED, WM_DRAWITEM, WM_LBUTTONDBLCLK, WM_PAINT, WM_RBUTTONUP, WM_SETICON,
+    WM_DPICHANGED, WM_DRAWITEM, WM_LBUTTONDBLCLK, WM_LBUTTONUP, WM_PAINT, WM_RBUTTONUP, WM_SETICON,
     WNDCLASSEXW, WS_CAPTION, WS_MINIMIZEBOX, WS_SYSMENU, WM_TIMER, KillTimer, SetTimer,
     SystemParametersInfoW, SPI_GETCLIENTAREAANIMATION, IsWindowVisible,
 };
@@ -218,7 +218,14 @@ unsafe extern "system" fn main_wnd_proc(
         }
         WM_APP_TRAY => {
             let ev = lparam as u32;
-            if ev == WM_LBUTTONDBLCLK {
+            if ev == WM_LBUTTONUP {
+                if !SKIP_TRAY_CLICK.replace(false) {
+                    toggle_ve_and_refresh(hwnd);
+                }
+            } else if ev == WM_LBUTTONDBLCLK {
+                SKIP_TRAY_CLICK.set(true);
+                let current = with_state(|st| st.engine.config().vietnamese_enabled);
+                set_ve_and_refresh(hwnd, !current, false);
                 show_and_focus(hwnd);
             } else if ev == WM_RBUTTONUP {
                 let (ve, cs, m) = with_state(|st| {
@@ -275,16 +282,23 @@ unsafe extern "system" fn main_wnd_proc(
     }
 }
 
+thread_local! {
+    static SKIP_TRAY_CLICK: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
+}
+
 fn toggle_ve_and_refresh(hwnd: HWND) {
-    let (next, beep, osd, fg_proc, smart) = with_state(|st| {
+    let next = with_state(|st| !st.engine.config().vietnamese_enabled);
+    set_ve_and_refresh(hwnd, next, true);
+}
+
+fn set_ve_and_refresh(hwnd: HWND, next: bool, announce: bool) {
+    let (beep, osd, fg_proc, smart) = with_state(|st| {
         let c = st.engine.config().clone();
-        let next = !c.vietnamese_enabled;
         st.set_user_vietnamese(next);
         save_config(st.engine.config());
         (
-            next,
-            c.beep_on_switch,
-            c.show_switch_osd,
+            c.beep_on_switch && announce,
+            c.show_switch_osd && announce,
             st.fg_process.clone(),
             c.smart_app_switch,
         )

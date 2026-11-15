@@ -1,6 +1,6 @@
 {
   "name": "@minhspark/ms-key",
-  "version": "0.1.1",
+  "version": "0.1.2",
   "description": "Install MS Key, a lightweight Vietnamese input method (Telex, VNI, VIQR) for Windows, Linux and macOS",
   "type": "module",
   "bin": {

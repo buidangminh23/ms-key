@@ -5,8 +5,8 @@ use windows_sys::Win32::Foundation::{HWND, POINT, RECT};
 use windows_sys::Win32::System::LibraryLoader::GetModuleHandleW;
 use windows_sys::Win32::Graphics::Gdi::{
     BI_RGB, BITMAPINFO, BITMAPINFOHEADER, CreateBitmap, CreateCompatibleDC, CreateDIBSection,
-    CreateFontW, CreateSolidBrush, DIB_RGB_COLORS, DT_CENTER, DT_SINGLELINE, DT_VCENTER, DeleteDC,
-    DeleteObject, DrawTextW, HDC, SelectObject, SetBkMode, SetTextColor, TRANSPARENT,
+    CreateFontW, DIB_RGB_COLORS, DT_CENTER, DT_SINGLELINE, DT_VCENTER, DeleteDC,
+    DeleteObject, DrawTextW, SelectObject, SetBkMode, SetTextColor, TRANSPARENT,
 };
 use windows_sys::Win32::UI::Shell::{
     NIF_ICON, NIF_MESSAGE, NIF_TIP, NIM_ADD, NIM_DELETE, NIM_MODIFY, NOTIFYICONDATAW,
@@ -14,7 +14,7 @@ use windows_sys::Win32::UI::Shell::{
 };
 use windows_sys::Win32::UI::WindowsAndMessaging::{
     AppendMenuW, CreateIconIndirect, CreatePopupMenu, DestroyIcon, DestroyMenu, GetCursorPos,
-    DrawIconEx, LoadImageW, DI_NORMAL, IMAGE_ICON, LR_SHARED,
+    LoadImageW, IMAGE_ICON, LR_SHARED,
     HICON, ICONINFO, MF_CHECKED, MF_POPUP, MF_SEPARATOR, MF_STRING, MF_UNCHECKED,
     SetForegroundWindow, TPM_BOTTOMALIGN, TPM_LEFTALIGN, TrackPopupMenu,
 };
@@ -197,53 +197,74 @@ unsafe fn append_item(menu: windows_sys::Win32::UI::WindowsAndMessaging::HMENU, 
     }
 }
 
-fn fill_badge_pixels(pixels: &mut [u32], size: i32, r: u8, g: u8, b: u8) {
-    let radius = 3.0f32;
-    let half = 24.0f32;
-    let max_c = 8.0f32 - radius;
-    for y in 16..size {
-        for x in 16..size {
-            let dx = ((x as f32 + 0.5 - half).abs() - max_c).max(0.0);
-            let dy = ((y as f32 + 0.5 - half).abs() - max_c).max(0.0);
-            let dist = (dx * dx + dy * dy).sqrt() - radius;
-            let cov = (0.5 - dist).clamp(0.0, 1.0);
-            let a = (cov * 255.0).round() as u32;
-            let pr = ((r as f32 * cov).round() as u32) & 0xFF;
-            let pg = ((g as f32 * cov).round() as u32) & 0xFF;
-            let pb = ((b as f32 * cov).round() as u32) & 0xFF;
-            pixels[(y * size + x) as usize] = (a << 24) | (pr << 16) | (pg << 8) | pb;
-        }
-    }
-}
+const ICON_SIZE: i32 = 32;
+const ICON_INK: i32 = 30;
+const SCRATCH: i32 = 64;
 
-fn draw_badge_glyph(dc: HDC, pixels: &mut [u32], size: i32, letter: &str) {
+type InkBox = (i32, i32, i32, i32);
+
+fn letter_coverage(letter: &str, font_height: i32) -> Option<Vec<u8>> {
+    let bmi = dib_info(SCRATCH);
+    let mut bits_ptr: *mut std::ffi::c_void = ptr::null_mut();
+    let dc = unsafe { CreateCompatibleDC(ptr::null_mut()) };
+    let hbm = unsafe { CreateDIBSection(dc, &bmi, DIB_RGB_COLORS, &mut bits_ptr, ptr::null_mut(), 0) };
+    if hbm.is_null() || bits_ptr.is_null() {
+        unsafe { DeleteDC(dc) };
+        return None;
+    }
+    let old_bm = unsafe { SelectObject(dc, hbm) };
     let font_name = to_wide("Segoe UI");
-    let hfont = unsafe {
-        CreateFontW(16, 0, 0, 0, 700, 0, 0, 0, 1, 0, 0, 4, 0, font_name.as_ptr())
-    };
+    let hfont = unsafe { CreateFontW(-font_height, 0, 0, 0, 700, 0, 0, 0, 1, 0, 0, 4, 0, font_name.as_ptr()) };
     let old_font = unsafe { SelectObject(dc, hfont) };
+    let pixels = unsafe { std::slice::from_raw_parts_mut(bits_ptr as *mut u32, (SCRATCH * SCRATCH) as usize) };
+    pixels.fill(0);
     unsafe {
         SetBkMode(dc, TRANSPARENT as i32);
         SetTextColor(dc, 0x00FF_FFFF);
-        let mut rc = RECT { left: 16, top: 15, right: size, bottom: size };
+        let mut rc = RECT { left: 0, top: 0, right: SCRATCH, bottom: SCRATCH };
         let mut wide_txt = to_wide(letter);
         DrawTextW(dc, wide_txt.as_mut_ptr(), -1, &mut rc, DT_CENTER | DT_VCENTER | DT_SINGLELINE);
     }
-    for px in pixels.iter_mut() {
-        let (b_val, g_val, r_val, a_val) = (*px & 0xFF, (*px >> 8) & 0xFF, (*px >> 16) & 0xFF, (*px >> 24) & 0xFF);
-        if a_val == 0 && (r_val | g_val | b_val) > 0 {
-            *px = (r_val.max(g_val).max(b_val) << 24) | 0x00FF_FFFF;
-        }
-    }
+    let coverage = pixels
+        .iter()
+        .map(|px| ((px & 0xFF).max((px >> 8) & 0xFF).max((px >> 16) & 0xFF)) as u8)
+        .collect();
     unsafe {
         SelectObject(dc, old_font);
         DeleteObject(hfont);
+        SelectObject(dc, old_bm);
+        DeleteObject(hbm);
+        DeleteDC(dc);
     }
+    Some(coverage)
 }
 
-pub fn create_badge_icon(letter: &str, r: u8, g: u8, b: u8) -> HICON {
-    let size = 32i32;
-    let bmi = BITMAPINFO {
+fn ink_bounds(coverage: &[u8], size: i32) -> Option<InkBox> {
+    let (mut x0, mut y0, mut x1, mut y1) = (size, size, -1, -1);
+    for y in 0..size {
+        for x in 0..size {
+            if coverage[(y * size + x) as usize] > 0 {
+                x0 = x0.min(x);
+                y0 = y0.min(y);
+                x1 = x1.max(x);
+                y1 = y1.max(y);
+            }
+        }
+    }
+    (x1 >= 0).then_some((x0, y0, x1 + 1, y1 + 1))
+}
+
+fn fitted_letter(letter: &str) -> Option<(Vec<u8>, InkBox)> {
+    (12..=56).rev().find_map(|height| {
+        let coverage = letter_coverage(letter, height)?;
+        let bounds = ink_bounds(&coverage, SCRATCH)?;
+        let fits = bounds.2 - bounds.0 <= ICON_INK && bounds.3 - bounds.1 <= ICON_INK;
+        fits.then_some((coverage, bounds))
+    })
+}
+
+fn dib_info(size: i32) -> BITMAPINFO {
+    BITMAPINFO {
         bmiHeader: BITMAPINFOHEADER {
             biSize: std::mem::size_of::<BITMAPINFOHEADER>() as u32,
             biWidth: size,
@@ -258,7 +279,32 @@ pub fn create_badge_icon(letter: &str, r: u8, g: u8, b: u8) -> HICON {
             biClrImportant: 0,
         },
         bmiColors: [unsafe { std::mem::zeroed() }],
+    }
+}
+
+pub fn letter_pixels(letter: &str, r: u8, g: u8, b: u8) -> Vec<u32> {
+    let mut out = vec![0u32; (ICON_SIZE * ICON_SIZE) as usize];
+    let Some((coverage, (x0, y0, x1, y1))) = fitted_letter(letter) else {
+        return out;
     };
+    let dx = (ICON_SIZE - (x1 - x0)) / 2 - x0;
+    let dy = (ICON_SIZE - (y1 - y0)) / 2 - y0;
+    for y in y0..y1 {
+        for x in x0..x1 {
+            let a = coverage[(y * SCRATCH + x) as usize] as u32;
+            let (tx, ty) = (x + dx, y + dy);
+            if a == 0 || !(0..ICON_SIZE).contains(&tx) || !(0..ICON_SIZE).contains(&ty) {
+                continue;
+            }
+            let premul = |c: u8| (c as u32 * a + 127) / 255;
+            out[(ty * ICON_SIZE + tx) as usize] = (a << 24) | (premul(r) << 16) | (premul(g) << 8) | premul(b);
+        }
+    }
+    out
+}
+
+pub fn create_badge_icon(letter: &str, r: u8, g: u8, b: u8) -> HICON {
+    let bmi = dib_info(ICON_SIZE);
     let mut bits_ptr: *mut std::ffi::c_void = ptr::null_mut();
     let dc = unsafe { CreateCompatibleDC(ptr::null_mut()) };
     let hbm = unsafe { CreateDIBSection(dc, &bmi, DIB_RGB_COLORS, &mut bits_ptr, ptr::null_mut(), 0) };
@@ -266,15 +312,9 @@ pub fn create_badge_icon(letter: &str, r: u8, g: u8, b: u8) -> HICON {
         unsafe { DeleteDC(dc) };
         return ptr::null_mut();
     }
-    let old_bm = unsafe { SelectObject(dc, hbm) };
-    let pixels = unsafe { std::slice::from_raw_parts_mut(bits_ptr as *mut u32, (size * size) as usize) };
-    pixels.fill(0);
-    unsafe { DrawIconEx(dc, 0, 0, app_icon(32), 28, 28, 0, ptr::null_mut(), DI_NORMAL) };
-    fill_badge_pixels(pixels, size, r, g, b);
-    draw_badge_glyph(dc, pixels, size, letter);
-    unsafe { SelectObject(dc, old_bm) };
-
-    let mask_bm = unsafe { CreateBitmap(size, size, 1, 1, ptr::null()) };
+    let pixels = unsafe { std::slice::from_raw_parts_mut(bits_ptr as *mut u32, (ICON_SIZE * ICON_SIZE) as usize) };
+    pixels.copy_from_slice(&letter_pixels(letter, r, g, b));
+    let mask_bm = unsafe { CreateBitmap(ICON_SIZE, ICON_SIZE, 1, 1, ptr::null()) };
     let icon_info = ICONINFO { fIcon: 1, xHotspot: 0, yHotspot: 0, hbmMask: mask_bm, hbmColor: hbm };
     let hicon = unsafe { CreateIconIndirect(&icon_info) };
     unsafe {
@@ -282,6 +322,35 @@ pub fn create_badge_icon(letter: &str, r: u8, g: u8, b: u8) -> HICON {
         DeleteObject(hbm);
         DeleteDC(dc);
     }
-    let _ = CreateSolidBrush;
     hicon
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn ink(pixels: &[u32]) -> InkBox {
+        let alpha: Vec<u8> = pixels.iter().map(|p| (p >> 24) as u8).collect();
+        ink_bounds(&alpha, ICON_SIZE).expect("letter has ink")
+    }
+
+    #[test]
+    fn letters_fill_the_icon_and_sit_centered() {
+        for letter in ["V", "E"] {
+            let (x0, y0, x1, y1) = ink(&letter_pixels(letter, 0xD1, 0x34, 0x38));
+            let (w, h) = (x1 - x0, y1 - y0);
+            assert!(w.max(h) >= ICON_INK - 2, "{letter} ink {w}x{h} too small");
+            assert!(w <= ICON_INK && h <= ICON_INK, "{letter} ink {w}x{h} overflows");
+            assert!((x0 - (ICON_SIZE - x1)).abs() <= 1, "{letter} off-center horizontally");
+            assert!((y0 - (ICON_SIZE - y1)).abs() <= 1, "{letter} off-center vertically");
+        }
+    }
+
+    #[test]
+    fn letter_uses_the_requested_color_on_transparent_ground() {
+        let pixels = letter_pixels("E", 0x00, 0x78, 0xD4);
+        assert_eq!(pixels[0], 0);
+        let solid = pixels.iter().find(|p| *p >> 24 == 0xFF).expect("opaque stroke");
+        assert_eq!(solid & 0x00FF_FFFF, 0x0078D4);
+    }
 }

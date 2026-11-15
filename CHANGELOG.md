@@ -2,6 +2,24 @@
 
 All notable changes to MS Key are documented here. The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and the project uses [Semantic Versioning](https://semver.org/).
 
+## [0.1.2] - 2026-11-15
+
+### Changed
+
+- The Windows tray icon is now a single large letter: a red **V** for Vietnamese and a blue **E** for English, sized like the system volume icon.
+
+### Added
+
+- Click the Windows tray icon once to switch between Vietnamese and English. Double-clicking still opens the settings window and keeps the current mode.
+
+### Downloads
+
+- macOS 13+ (Intel and Apple Silicon): `MSKey-0.1.2-macos-universal.dmg`. Open it and drag MSKey.app into Applications.
+- Windows 10/11: `MSKey-Setup-0.1.2-windows-x64.exe` or `MSKey-0.1.2-windows-x64-portable.zip`.
+- Linux: `mskey_0.1.2_amd64.deb` or `MSKey-0.1.2-linux-amd64.tar.gz`.
+
+All downloads include SHA-256 checksums.
+
 ## [0.1.1] - 2026-11-15
 
 ### Added
@@ -74,3 +92,4 @@ Every file is listed in `SHA256SUMS`.
 
 [0.1.0]: https://github.com/buidangminh23/ms-key/releases/tag/v0.1.0
 [0.1.1]: https://github.com/buidangminh23/ms-key/releases/tag/v0.1.1
+[0.1.2]: https://github.com/buidangminh23/ms-key/releases/tag/v0.1.2
