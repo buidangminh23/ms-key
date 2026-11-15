@@ -39,13 +39,22 @@ export async function npmDownloads(name, options = {}) {
   const metadata = await getJson(`https://registry.npmjs.org/${encoded}`, options);
   const created = Date.parse(metadata.time?.created);
   if (!Number.isFinite(created)) throw new Error('npm metadata has no creation date');
-  const month = point(await getJson(`https://api.npmjs.org/downloads/point/last-month/${encoded}`, options), name);
+  const downloads = async (range, start, end) => {
+    try {
+      return point(await getJson(`https://api.npmjs.org/downloads/point/${range}/${encoded}`, options), name, start, end);
+    } catch (error) {
+      if (!(error instanceof SourceMissing)) throw error;
+      const today = isoDay(options.now ?? Date.now());
+      return { package: name, downloads: 0, start: start ?? isoDay(Date.parse(today) - 29 * DAY), end: end ?? today };
+    }
+  };
+  const month = await downloads('last-month');
   const end = Date.parse(month.end);
   let total = 0;
   for (let cursor = Date.parse(isoDay(created)); cursor <= end; cursor += 365 * DAY) {
     const start = isoDay(cursor);
     const stop = isoDay(Math.min(cursor + 364 * DAY, end));
-    total += point(await getJson(`https://api.npmjs.org/downloads/point/${start}:${stop}/${encoded}`, options), name, start, stop).downloads;
+    total += (await downloads(`${start}:${stop}`, start, stop)).downloads;
   }
   return { total, month: month.downloads, start: isoDay(created), monthStart: month.start, end: month.end };
 }

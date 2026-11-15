@@ -1,11 +1,19 @@
-# MS Key
+<p align="center">
+  <img src="https://raw.githubusercontent.com/buidangminh23/ms-key/main/assets/branding/mskey-readme.png" width="280" height="193" alt="MS Key logo" />
+</p>
 
-<p align="center"><img src="https://raw.githubusercontent.com/buidangminh23/ms-key/main/assets/branding/mskey-logo.png" alt="MS Key" width="280"></p>
+<h1 align="center">MS Key</h1>
 
-[![npm](https://img.shields.io/npm/v/@minhspark/ms-key?logo=npm&color=CB3837)](https://www.npmjs.com/package/@minhspark/ms-key)
-[![CI](https://github.com/buidangminh23/ms-key/actions/workflows/ci.yml/badge.svg)](https://github.com/buidangminh23/ms-key/actions/workflows/ci.yml)
-[![Release](https://img.shields.io/github/v/release/buidangminh23/ms-key)](https://github.com/buidangminh23/ms-key/releases/latest)
-[![License: MIT](https://img.shields.io/badge/license-MIT-blue.svg)](LICENSE)
+<p align="center">
+  <a href="https://www.npmjs.com/package/@minhspark/ms-key"><img src="https://img.shields.io/npm/v/@minhspark/ms-key?logo=npm&amp;color=CB3837" height="20" alt="npm" /></a>
+  <a href="https://www.npmjs.com/package/@minhspark/ms-key"><img src="https://raw.githubusercontent.com/buidangminh23/ms-key/badges/npm-downloads.svg" height="20" alt="npm downloads" /></a>
+  <a href="https://www.npmcharts.com/compare/%40minhspark%2Fms-key?minimal=true"><img src="https://raw.githubusercontent.com/buidangminh23/ms-key/badges/npm-downloads-month.svg" height="20" alt="npm downloads / 30d" /></a>
+  <br />
+  <a href="https://github.com/buidangminh23/ms-key/network/dependents"><img src="https://img.shields.io/librariesio/dependent-repos/npm/@minhspark/ms-key?label=Used%20by&amp;logo=github&amp;color=0969da" height="20" alt="Used by repositories (Libraries.io)" /></a>
+  <a href="https://github.com/buidangminh23/ms-key/actions/workflows/ci.yml"><img src="https://github.com/buidangminh23/ms-key/actions/workflows/ci.yml/badge.svg" height="20" alt="CI" /></a>
+  <a href="https://github.com/buidangminh23/ms-key/releases/latest"><img src="https://img.shields.io/github/v/release/buidangminh23/ms-key" height="20" alt="release" /></a>
+  <a href="LICENSE"><img src="https://img.shields.io/npm/l/@minhspark/ms-key" height="20" alt="license" /></a>
+</p>
 
 MS Key is a lightweight, open-source Vietnamese input method for **Windows, Linux and macOS**. One Rust engine does the typing on all three systems, so Telex, VNI and the rest behave the same everywhere. It follows the habits of EVKey, OpenKey, Gõ Nhanh and IBus Bamboo.
 
