@@ -1,5 +1,6 @@
 # MS Key
 
+[![npm](https://img.shields.io/npm/v/@minhspark/ms-key?logo=npm&color=CB3837)](https://www.npmjs.com/package/@minhspark/ms-key)
 [![CI](https://github.com/buidangminh23/ms-key/actions/workflows/ci.yml/badge.svg)](https://github.com/buidangminh23/ms-key/actions/workflows/ci.yml)
 [![Release](https://img.shields.io/github/v/release/buidangminh23/ms-key)](https://github.com/buidangminh23/ms-key/releases/latest)
 [![License: MIT](https://img.shields.io/badge/license-MIT-blue.svg)](LICENSE)
