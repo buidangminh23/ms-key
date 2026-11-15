@@ -179,8 +179,8 @@ unsafe extern "C" fn poll_config_reload(_: *mut c_void) -> c_int {
     let cur = config_mtime_nanos();
     let changed = DAEMON.with(|d| {
         let mut b = d.borrow_mut();
-        if let Some(st) = b.as_mut() {
-            if cur > 0 && cur != st.last_mtime {
+        if let Some(st) = b.as_mut()
+            && cur > 0 && cur != st.last_mtime {
                 st.last_mtime = cur;
                 let fresh = load_config();
                 if fresh.to_json_pretty().ok() != st.session.engine.config().to_json_pretty().ok() {
@@ -188,14 +188,12 @@ unsafe extern "C" fn poll_config_reload(_: *mut c_void) -> c_int {
                     return Some((st.conn, st.active_path.clone(), st.session.engine.config().clone()));
                 }
             }
-        }
         None
     });
-    if let Some((conn, path, cfg)) = changed {
-        if !path.is_empty() {
+    if let Some((conn, path, cfg)) = changed
+        && !path.is_empty() {
             register_panel_properties(conn, &path, &cfg);
         }
-    }
     1
 }
 
@@ -387,6 +385,8 @@ fn dispatch_non_key_method(
     }
 }
 
+type SwitchNotice = (bool, (i32, i32));
+
 fn handle_property_activate(conn: *mut GDBusConnection, path: &str, name: &str) {
     if name == "OpenSetup" {
         spawn_self_arg("--setup");
@@ -396,7 +396,7 @@ fn handle_property_activate(conn: *mut GDBusConnection, path: &str, name: &str) 
         spawn_self_arg("--convert");
         return;
     }
-    let updated: Option<(Config, Option<(bool, (i32, i32))>)> = DAEMON.with(|d| {
+    let updated: Option<(Config, Option<SwitchNotice>)> = DAEMON.with(|d| {
         let mut b = d.borrow_mut();
         let st = b.as_mut()?;
         let mut cfg = st.session.engine.config().clone();

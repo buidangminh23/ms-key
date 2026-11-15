@@ -53,6 +53,9 @@ pub(crate) fn should_auto_restore(
     if display_str == raw_str {
         return false;
     }
+    if is_standalone_marked_letter(display) && raw_str.chars().count() <= 2 {
+        return false;
+    }
     if has_reverted
         && !has_vietnamese_diacritics(display)
         && !dict::is_english_word(raw_str)
@@ -73,6 +76,14 @@ pub(crate) fn should_auto_restore(
         return true;
     }
     dict::is_english_word(raw_str) && !dict::is_keep_word(raw_str)
+}
+
+fn is_standalone_marked_letter(display: &[char]) -> bool {
+    let [c] = display else {
+        return false;
+    };
+    matches!(c, 'đ' | 'Đ')
+        || decode_vowel(*c).is_some_and(|(b, t, _)| t == Tone::None && strip_vowel_diacritic(b) != b)
 }
 
 fn has_vietnamese_diacritics(display: &[char]) -> bool {

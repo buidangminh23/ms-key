@@ -1,3 +1,5 @@
+#![allow(clippy::missing_safety_doc)]
+
 use std::ffi::{CStr, CString, c_char};
 use std::panic::catch_unwind;
 use std::ptr;
@@ -102,7 +104,7 @@ fn encode_convert_encoding(enc: ConvertEncoding) -> u8 {
 }
 
 #[unsafe(no_mangle)]
-pub extern "C" fn mskey_create(config_json: *const c_char) -> *mut MsKeyHandle {
+pub unsafe extern "C" fn mskey_create(config_json: *const c_char) -> *mut MsKeyHandle {
     catch_unwind(|| {
         let cfg = from_c_str(config_json)
             .and_then(|raw| Config::from_json_str(&raw).ok())
@@ -115,7 +117,7 @@ pub extern "C" fn mskey_create(config_json: *const c_char) -> *mut MsKeyHandle {
 }
 
 #[unsafe(no_mangle)]
-pub extern "C" fn mskey_destroy(handle: *mut MsKeyHandle) {
+pub unsafe extern "C" fn mskey_destroy(handle: *mut MsKeyHandle) {
     let _ = catch_unwind(|| {
         if !handle.is_null() {
             unsafe {
@@ -137,7 +139,7 @@ pub extern "C" fn mskey_default_config_json() -> *mut c_char {
 }
 
 #[unsafe(no_mangle)]
-pub extern "C" fn mskey_get_config_json(handle: *mut MsKeyHandle) -> *mut c_char {
+pub unsafe extern "C" fn mskey_get_config_json(handle: *mut MsKeyHandle) -> *mut c_char {
     catch_unwind(|| {
         let Some(h) = (unsafe { handle.as_ref() }) else {
             return ptr::null_mut();
@@ -153,7 +155,7 @@ pub extern "C" fn mskey_get_config_json(handle: *mut MsKeyHandle) -> *mut c_char
 }
 
 #[unsafe(no_mangle)]
-pub extern "C" fn mskey_set_config_json(
+pub unsafe extern "C" fn mskey_set_config_json(
     handle: *mut MsKeyHandle,
     config_json: *const c_char,
 ) -> bool {
@@ -175,7 +177,7 @@ pub extern "C" fn mskey_set_config_json(
 }
 
 #[unsafe(no_mangle)]
-pub extern "C" fn mskey_import_evkey_tree(tree_text: *const c_char) -> *mut c_char {
+pub unsafe extern "C" fn mskey_import_evkey_tree(tree_text: *const c_char) -> *mut c_char {
     catch_unwind(|| {
         let Some(raw) = from_c_str(tree_text) else {
             return ptr::null_mut();
@@ -189,7 +191,7 @@ pub extern "C" fn mskey_import_evkey_tree(tree_text: *const c_char) -> *mut c_ch
 }
 
 #[unsafe(no_mangle)]
-pub extern "C" fn mskey_set_enabled(handle: *mut MsKeyHandle, enabled: bool) {
+pub unsafe extern "C" fn mskey_set_enabled(handle: *mut MsKeyHandle, enabled: bool) {
     let _ = catch_unwind(|| {
         if let Some(h) = unsafe { handle.as_ref() } {
             let mut guard = h.engine.lock().unwrap_or_else(|e| e.into_inner());
@@ -199,7 +201,7 @@ pub extern "C" fn mskey_set_enabled(handle: *mut MsKeyHandle, enabled: bool) {
 }
 
 #[unsafe(no_mangle)]
-pub extern "C" fn mskey_is_enabled(handle: *mut MsKeyHandle) -> bool {
+pub unsafe extern "C" fn mskey_is_enabled(handle: *mut MsKeyHandle) -> bool {
     catch_unwind(|| {
         let Some(h) = (unsafe { handle.as_ref() }) else {
             return false;
@@ -211,7 +213,7 @@ pub extern "C" fn mskey_is_enabled(handle: *mut MsKeyHandle) -> bool {
 }
 
 #[unsafe(no_mangle)]
-pub extern "C" fn mskey_reset_word(handle: *mut MsKeyHandle) {
+pub unsafe extern "C" fn mskey_reset_word(handle: *mut MsKeyHandle) {
     let _ = catch_unwind(|| {
         if let Some(h) = unsafe { handle.as_ref() } {
             let mut guard = h.engine.lock().unwrap_or_else(|e| e.into_inner());
@@ -221,7 +223,7 @@ pub extern "C" fn mskey_reset_word(handle: *mut MsKeyHandle) {
 }
 
 #[unsafe(no_mangle)]
-pub extern "C" fn mskey_reset_all(handle: *mut MsKeyHandle) {
+pub unsafe extern "C" fn mskey_reset_all(handle: *mut MsKeyHandle) {
     let _ = catch_unwind(|| {
         if let Some(h) = unsafe { handle.as_ref() } {
             let mut guard = h.engine.lock().unwrap_or_else(|e| e.into_inner());
@@ -231,7 +233,7 @@ pub extern "C" fn mskey_reset_all(handle: *mut MsKeyHandle) {
 }
 
 #[unsafe(no_mangle)]
-pub extern "C" fn mskey_process_key(handle: *mut MsKeyHandle, codepoint: u32) -> MsKeyAction {
+pub unsafe extern "C" fn mskey_process_key(handle: *mut MsKeyHandle, codepoint: u32) -> MsKeyAction {
     catch_unwind(|| {
         let Some(h) = (unsafe { handle.as_ref() }) else {
             return MsKeyAction::pass_through();
@@ -246,7 +248,7 @@ pub extern "C" fn mskey_process_key(handle: *mut MsKeyHandle, codepoint: u32) ->
 }
 
 #[unsafe(no_mangle)]
-pub extern "C" fn mskey_process_backspace(handle: *mut MsKeyHandle) -> MsKeyAction {
+pub unsafe extern "C" fn mskey_process_backspace(handle: *mut MsKeyHandle) -> MsKeyAction {
     catch_unwind(|| {
         let Some(h) = (unsafe { handle.as_ref() }) else {
             return MsKeyAction::pass_through();
@@ -258,7 +260,7 @@ pub extern "C" fn mskey_process_backspace(handle: *mut MsKeyHandle) -> MsKeyActi
 }
 
 #[unsafe(no_mangle)]
-pub extern "C" fn mskey_process_escape(handle: *mut MsKeyHandle) -> MsKeyAction {
+pub unsafe extern "C" fn mskey_process_escape(handle: *mut MsKeyHandle) -> MsKeyAction {
     catch_unwind(|| {
         let Some(h) = (unsafe { handle.as_ref() }) else {
             return MsKeyAction::pass_through();
@@ -270,7 +272,7 @@ pub extern "C" fn mskey_process_escape(handle: *mut MsKeyHandle) -> MsKeyAction 
 }
 
 #[unsafe(no_mangle)]
-pub extern "C" fn mskey_behavior_for_app(
+pub unsafe extern "C" fn mskey_behavior_for_app(
     handle: *mut MsKeyHandle,
     process_name: *const c_char,
 ) -> u8 {
@@ -293,7 +295,7 @@ pub extern "C" fn mskey_behavior_for_app(
 }
 
 #[unsafe(no_mangle)]
-pub extern "C" fn mskey_convert_text(
+pub unsafe extern "C" fn mskey_convert_text(
     input: *const c_char,
     from_charset: u8,
     to_charset: u8,
@@ -315,7 +317,7 @@ pub extern "C" fn mskey_convert_text(
 }
 
 #[unsafe(no_mangle)]
-pub extern "C" fn mskey_convert_with_encoding(
+pub unsafe extern "C" fn mskey_convert_with_encoding(
     input: *const c_char,
     from_enc: u8,
     to_enc: u8,
@@ -337,7 +339,7 @@ pub extern "C" fn mskey_convert_with_encoding(
 }
 
 #[unsafe(no_mangle)]
-pub extern "C" fn mskey_detect_charset(input: *const c_char) -> u8 {
+pub unsafe extern "C" fn mskey_detect_charset(input: *const c_char) -> u8 {
     catch_unwind(|| {
         let Some(text) = from_c_str(input) else {
             return 0;
@@ -348,7 +350,7 @@ pub extern "C" fn mskey_detect_charset(input: *const c_char) -> u8 {
 }
 
 #[unsafe(no_mangle)]
-pub extern "C" fn mskey_format_macro_text(config_json: *const c_char) -> *mut c_char {
+pub unsafe extern "C" fn mskey_format_macro_text(config_json: *const c_char) -> *mut c_char {
     catch_unwind(|| {
         let Some(raw) = from_c_str(config_json) else {
             return ptr::null_mut();
@@ -362,7 +364,7 @@ pub extern "C" fn mskey_format_macro_text(config_json: *const c_char) -> *mut c_
 }
 
 #[unsafe(no_mangle)]
-pub extern "C" fn mskey_parse_macro_text(raw_text: *const c_char) -> *mut c_char {
+pub unsafe extern "C" fn mskey_parse_macro_text(raw_text: *const c_char) -> *mut c_char {
     catch_unwind(|| {
         let Some(raw) = from_c_str(raw_text) else {
             return ptr::null_mut();
@@ -376,7 +378,7 @@ pub extern "C" fn mskey_parse_macro_text(raw_text: *const c_char) -> *mut c_char
 }
 
 #[unsafe(no_mangle)]
-pub extern "C" fn mskey_is_active_delimiter(handle: *mut MsKeyHandle, codepoint: u32) -> bool {
+pub unsafe extern "C" fn mskey_is_active_delimiter(handle: *mut MsKeyHandle, codepoint: u32) -> bool {
     catch_unwind(|| {
         let Some(h) = (unsafe { handle.as_ref() }) else {
             return false;
@@ -391,7 +393,7 @@ pub extern "C" fn mskey_is_active_delimiter(handle: *mut MsKeyHandle, codepoint:
 }
 
 #[unsafe(no_mangle)]
-pub extern "C" fn mskey_set_clock_offset(handle: *mut MsKeyHandle, offset_secs: i64) {
+pub unsafe extern "C" fn mskey_set_clock_offset(handle: *mut MsKeyHandle, offset_secs: i64) {
     let _ = catch_unwind(|| {
         if let Some(h) = unsafe { handle.as_ref() } {
             let mut guard = h.engine.lock().unwrap_or_else(|e| e.into_inner());
@@ -401,7 +403,7 @@ pub extern "C" fn mskey_set_clock_offset(handle: *mut MsKeyHandle, offset_secs: 
 }
 
 #[unsafe(no_mangle)]
-pub extern "C" fn mskey_free_string(ptr: *mut c_char) {
+pub unsafe extern "C" fn mskey_free_string(ptr: *mut c_char) {
     let _ = catch_unwind(|| {
         if !ptr.is_null() {
             unsafe {
@@ -412,6 +414,6 @@ pub extern "C" fn mskey_free_string(ptr: *mut c_char) {
 }
 
 #[unsafe(no_mangle)]
-pub extern "C" fn mskey_free_action(action: MsKeyAction) {
-    mskey_free_string(action.text);
+pub unsafe extern "C" fn mskey_free_action(action: MsKeyAction) {
+    unsafe { mskey_free_string(action.text) };
 }

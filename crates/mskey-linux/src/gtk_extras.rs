@@ -133,12 +133,11 @@ pub fn show_extras_sandbox_dialog(parent: *mut GtkWindow, cfg: &mut Config) -> b
     connect_signal(tv, "key-press-event", on_sandbox_key as *const c_void, 0);
     run_modal_gtk(dlg);
 
-    if let Some(st) = EXTRAS_DLG.with(|c| c.borrow_mut().take()) {
-        if st.saved {
+    if let Some(st) = EXTRAS_DLG.with(|c| c.borrow_mut().take())
+        && st.saved {
             *cfg = st.cfg;
             return true;
         }
-    }
     false
 }
 
@@ -183,17 +182,16 @@ unsafe extern "C" fn on_extras_changed(_: *mut GtkWidget, _: *mut c_void) {
 unsafe extern "C" fn on_extras_export(_: *mut GtkWidget, _: *mut c_void) {
     read_extras_widgets();
     let pair = EXTRAS_DLG.with(|c| c.borrow().as_ref().map(|w| (w.dlg, w.cfg.clone())));
-    if let Some((dlg, cfg)) = pair {
-        if let Some(path) = pick_file_path(dlg, "Xuất cấu hình JSON", true, "mskey-config.json") {
+    if let Some((dlg, cfg)) = pair
+        && let Some(path) = pick_file_path(dlg, "Xuất cấu hình JSON", true, "mskey-config.json") {
             let _ = export_config_json(Path::new(&path), &cfg);
         }
-    }
 }
 
 unsafe extern "C" fn on_extras_import(_: *mut GtkWidget, _: *mut c_void) {
     let dlg = EXTRAS_DLG.with(|c| c.borrow().as_ref().map(|w| w.dlg).unwrap_or(ptr::null_mut()));
-    if let Some(path) = pick_file_path(dlg, "Nhập cấu hình JSON", false, "") {
-        if let Ok(imported) = import_config_json(Path::new(&path)) {
+    if let Some(path) = pick_file_path(dlg, "Nhập cấu hình JSON", false, "")
+        && let Ok(imported) = import_config_json(Path::new(&path)) {
             EXTRAS_DLG.with(|c| {
                 if let Some(st) = c.borrow_mut().as_mut() {
                     st.cfg = imported;
@@ -201,7 +199,6 @@ unsafe extern "C" fn on_extras_import(_: *mut GtkWidget, _: *mut c_void) {
             });
             sync_extras_widgets();
         }
-    }
 }
 
 unsafe extern "C" fn on_extras_clear(_: *mut GtkWidget, _: *mut c_void) {
@@ -325,12 +322,11 @@ pub fn show_user_dict_dialog(parent: *mut GtkWindow, cfg: &mut Config) -> bool {
     connect_signal(b_cancel, "clicked", on_dict_cancel as *const c_void, 0);
     run_modal_gtk(dlg);
 
-    if let Some(st) = DICT_DLG.with(|c| c.borrow_mut().take()) {
-        if st.saved {
+    if let Some(st) = DICT_DLG.with(|c| c.borrow_mut().take())
+        && st.saved {
             cfg.user_dict_words = st.words;
             return true;
         }
-    }
     false
 }
 

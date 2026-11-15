@@ -167,7 +167,7 @@ pub enum TransformOutcome {
 }
 
 pub fn try_apply_d_stroke(
-    chars: &mut Vec<char>,
+    chars: &mut [char],
     free_tone: bool,
     spelling_check: bool,
     allow_fjwz: bool,
@@ -184,7 +184,7 @@ pub fn try_apply_d_stroke(
         return TransformOutcome::Reverted;
     }
     if spelling_check && chars.len() > 1 {
-        let mut candidate = chars.clone();
+        let mut candidate = chars.to_vec();
         candidate[0] = to_d_stroke(upper);
         let Some(parsed) = parse_syllable(&candidate, allow_fjwz) else {
             return TransformOutcome::Ignored;
@@ -212,11 +212,10 @@ pub fn try_apply_circumflex(
         let Some((base, tone, upper)) = decode_vowel(candidate[idx]) else {
             continue;
         };
-        if let Some(target_fam) = family_filter {
-            if base_family(base) != target_fam {
+        if let Some(target_fam) = family_filter
+            && base_family(base) != target_fam {
                 continue;
             }
-        }
         let Some((next_base, applied)) = toggle_circumflex(base) else {
             continue;
         };
@@ -417,7 +416,7 @@ pub fn try_apply_tone(chars: &mut Vec<char>, target_tone: Tone, config: &Config)
     TransformOutcome::Applied
 }
 
-pub fn reanchor_tone(chars: &mut Vec<char>, config: &Config) {
+pub fn reanchor_tone(chars: &mut [char], config: &Config) {
     let Some(parsed) = parse_syllable(chars, config.allow_fjwz) else {
         return;
     };
@@ -435,7 +434,7 @@ pub fn reanchor_tone(chars: &mut Vec<char>, config: &Config) {
     }
 }
 
-fn clear_all_tones(chars: &mut Vec<char>, parsed: &crate::syllable::ParsedSyllable) {
+fn clear_all_tones(chars: &mut [char], parsed: &crate::syllable::ParsedSyllable) {
     for offset in 0..parsed.vowels.len() {
         let idx = parsed.vowel_start + offset;
         if let Some((base, _, upper)) = decode_vowel(chars[idx]) {

@@ -196,12 +196,7 @@ pub fn is_valid_complete_syllable(syllable: &ParsedSyllable, allow_fjwz: bool) -
     } else if !rule.codas.contains(&syllable.coda.as_str()) {
         return false;
     }
-    if is_checked_coda(&syllable.coda)
-        && !matches!(syllable.active_tone, Tone::Acute | Tone::DotBelow)
-    {
-        return false;
-    }
-    true
+    !(is_checked_coda(&syllable.coda) && !matches!(syllable.active_tone, Tone::Acute | Tone::DotBelow))
 }
 
 pub fn is_valid_typing_prefix(syllable: &ParsedSyllable, allow_fjwz: bool) -> bool {

@@ -178,8 +178,8 @@ unsafe extern "C" fn on_macro_toggle(_: *mut GtkWidget, _: *mut c_void) {
 
 unsafe extern "C" fn on_macro_import(_: *mut GtkWidget, _: *mut c_void) {
     let dlg = MACRO_DLG.with(|c| c.borrow().as_ref().map(|w| w.dlg).unwrap_or(ptr::null_mut()));
-    if let Some(path) = pick_file_path(dlg, "Nhập bảng gõ tắt (.txt)", false, "") {
-        if let Ok(raw) = fs::read_to_string(path) {
+    if let Some(path) = pick_file_path(dlg, "Nhập bảng gõ tắt (.txt)", false, "")
+        && let Ok(raw) = fs::read_to_string(path) {
             let entries = Config::parse_macro_text(&raw);
             MACRO_DLG.with(|c| {
                 if let Some(st) = c.borrow_mut().as_mut() {
@@ -200,16 +200,14 @@ unsafe extern "C" fn on_macro_import(_: *mut GtkWidget, _: *mut c_void) {
             });
             reload_macro_list();
         }
-    }
 }
 
 unsafe extern "C" fn on_macro_export(_: *mut GtkWidget, _: *mut c_void) {
     let pair = MACRO_DLG.with(|c| c.borrow().as_ref().map(|w| (w.dlg, w.cfg.format_macro_text())));
-    if let Some((dlg, txt)) = pair {
-        if let Some(path) = pick_file_path(dlg, "Xuất bảng gõ tắt (.txt)", true, "macros.txt") {
+    if let Some((dlg, txt)) = pair
+        && let Some(path) = pick_file_path(dlg, "Xuất bảng gõ tắt (.txt)", true, "macros.txt") {
             let _ = fs::write(path, txt);
         }
-    }
 }
 
 unsafe extern "C" fn on_macro_del(_: *mut GtkWidget, _: *mut c_void) {
@@ -417,12 +415,11 @@ pub fn show_custom_keymap_dialog(parent: *mut GtkWindow, cfg: &mut Config) -> bo
     connect_signal(b_save, "clicked", on_cust_save as *const c_void, 0);
     connect_signal(b_close, "clicked", on_cust_close as *const c_void, 0);
     run_modal_gtk(dlg);
-    if let Some(st) = CUST_DLG.with(|c| c.borrow_mut().take()) {
-        if st.saved {
+    if let Some(st) = CUST_DLG.with(|c| c.borrow_mut().take())
+        && st.saved {
             *cfg = st.cfg;
             return true;
         }
-    }
     false
 }
 

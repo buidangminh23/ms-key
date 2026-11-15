@@ -217,7 +217,7 @@ unsafe extern "system" fn extras_wnd_proc(
             handle_ctl_color(msg, wparam as _, pal, b1, b2)
         }
         WM_COMMAND => {
-            let id = (wparam & 0xFFFF) as usize;
+            let id = wparam & 0xFFFF;
             let code = (wparam >> 16) & 0xFFFF;
             if let Some(st) = EXTRAS_STATE.with(|c| *c.borrow()) {
                 handle_extras_cmd(hwnd, id, code, st);
@@ -375,7 +375,7 @@ unsafe extern "system" fn dict_wnd_proc(
             handle_ctl_color(msg, wparam as _, pal, b1, b2)
         }
         WM_COMMAND => {
-            let id = (wparam & 0xFFFF) as usize;
+            let id = wparam & 0xFFFF;
             if let Some(st) = DICT_STATE.with(|c| *c.borrow()) {
                 handle_dict_cmd(hwnd, id, st);
             }

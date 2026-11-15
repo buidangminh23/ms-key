@@ -76,11 +76,10 @@ pub fn config_file_path() -> PathBuf {
 
 pub fn load_config() -> Config {
     let path = config_file_path();
-    if let Ok(raw) = fs::read_to_string(&path) {
-        if let Ok(cfg) = Config::from_json_str(&raw) {
+    if let Ok(raw) = fs::read_to_string(&path)
+        && let Ok(cfg) = Config::from_json_str(&raw) {
             return cfg;
         }
-    }
     Config::default()
 }
 

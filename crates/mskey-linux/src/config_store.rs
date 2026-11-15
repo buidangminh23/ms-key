@@ -7,11 +7,10 @@ use std::process::Command;
 use mskey_core::Config;
 
 pub fn config_dir() -> PathBuf {
-    if let Ok(xdg) = env::var("XDG_CONFIG_HOME") {
-        if !xdg.trim().is_empty() {
+    if let Ok(xdg) = env::var("XDG_CONFIG_HOME")
+        && !xdg.trim().is_empty() {
             return PathBuf::from(xdg).join("mskey");
         }
-    }
     let home = env::var("HOME").unwrap_or_else(|_| ".".to_string());
     PathBuf::from(home).join(".config").join("mskey")
 }
@@ -77,10 +76,9 @@ pub fn parse_tz_offset(raw: &str) -> Option<i32> {
     let t = raw.trim();
     let (sign, rest) = if let Some(r) = t.strip_prefix('+') {
         (1i32, r)
-    } else if let Some(r) = t.strip_prefix('-') {
-        (-1i32, r)
     } else {
-        return None;
+        let r = t.strip_prefix('-')?;
+        (-1i32, r)
     };
     let clean: String = rest.chars().filter(|c| *c != ':').collect();
     if clean.len() != 4 || !clean.bytes().all(|b| b.is_ascii_digit()) {
@@ -95,14 +93,13 @@ pub fn parse_tz_offset(raw: &str) -> Option<i32> {
 }
 
 pub fn local_utc_offset_secs() -> i32 {
-    if let Ok(out) = Command::new("date").arg("+%z").output() {
-        if out.status.success() {
+    if let Ok(out) = Command::new("date").arg("+%z").output()
+        && out.status.success() {
             let s = String::from_utf8_lossy(&out.stdout);
             if let Some(secs) = parse_tz_offset(&s) {
                 return secs;
             }
         }
-    }
     0
 }
 
@@ -146,22 +143,21 @@ pub fn resolve_ibus_address() -> Option<String> {
             return Some(t.to_string());
         }
     }
-    if let Ok(out) = Command::new("ibus").arg("address").output() {
-        if out.status.success() {
+    if let Ok(out) = Command::new("ibus").arg("address").output()
+        && out.status.success() {
             let s = String::from_utf8_lossy(&out.stdout).trim().to_string();
             if !s.is_empty() && !s.eq_ignore_ascii_case("(null)") {
                 return Some(s);
             }
         }
-    }
     let home = env::var("HOME").ok()?;
     let bus_dir = Path::new(&home).join(".config/ibus/bus");
     let entries = fs::read_dir(bus_dir).ok()?;
     let mut best: Option<(std::time::SystemTime, String)> = None;
     for entry in entries.flatten() {
         let path = entry.path();
-        if let Ok(txt) = fs::read_to_string(&path) {
-            if let Some(addr) = parse_ibus_bus_file(&txt) {
+        if let Ok(txt) = fs::read_to_string(&path)
+            && let Some(addr) = parse_ibus_bus_file(&txt) {
                 let mt = entry
                     .metadata()
                     .and_then(|m| m.modified())
@@ -170,7 +166,6 @@ pub fn resolve_ibus_address() -> Option<String> {
                     best = Some((mt, addr));
                 }
             }
-        }
     }
     best.map(|(_, a)| a)
 }
@@ -195,8 +190,7 @@ pub fn detect_system_dark_mode() -> bool {
     if let Ok(out) = Command::new("gsettings")
         .args(["get", "org.gnome.desktop.interface", "color-scheme"])
         .output()
-    {
-        if out.status.success() {
+        && out.status.success() {
             let s = String::from_utf8_lossy(&out.stdout).to_ascii_lowercase();
             if s.contains("prefer-dark") {
                 return true;
@@ -205,7 +199,6 @@ pub fn detect_system_dark_mode() -> bool {
                 return false;
             }
         }
-    }
     env::var("GTK_THEME")
         .map(|t| t.to_ascii_lowercase().contains("dark"))
         .unwrap_or(false)

@@ -156,25 +156,22 @@ pub fn from_viqr(input: &str) -> String {
             i += 2;
             continue;
         }
-        if let Some((mut base, mut tone, upper)) = decode_vowel(ch) {
-            if tone == Tone::None && strip_vowel_diacritic(base) == base {
-                if i + 1 < chars.len() {
-                    if let Some(mod_base) = apply_viqr_modifier(base, chars[i + 1]) {
+        if let Some((mut base, mut tone, upper)) = decode_vowel(ch)
+            && tone == Tone::None && strip_vowel_diacritic(base) == base {
+                if i + 1 < chars.len()
+                    && let Some(mod_base) = apply_viqr_modifier(base, chars[i + 1]) {
                         base = mod_base;
                         i += 1;
                     }
-                }
-                if i + 1 < chars.len() {
-                    if let Some(t) = parse_viqr_tone(chars[i + 1]) {
+                if i + 1 < chars.len()
+                    && let Some(t) = parse_viqr_tone(chars[i + 1]) {
                         tone = t;
                         i += 1;
                     }
-                }
                 out.push(encode_vowel(base, tone, upper));
                 i += 1;
                 continue;
             }
-        }
         out.push(ch);
         i += 1;
     }
@@ -210,7 +207,7 @@ fn detect_latin1_encoding(input: &str) -> ConvertEncoding {
         i += 1;
     }
     for word in input.split(|c: char| !c.is_alphanumeric()) {
-        if word.chars().all(|c| c.is_ascii()) {
+        if word.is_ascii() {
             continue;
         }
         if dict::is_vietnamese_word(word, true) {
@@ -270,7 +267,7 @@ fn is_tcvn3_exclusive(ch: char) -> bool {
     }
     !VNI_TABLE
         .iter()
-        .any(|&(uni, vni)| !uni.is_ascii() && vni.chars().count() == 1 && vni.chars().next() == Some(ch))
+        .any(|&(uni, vni)| !uni.is_ascii() && vni.chars().count() == 1 && vni.starts_with(ch))
 }
 
 fn count_viqr_cues(input: &str) -> usize {

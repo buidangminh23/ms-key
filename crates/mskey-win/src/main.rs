@@ -48,11 +48,10 @@ fn main() {
     };
 
     let cfg = load_config();
-    if cfg.run_as_admin && !is_elevated() && !args.iter().any(|a| a == "--no-relaunch") {
-        if relaunch_as_admin() {
+    if cfg.run_as_admin && !is_elevated() && !args.iter().any(|a| a == "--no-relaunch")
+        && relaunch_as_admin() {
             return;
         }
-    }
 
     let show_gui = cfg.show_on_startup || args.iter().any(|a| a == "--show");
     init_state(cfg);

@@ -188,7 +188,7 @@ unsafe extern "system" fn main_wnd_proc(
         WM_DRAWITEM => draw_main_item(hwnd, lparam).unwrap_or(0),
         WM_CTLCOLORSTATIC => ctl_color_main(wparam, lparam).unwrap_or(0),
         WM_COMMAND => {
-            handle_command(hwnd, (wparam & 0xFFFF) as usize, (wparam >> 16) & 0xFFFF);
+            handle_command(hwnd, wparam & 0xFFFF, (wparam >> 16) & 0xFFFF);
             0
         }
         WM_APP_TRAY => {

@@ -191,6 +191,7 @@ fn trigger_ve_toggle(
     }
 }
 
+#[allow(clippy::too_many_arguments)]
 fn check_hotkey_decision(
     st: &mut AppState,
     vk: u16,
@@ -316,27 +317,22 @@ fn handle_key_event(vk: u16, scan: u32, is_down: bool, is_up: bool) -> KeyDecisi
                 && !st.fg_process.is_empty()
                 && cfg.behavior_for_app(&st.fg_process)
                     == cfg.behavior_for_app("__mskey_no_rule__")
-            {
-                if let Some(mem_ve) =
+                && let Some(mem_ve) =
                     crate::platform_extra::recalled_app_ve_memory(&st.fg_process)
-                {
-                    if cfg.vietnamese_enabled != mem_ve {
+                    && cfg.vietnamese_enabled != mem_ve {
                         let mut next_cfg = cfg;
                         next_cfg.vietnamese_enabled = mem_ve;
                         st.engine.update_config(next_cfg);
                         return Some(st.main_window());
                     }
-                }
-            }
             None
         });
-        if let Some(hw) = sync_hw {
-            if !hw.is_null() {
+        if let Some(hw) = sync_hw
+            && !hw.is_null() {
                 unsafe {
                     PostMessageW(hw, WM_APP_SYNC_UI, 0, 0);
                 }
             }
-        }
     }
 
     let mut notify_hwnd: HWND = ptr::null_mut();
@@ -407,7 +403,7 @@ fn is_reset_navigation_vk(vk: u16) -> bool {
         vk,
         VK_LEFT | VK_RIGHT | VK_UP | VK_DOWN | VK_HOME | VK_END | VK_PRIOR | VK_NEXT | VK_DELETE
             | VK_INSERT
-    ) || (vk >= VK_F1 && vk <= VK_F24)
+    ) || (VK_F1..=VK_F24).contains(&vk)
 }
 
 fn map_action(

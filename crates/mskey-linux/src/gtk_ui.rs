@@ -222,8 +222,8 @@ unsafe extern "C" fn on_toggle_ve(_: *mut GtkWidget, _: *mut c_void) {
 
 unsafe extern "C" fn on_open_extras(_: *mut GtkWidget, _: *mut c_void) {
     let pair = UI.with(|c| c.borrow().as_ref().map(|s| (s.win, s.cfg.clone())));
-    if let Some((win, mut cfg)) = pair {
-        if show_extras_sandbox_dialog(win, &mut cfg) {
+    if let Some((win, mut cfg)) = pair
+        && show_extras_sandbox_dialog(win, &mut cfg) {
             save_config(&cfg);
             apply_gtk_theme(cfg.theme);
             UI.with(|c| {
@@ -233,13 +233,12 @@ unsafe extern "C" fn on_open_extras(_: *mut GtkWidget, _: *mut c_void) {
             });
             sync_widgets_from_config();
         }
-    }
 }
 
 unsafe extern "C" fn on_open_user_dict(_: *mut GtkWidget, _: *mut c_void) {
     let pair = UI.with(|c| c.borrow().as_ref().map(|s| (s.win, s.cfg.clone())));
-    if let Some((win, mut cfg)) = pair {
-        if show_user_dict_dialog(win, &mut cfg) {
+    if let Some((win, mut cfg)) = pair
+        && show_user_dict_dialog(win, &mut cfg) {
             save_config(&cfg);
             UI.with(|c| {
                 if let Some(st) = c.borrow_mut().as_mut() {
@@ -247,7 +246,6 @@ unsafe extern "C" fn on_open_user_dict(_: *mut GtkWidget, _: *mut c_void) {
                 }
             });
         }
-    }
 }
 
 unsafe extern "C" fn on_open_convert(_: *mut GtkWidget, _: *mut c_void) {
@@ -257,8 +255,8 @@ unsafe extern "C" fn on_open_convert(_: *mut GtkWidget, _: *mut c_void) {
 
 unsafe extern "C" fn on_open_custom(_: *mut GtkWidget, _: *mut c_void) {
     let pair = UI.with(|c| c.borrow().as_ref().map(|s| (s.win, s.cfg.clone())));
-    if let Some((win, mut cfg)) = pair {
-        if show_custom_keymap_dialog(win, &mut cfg) {
+    if let Some((win, mut cfg)) = pair
+        && show_custom_keymap_dialog(win, &mut cfg) {
             save_config(&cfg);
             UI.with(|c| {
                 if let Some(st) = c.borrow_mut().as_mut() {
@@ -267,13 +265,12 @@ unsafe extern "C" fn on_open_custom(_: *mut GtkWidget, _: *mut c_void) {
             });
             sync_widgets_from_config();
         }
-    }
 }
 
 unsafe extern "C" fn on_open_macro(_: *mut GtkWidget, _: *mut c_void) {
     let pair = UI.with(|c| c.borrow().as_ref().map(|s| (s.win, s.cfg.clone())));
-    if let Some((win, mut cfg)) = pair {
-        if show_macro_dialog(win, &mut cfg) {
+    if let Some((win, mut cfg)) = pair
+        && show_macro_dialog(win, &mut cfg) {
             save_config(&cfg);
             UI.with(|c| {
                 if let Some(st) = c.borrow_mut().as_mut() {
@@ -281,13 +278,12 @@ unsafe extern "C" fn on_open_macro(_: *mut GtkWidget, _: *mut c_void) {
                 }
             });
         }
-    }
 }
 
 unsafe extern "C" fn on_open_apps(_: *mut GtkWidget, _: *mut c_void) {
     let pair = UI.with(|c| c.borrow().as_ref().map(|s| (s.win, s.cfg.clone())));
-    if let Some((win, mut cfg)) = pair {
-        if show_app_rules_dialog(win, &mut cfg) {
+    if let Some((win, mut cfg)) = pair
+        && show_app_rules_dialog(win, &mut cfg) {
             save_config(&cfg);
             UI.with(|c| {
                 if let Some(st) = c.borrow_mut().as_mut() {
@@ -295,7 +291,6 @@ unsafe extern "C" fn on_open_apps(_: *mut GtkWidget, _: *mut c_void) {
                 }
             });
         }
-    }
 }
 
 unsafe extern "C" fn on_add_cur_app(_: *mut GtkWidget, _: *mut c_void) {
@@ -313,8 +308,8 @@ unsafe extern "C" fn on_add_cur_app(_: *mut GtkWidget, _: *mut c_void) {
 
 unsafe extern "C" fn on_cap_switch(_: *mut GtkWidget, _: *mut c_void) {
     let pair = UI.with(|c| c.borrow().as_ref().map(|s| (s.win, s.cfg.custom_switch_hotkey)));
-    if let Some((win, cur)) = pair {
-        if let Some(combo) = capture_hotkey_dialog(win, cur) {
+    if let Some((win, cur)) = pair
+        && let Some(combo) = capture_hotkey_dialog(win, cur) {
             UI.with(|c| {
                 if let Some(st) = c.borrow_mut().as_mut() {
                     st.cfg.custom_switch_hotkey = combo;
@@ -324,13 +319,12 @@ unsafe extern "C" fn on_cap_switch(_: *mut GtkWidget, _: *mut c_void) {
             });
             sync_widgets_from_config();
         }
-    }
 }
 
 unsafe extern "C" fn on_cap_conv(_: *mut GtkWidget, _: *mut c_void) {
     let pair = UI.with(|c| c.borrow().as_ref().map(|s| (s.win, s.cfg.clipboard_convert_hotkey)));
-    if let Some((win, cur)) = pair {
-        if let Some(combo) = capture_hotkey_dialog(win, cur) {
+    if let Some((win, cur)) = pair
+        && let Some(combo) = capture_hotkey_dialog(win, cur) {
             UI.with(|c| {
                 if let Some(st) = c.borrow_mut().as_mut() {
                     st.cfg.clipboard_convert_hotkey = combo;
@@ -339,7 +333,6 @@ unsafe extern "C" fn on_cap_conv(_: *mut GtkWidget, _: *mut c_void) {
             });
             sync_widgets_from_config();
         }
-    }
 }
 
 unsafe extern "C" fn on_import_tree(_: *mut GtkWidget, _: *mut c_void) {

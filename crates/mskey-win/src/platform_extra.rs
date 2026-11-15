@@ -30,7 +30,9 @@ use windows_sys::Win32::UI::WindowsAndMessaging::{
 use crate::platform::{config_file_path, to_wide};
 
 static APP_MEMORY: OnceLock<Mutex<HashMap<String, bool>>> = OnceLock::new();
-static CLIP_SNAPSHOT: Mutex<Option<Vec<(u32, Vec<u8>)>>> = Mutex::new(None);
+type ClipboardSnapshot = Vec<(u32, Vec<u8>)>;
+
+static CLIP_SNAPSHOT: Mutex<Option<ClipboardSnapshot>> = Mutex::new(None);
 static CLIP_GEN: AtomicU64 = AtomicU64::new(0);
 
 fn ft_to_i64(ft: FILETIME) -> i64 {

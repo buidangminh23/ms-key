@@ -124,7 +124,7 @@ unsafe extern "system" fn conv_wnd_proc(
             handle_ctl_color(msg, wparam as _, pal, b1, b2)
         }
         WM_COMMAND => {
-            let id = (wparam & 0xFFFF) as usize;
+            let id = wparam & 0xFFFF;
             let st = CONV_STATE.with(|c| *c.borrow());
             if let Some(st) = st {
                 match id {
@@ -273,7 +273,7 @@ unsafe extern "system" fn cap_wnd_proc(
             unsafe { EndPaint(hwnd, &ps) };
             0
         }
-        WM_COMMAND if (wparam & 0xFFFF) as usize == ID_CAP_CANCEL => {
+        WM_COMMAND if (wparam & 0xFFFF) == ID_CAP_CANCEL => {
             unsafe { DestroyWindow(hwnd) };
             0
         }

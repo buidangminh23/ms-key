@@ -286,3 +286,27 @@ blacklist{
     );
     assert_eq!(titled, "Tiếng Việt Nam");
 }
+
+#[test]
+fn standalone_marked_letters_survive_auto_restore() {
+    assert_eq!(type_with(|_| {}, "dd "), "đ ");
+    assert_eq!(type_with(|_| {}, "DD "), "Đ ");
+    assert_eq!(type_with(|_| {}, "aa "), "â ");
+    assert_eq!(type_with(|_| {}, "ee "), "ê ");
+    assert_eq!(type_with(|_| {}, "oo "), "ô ");
+    assert_eq!(type_with(|_| {}, "aw "), "ă ");
+    assert_eq!(type_with(|_| {}, "ow "), "ơ ");
+    assert_eq!(type_with(|_| {}, "uw "), "ư ");
+    assert_eq!(type_with(|_| {}, "500k dd "), "500k đ ");
+    assert_eq!(
+        type_with(|c| c.input_method = InputMethod::Vni, "d9 a6 "),
+        "đ â "
+    );
+}
+
+#[test]
+fn english_short_words_still_restore() {
+    assert_eq!(type_with(|_| {}, "add odd ass "), "add odd ass ");
+    assert_eq!(type_with(|_| {}, "ass "), "ass ");
+    assert_eq!(type_with(|_| {}, "dddi "), "ddi ");
+}

@@ -290,7 +290,7 @@ impl Config {
                 continue;
             }
             if line.starts_with('[') && line.ends_with(']') {
-                section = &line[1..line.len() - 1].trim();
+                section = line[1..line.len() - 1].trim();
                 continue;
             }
             if line == "}" {

@@ -120,7 +120,7 @@ unsafe extern "system" fn custom_wnd_proc(
             handle_ctl_color(msg, wparam as _, pal, b1, b2)
         }
         WM_COMMAND => {
-            let id = (wparam & 0xFFFF) as usize;
+            let id = wparam & 0xFFFF;
             let st = CUSTOM_STATE.with(|c| c.borrow().clone());
             if let Some(st) = st {
                 match id {

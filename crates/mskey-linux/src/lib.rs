@@ -1,3 +1,5 @@
+#![allow(clippy::not_unsafe_ptr_arg_deref, clippy::missing_safety_doc)]
+
 pub mod config_store;
 pub mod ibus_logic;
 pub mod keyval;

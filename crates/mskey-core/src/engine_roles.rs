@@ -280,7 +280,7 @@ impl Engine {
             return true;
         }
         let allow_custom = self.config.input_method == InputMethod::Custom
-            && ch.to_ascii_lowercase() == self.config.custom_keymap.quick_u_horn.to_ascii_lowercase();
+            && ch.eq_ignore_ascii_case(&self.config.custom_keymap.quick_u_horn);
         let allow_telex = self.config.input_method == InputMethod::Telex;
         let allow_standalone =
             (allow_telex || allow_custom) && self.config.quick_w_to_u_horn && !self.reverted_w_standalone;

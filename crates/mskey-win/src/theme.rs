@@ -162,7 +162,7 @@ pub fn draw_round_box(
 ) {
     unsafe {
         let br = CreateSolidBrush(fill);
-        let pen = CreatePen(PS_SOLID as i32, 1, border);
+        let pen = CreatePen(PS_SOLID, 1, border);
         let old_br = SelectObject(hdc, br);
         let old_pen = SelectObject(hdc, pen);
         RoundRect(hdc, rc.left, rc.top, rc.right, rc.bottom, radius, radius);
@@ -235,7 +235,7 @@ pub fn draw_checkbox(
     draw_round_box(hdc, &bx, 4, fill, border);
     if checked {
         unsafe {
-            let pen = CreatePen(PS_SOLID as i32, 2, rgb(255, 255, 255));
+            let pen = CreatePen(PS_SOLID, 2, rgb(255, 255, 255));
             let old = SelectObject(hdc, pen);
             let x1 = bx.left + box_sz / 4;
             let y1 = cy;
@@ -286,7 +286,7 @@ pub fn draw_radio(
     let cx = rc.left + sz / 2;
     unsafe {
         let pen = CreatePen(
-            PS_SOLID as i32,
+            PS_SOLID,
             1,
             if selected { pal.accent } else { pal.button_border },
         );
@@ -301,7 +301,7 @@ pub fn draw_radio(
 
         if selected {
             let dot = CreateSolidBrush(pal.accent);
-            let npen = CreatePen(PS_SOLID as i32, 1, pal.accent);
+            let npen = CreatePen(PS_SOLID, 1, pal.accent);
             let op = SelectObject(hdc, npen);
             let ob = SelectObject(hdc, dot);
             let r = (sz / 4).max(4);

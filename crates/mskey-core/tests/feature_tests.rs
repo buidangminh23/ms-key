@@ -77,14 +77,18 @@ fn backspace_syncs_raw_and_multi_unit_charsets() {
     assert_eq!(type_with(|_| {}, "cas\x08ane "), "cane ");
     assert_eq!(type_with(|c| c.modern_tone = false, "toasn\x08 "), "tóa ");
 
-    let mut vni_cfg = Config::default();
-    vni_cfg.charset = Charset::VniWindows;
+    let vni_cfg = Config {
+        charset: Charset::VniWindows,
+        ..Config::default()
+    };
     let mut engine = Engine::new(vni_cfg);
     let screen = simulate(&mut engine, "has\x08o ");
     assert_eq!(screen, "ho ");
 
-    let mut nfd_cfg = Config::default();
-    nfd_cfg.charset = Charset::UnicodeComposite;
+    let nfd_cfg = Config {
+        charset: Charset::UnicodeComposite,
+        ..Config::default()
+    };
     let mut nfd_engine = Engine::new(nfd_cfg);
     let nfd_screen = simulate(&mut nfd_engine, "bas\x08a ");
     assert_eq!(nfd_screen, "ba ");
@@ -142,8 +146,10 @@ fn sentence_autocap_ignores_urls_and_requires_whitespace() {
 
 #[test]
 fn macro_raw_match_dynamic_tokens_and_serialization() {
-    let mut cfg = Config::default();
-    cfg.macros = Config::parse_macro_text("# cmt\nddn:Đà Nẵng\ndt:{date}\nday:{time}\\nOk\n");
+    let cfg = Config {
+        macros: Config::parse_macro_text("# cmt\nddn:Đà Nẵng\ndt:{date}\nday:{time}\\nOk\n"),
+        ..Config::default()
+    };
     let mut engine = Engine::new(cfg.clone());
     engine.set_clock_offset_secs(7 * 3_600);
     assert_eq!(simulate(&mut engine, "ddn "), "Đà Nẵng ");

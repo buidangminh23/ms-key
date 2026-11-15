@@ -241,7 +241,7 @@ unsafe extern "system" fn macro_wnd_proc(
             handle_ctl_color(msg, wparam as _, pal, b1, b2)
         }
         WM_COMMAND => {
-            let id = (wparam & 0xFFFF) as usize;
+            let id = wparam & 0xFFFF;
             let code = (wparam >> 16) & 0xFFFF;
             if let Some(st) = MACRO_STATE.with(|c| *c.borrow()) {
                 handle_macro_command(hwnd, id, code, st);
@@ -432,7 +432,7 @@ unsafe extern "system" fn app_wnd_proc(
             handle_ctl_color(msg, wparam as _, pal, b1, b2)
         }
         WM_COMMAND => {
-            let id = (wparam & 0xFFFF) as usize;
+            let id = wparam & 0xFFFF;
             let code = (wparam >> 16) & 0xFFFF;
             if let Some(st) = APP_STATE.with(|c| *c.borrow()) {
                 handle_app_command(hwnd, id, code, st);

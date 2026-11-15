@@ -143,31 +143,26 @@ pub fn is_us_xkb_layout(layout: &str) -> bool {
 }
 
 pub fn detect_active_app() -> Option<String> {
-    if env::var_os("HYPRLAND_INSTANCE_SIGNATURE").is_some() {
-        if let Ok(out) = Command::new("hyprctl").args(["activewindow", "-j"]).output() {
-            if out.status.success() {
+    if env::var_os("HYPRLAND_INSTANCE_SIGNATURE").is_some()
+        && let Ok(out) = Command::new("hyprctl").args(["activewindow", "-j"]).output()
+            && out.status.success() {
                 let s = String::from_utf8_lossy(&out.stdout);
                 if let Some(cls) = parse_hypr_active_class(&s) {
                     return Some(cls);
                 }
             }
-        }
-    }
-    if env::var_os("SWAYSOCK").is_some() {
-        if let Ok(out) = Command::new("swaymsg").args(["-t", "get_tree"]).output() {
-            if out.status.success() {
+    if env::var_os("SWAYSOCK").is_some()
+        && let Ok(out) = Command::new("swaymsg").args(["-t", "get_tree"]).output()
+            && out.status.success() {
                 let s = String::from_utf8_lossy(&out.stdout);
                 if let Some(cls) = parse_sway_focused_app(&s) {
                     return Some(cls);
                 }
             }
-        }
-    }
     if env::var("XDG_CURRENT_DESKTOP")
         .map(|d| d.to_ascii_lowercase().contains("gnome"))
         .unwrap_or(false)
-    {
-        if let Ok(out) = Command::new("gdbus")
+        && let Ok(out) = Command::new("gdbus")
             .args([
                 "call",
                 "--session",
@@ -180,40 +175,33 @@ pub fn detect_active_app() -> Option<String> {
                 "global.display.focus_window?.get_wm_class()",
             ])
             .output()
-        {
-            if out.status.success() {
+            && out.status.success() {
                 let s = String::from_utf8_lossy(&out.stdout);
                 if let Some(cls) = parse_gnome_eval_class(&s) {
                     return Some(cls);
                 }
             }
-        }
-    }
     detect_active_x11_app()
 }
 
 pub fn is_us_keyboard_layout() -> bool {
-    if env::var_os("DISPLAY").is_some() {
-        if let Ok(out) = Command::new("setxkbmap").arg("-query").output() {
-            if out.status.success() {
+    if env::var_os("DISPLAY").is_some()
+        && let Ok(out) = Command::new("setxkbmap").arg("-query").output()
+            && out.status.success() {
                 let s = String::from_utf8_lossy(&out.stdout);
                 if let Some(layout) = parse_setxkbmap_layout(&s) {
                     return is_us_xkb_layout(&layout);
                 }
             }
-        }
-    }
     if let Ok(out) = Command::new("gsettings")
         .args(["get", "org.gnome.desktop.input-sources", "mru-sources"])
         .output()
-    {
-        if out.status.success() {
+        && out.status.success() {
             let s = String::from_utf8_lossy(&out.stdout);
             if let Some(layout) = parse_gnome_mru_xkb(&s) {
                 return is_us_xkb_layout(&layout);
             }
         }
-    }
     true
 }
 
@@ -274,7 +262,7 @@ mod linux_gui {
         let dir = config_dir();
         let _ = std::fs::create_dir_all(&dir);
         let path = dir.join("setup.lock");
-        let file = OpenOptions::new().create(true).read(true).write(true).open(path).ok()?;
+        let file = OpenOptions::new().create(true).truncate(false).read(true).write(true).open(path).ok()?;
         let rc = unsafe { flock(file.as_raw_fd(), 2 | 4) };
         if rc == 0 { Some(file) } else { None }
     }

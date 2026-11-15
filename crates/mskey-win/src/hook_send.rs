@@ -56,8 +56,8 @@ pub fn dispatch_payload(p: ReplacePayload) {
     }
 
     let mut did_clip_paste = false;
-    if !p.text.is_empty() && p.use_clipboard {
-        if write_clipboard_for_paste_with_restore(&p.text) {
+    if !p.text.is_empty() && p.use_clipboard
+        && write_clipboard_for_paste_with_restore(&p.text) {
             send_paced(&pre, step_delay);
             pre.clear();
             if step_delay > 0 {
@@ -69,7 +69,6 @@ pub fn dispatch_payload(p: ReplacePayload) {
             }
             did_clip_paste = true;
         }
-    }
 
     if !did_clip_paste && !p.text.is_empty() {
         for unit in p.text.encode_utf16() {

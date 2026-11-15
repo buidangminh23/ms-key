@@ -35,13 +35,11 @@ pub fn is_vietnamese_word_with_custom(
     if is_user_word(word, user_words) {
         return true;
     }
-    if !allow_fjwz {
-        if let Some(first) = word.chars().next() {
-            if matches!(first.to_ascii_lowercase(), 'f' | 'j' | 'w' | 'z') {
+    if !allow_fjwz
+        && let Some(first) = word.chars().next()
+            && matches!(first.to_ascii_lowercase(), 'f' | 'j' | 'w' | 'z') {
                 return false;
             }
-        }
-    }
     let lower = word.to_lowercase();
     VI_WORDS.contains(lower.as_str())
 }

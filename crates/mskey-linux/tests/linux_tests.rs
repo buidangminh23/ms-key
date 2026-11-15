@@ -29,8 +29,10 @@ fn type_preedit_string(sess: &mut IbusSession, s: &str) -> Vec<String> {
 
 #[test]
 fn preedit_typing_tieng_viet_and_english_restore() {
-    let mut cfg = Config::default();
-    cfg.auto_restore_wrong_word = true;
+    let cfg = Config {
+        auto_restore_wrong_word: true,
+        ..Config::default()
+    };
     let mut sess = IbusSession::new(cfg);
     sess.set_capabilities(IBUS_CAP_PREEDIT_TEXT);
 
@@ -68,9 +70,11 @@ fn preedit_backspace_and_escape_restore() {
 
 #[test]
 fn direct_surrounding_and_forward_key_fallback() {
-    let mut cfg = Config::default();
-    cfg.mechanism = Mechanism::CompatibleHook;
-    cfg.send_delay_ms = 0;
+    let cfg = Config {
+        mechanism: Mechanism::CompatibleHook,
+        send_delay_ms: 0,
+        ..Config::default()
+    };
     let mut sess = IbusSession::new(cfg.clone());
     sess.set_capabilities(IBUS_CAP_SURROUNDING_TEXT);
 
@@ -258,8 +262,10 @@ fn config_store_tz_and_wayland_parsers() {
 
 #[test]
 fn preedit_active_delimiter_and_direct_ops() {
-    let mut cfg = Config::default();
-    cfg.quick_brackets = true;
+    let mut cfg = Config {
+        quick_brackets: true,
+        ..Config::default()
+    };
     let mut pre = IbusSession::new(cfg.clone());
     pre.set_capabilities(IBUS_CAP_PREEDIT_TEXT);
     assert!(pre.process_key('[' as u32, 0, 0).ops.contains(&IbusOp::UpdatePreedit("ơ".to_string())));
@@ -271,13 +277,15 @@ fn preedit_active_delimiter_and_direct_ops() {
     let _ = viqr.process_key('a' as u32, 0, 0);
     assert!(viqr.process_key('^' as u32, 0, 0).ops.contains(&IbusOp::UpdatePreedit("â".to_string())));
 
-    let mut dcfg = Config::default();
-    dcfg.mechanism = Mechanism::CompatibleHook;
-    dcfg.disable_on_non_us_layout = true;
-    dcfg.fix_browser_suggest_1 = true;
-    dcfg.fix_browser_suggest_2 = true;
-    dcfg.use_clipboard_send = true;
-    dcfg.show_switch_osd = true;
+    let dcfg = Config {
+        mechanism: Mechanism::CompatibleHook,
+        disable_on_non_us_layout: true,
+        fix_browser_suggest_1: true,
+        fix_browser_suggest_2: true,
+        use_clipboard_send: true,
+        show_switch_osd: true,
+        ..Config::default()
+    };
 
     let mut sess = IbusSession::new(dcfg);
     sess.set_capabilities(IBUS_CAP_SURROUNDING_TEXT);
@@ -295,9 +303,11 @@ fn preedit_active_delimiter_and_direct_ops() {
     assert!(r.ops.contains(&IbusOp::PasteViaClipboard("á".to_string(), false)));
     assert!(r.ops.contains(&IbusOp::Delay(2)));
 
-    let mut osd_cfg = Config::default();
-    osd_cfg.switch_preset = SwitchPreset::AltZ;
-    osd_cfg.show_switch_osd = true;
+    let osd_cfg = Config {
+        switch_preset: SwitchPreset::AltZ,
+        show_switch_osd: true,
+        ..Config::default()
+    };
     let mut osd_sess = IbusSession::new(osd_cfg);
     let t2 = osd_sess.process_key(b'z' as u32, 0, IBUS_MOD1_MASK);
     assert!(t2.ops.contains(&IbusOp::ShowOsd(false)));

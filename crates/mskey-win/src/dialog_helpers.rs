@@ -133,6 +133,7 @@ pub fn current_palette() -> ThemePalette {
     palette_for(mode)
 }
 
+#[allow(clippy::too_many_arguments)]
 pub fn make_child(
     parent: HWND,
     class: &str,
@@ -173,6 +174,7 @@ pub fn make_child(
     hw
 }
 
+#[allow(clippy::too_many_arguments)]
 pub fn make_owner_button(
     parent: HWND,
     text: &str,
@@ -199,6 +201,7 @@ pub fn make_owner_button(
     )
 }
 
+#[allow(clippy::too_many_arguments)]
 pub fn make_combo(
     parent: HWND,
     x: i32,
@@ -229,6 +232,7 @@ pub fn make_combo(
     hw
 }
 
+#[allow(clippy::too_many_arguments)]
 pub fn make_edit(
     parent: HWND,
     text: &str,

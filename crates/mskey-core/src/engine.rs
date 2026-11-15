@@ -195,8 +195,8 @@ impl Engine {
 
         let role = classify_key(effective_ch, &self.config);
         let mut handled = self.apply_key_role(effective_ch, role);
-        if !handled && self.config.quick_end_consonant {
-            if crate::engine_quick::try_apply_quick_end_consonant(
+        if !handled && self.config.quick_end_consonant
+            && crate::engine_quick::try_apply_quick_end_consonant(
                 &mut self.display,
                 self.raw.len(),
                 &mut self.char_raw_starts,
@@ -206,7 +206,6 @@ impl Engine {
                 self.had_transform = true;
                 handled = true;
             }
-        }
         if !handled {
             self.append_normal_char(effective_ch);
         } else if self.display == old_display {
@@ -293,8 +292,8 @@ impl Engine {
         let allow_macro = self.config.macro_enabled
             && (self.config.vietnamese_enabled || self.config.macro_when_english);
 
-        if allow_macro {
-            if let Some(expanded) = match_macro(
+        if allow_macro
+            && let Some(expanded) = match_macro(
                 &self.config,
                 &display_str,
                 &raw_str,
@@ -311,7 +310,6 @@ impl Engine {
                     text: out,
                 };
             }
-        }
 
         if self.config.vietnamese_enabled
             && self.config.auto_restore_wrong_word
@@ -360,16 +358,14 @@ impl Engine {
                 return false;
             }
         }
-        if self.config.vietnamese_enabled && self.config.input_method == InputMethod::Viqr {
-            if matches!(ch, '\'' | '`' | '?' | '~' | '.' | '-' | '^' | '+' | '(') {
+        if self.config.vietnamese_enabled && self.config.input_method == InputMethod::Viqr
+            && matches!(ch, '\'' | '`' | '?' | '~' | '.' | '-' | '^' | '+' | '(') {
                 return false;
             }
-        }
-        if self.config.vietnamese_enabled && self.config.input_method == InputMethod::Custom {
-            if classify_key(ch, &self.config) != KeyRole::Normal {
+        if self.config.vietnamese_enabled && self.config.input_method == InputMethod::Custom
+            && classify_key(ch, &self.config) != KeyRole::Normal {
                 return false;
             }
-        }
         true
     }
 
@@ -412,13 +408,11 @@ impl Engine {
             .count();
         let backspaces = encoded_len(self.config.charset, &old_display[common..]);
         let tail: String = self.display[common..].iter().collect();
-        if backspaces == 0 && tail.len() == 1 && self.config.charset == Charset::Unicode {
-            if let Some(ch) = tail.chars().next() {
-                if ch.is_ascii() && (typed_ch.is_none() || typed_ch == Some(ch)) {
+        if backspaces == 0 && tail.len() == 1 && self.config.charset == Charset::Unicode
+            && let Some(ch) = tail.chars().next()
+                && ch.is_ascii() && (typed_ch.is_none() || typed_ch == Some(ch)) {
                     return EngineAction::PassThrough;
                 }
-            }
-        }
         let encoded = encode_string(self.config.charset, &tail);
         if backspaces == 0 && encoded.is_empty() {
             return EngineAction::PassThrough;
