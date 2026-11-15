@@ -25,6 +25,10 @@ jobs:
       - run: cargo build --release -p mskey-linux
       - run: ./target/release/mskey-linux --print-xml
       - run: xvfb-run -a ./target/release/mskey-linux --verify-smoke /tmp/smoke_linux.txt && cat /tmp/smoke_linux.txt
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+      - run: npm test
 
   macos-swift:
     runs-on: macos-15

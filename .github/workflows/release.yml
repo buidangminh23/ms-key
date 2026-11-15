@@ -102,6 +102,7 @@ jobs:
         run: |
           VERSION="$(sed -n 's/^version = "\(.*\)"/\1/p' Cargo.toml | head -n1)"
           test "v${VERSION}" = "${GITHUB_REF_NAME}"
+          test "$(node -p "require('./package.json').version")" = "${VERSION}"
           for f in "MSKey-Setup-${VERSION}-windows-x64.exe" "MSKey-${VERSION}-windows-x64-portable.zip" \
                    "mskey_${VERSION}_amd64.deb" "MSKey-${VERSION}-linux-amd64.tar.gz" \
                    "MSKey-${VERSION}-macos-universal.zip" "install-macos.sh"; do
@@ -120,3 +121,30 @@ jobs:
         run: |
           gh release create "${GITHUB_REF_NAME}" artifacts/* \
             --title "MS Key ${GITHUB_REF_NAME}" --notes-file notes.md --latest
+
+  npm:
+    needs: publish
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      id-token: write
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+          registry-url: https://registry.npmjs.org
+      - run: npm test
+      - name: Check whether this version is already on npm
+        id: published
+        run: |
+          pkg="$(node -p "require('./package.json').name")"
+          ver="$(node -p "require('./package.json').version")"
+          if npm view "$pkg@$ver" version > /dev/null 2>&1; then
+            echo "already=true" >> "$GITHUB_OUTPUT"
+            echo "$pkg@$ver is already on npm"
+          else
+            echo "already=false" >> "$GITHUB_OUTPUT"
+          fi
+      - run: npm publish --access public
+        if: steps.published.outputs.already == 'false'

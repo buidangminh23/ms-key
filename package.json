@@ -1,0 +1,40 @@
+{
+  "name": "@minhspark/ms-key",
+  "version": "0.1.0",
+  "description": "Install MS Key, a lightweight Vietnamese input method (Telex, VNI, VIQR) for Windows, Linux and macOS",
+  "type": "module",
+  "bin": {
+    "ms-key": "npm/cli.mjs"
+  },
+  "files": [
+    "npm/cli.mjs",
+    "npm/release.mjs",
+    "README.md",
+    "LICENSE",
+    "THIRD-PARTY-NOTICES.md"
+  ],
+  "scripts": {
+    "test": "node --test npm/release.test.mjs"
+  },
+  "engines": {
+    "node": ">=18.17"
+  },
+  "keywords": [
+    "vietnamese",
+    "input-method",
+    "ime",
+    "telex",
+    "vni",
+    "keyboard"
+  ],
+  "author": "Bui Dang Minh",
+  "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/buidangminh23/ms-key.git"
+  },
+  "homepage": "https://github.com/buidangminh23/ms-key#readme",
+  "bugs": {
+    "url": "https://github.com/buidangminh23/ms-key/issues"
+  }
+}

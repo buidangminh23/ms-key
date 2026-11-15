@@ -10,6 +10,14 @@ MS Key is a lightweight, open-source Vietnamese input method for **Windows, Linu
 
 Download the files from the [latest release](https://github.com/buidangminh23/ms-key/releases/latest). Every file is listed with its checksum in `SHA256SUMS`.
 
+With Node.js 18 or newer you can also let npm pick the right file for your system, verify it and run it:
+
+```bash
+npx @minhspark/ms-key
+```
+
+Add `--download <folder>` to only download and verify the installer.
+
 ### Windows 10/11
 
 Run `MSKey-Setup-<version>-windows-x64.exe`. It installs for your user only and needs no administrator rights. MS Key then sits in the tray as **V** (Vietnamese) or **E** (English).
