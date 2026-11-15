@@ -12,6 +12,20 @@ Lightweight, open-source cross-platform Vietnamese Unicode input method for Wind
 - Linux (`mskey-linux`): native GLib/GIO D-Bus `org.freedesktop.IBus` engine (`--ibus`, supporting both Wayland/X11 Preedit mode and Direct Surrounding/ForwardKey compatible mode) + native GTK3 Light/Dark setup UI (`560x568` style panel, macro/app/custom-keymap dialogs, clipboard converter `--convert`, XDG autostart, EVKey `setting.tree` import).
 - macOS (`macos/MSKeyMac` via `mskey-ffi` static C ABI library): native Swift 6 / SwiftUI + AppKit menu bar app with `V`/`E` badge, `CGEventTap` hook, browser/Spotlight autofill fix, Light/Dark/System appearance, `SMAppService` autostart, and clipboard converter.
 
+## Install
+
+Download the latest build from [Releases](https://github.com/buidangminh23/ms-key/releases/latest):
+
+- **Windows 10/11:** run `MSKey-Setup-<version>-windows-x64.exe` (per-user install, no admin rights), or unzip the portable build.
+- **Ubuntu / Debian:** `sudo apt install ./mskey_<version>_amd64.deb`, run `ibus restart`, then add **MS Key (Tiếng Việt)** in Settings > Keyboard > Input Sources. Other distributions can use the `.tar.gz` and its `install.sh`.
+- **macOS 13+ (Apple Silicon and Intel):**
+
+  ```bash
+  curl -fsSL https://github.com/buidangminh23/ms-key/releases/latest/download/install-macos.sh | bash
+  ```
+
+  The app is not notarized, so use this command rather than a browser download. Grant Accessibility permission on first launch.
+
 ## Setup & Build
 
 ### Windows
@@ -54,5 +68,5 @@ MS Key/
 │   └── mskey-linux/    # Linux IBus D-Bus engine + GTK3 native EVKey UI
 ├── data/               # IBus component XML and desktop entry
 ├── macos/MSKeyMac/     # Native Swift 6 / SwiftUI + AppKit + CGEventTap app
-└── scripts/            # install-linux.sh, build-macos.sh
+└── scripts/            # build/install helpers and release packaging
 ```

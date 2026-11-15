@@ -237,7 +237,7 @@ pub fn render_ibus_component_xml(exec_path: &str, setup_path: &str) -> String {
          \t<name>org.freedesktop.IBus.MSKey</name>\n\
          \t<description>MS Key Vietnamese Unicode Input Method</description>\n\
          \t<exec>{exec_path} --ibus</exec>\n\
-         \t<version>0.1.0</version>\n\
+         \t<version>{version}</version>\n\
          \t<author>MS Key</author>\n\
          \t<license>MIT</license>\n\
          \t<textdomain>mskey</textdomain>\n\
@@ -255,6 +255,7 @@ pub fn render_ibus_component_xml(exec_path: &str, setup_path: &str) -> String {
          \t\t\t<setup>{setup_path} --setup</setup>\n\
          \t\t</engine>\n\
          \t</engines>\n\
-         </component>\n"
+         </component>\n",
+        version = env!("CARGO_PKG_VERSION")
     )
 }
