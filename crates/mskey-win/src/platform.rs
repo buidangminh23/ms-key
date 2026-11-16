@@ -2,13 +2,17 @@ use std::collections::HashSet;
 use std::env;
 use std::fs;
 use std::os::windows::ffi::OsStrExt;
+use std::os::windows::process::CommandExt;
 use std::path::{Path, PathBuf};
 use std::process::Command;
 use std::ptr;
 
 use mskey_core::Config;
-use windows_sys::Win32::Foundation::{CloseHandle, GetLastError, HANDLE, HWND, LPARAM};
-use windows_sys::Win32::Security::{GetTokenInformation, TOKEN_ELEVATION, TOKEN_QUERY, TokenElevation};
+use windows_sys::Win32::Foundation::{CloseHandle, GetLastError, HANDLE, HWND, LPARAM, LocalFree};
+use windows_sys::Win32::Security::Authorization::ConvertSidToStringSidW;
+use windows_sys::Win32::Security::{
+    GetTokenInformation, TOKEN_ELEVATION, TOKEN_QUERY, TOKEN_USER, TokenElevation, TokenUser,
+};
 use windows_sys::Win32::System::DataExchange::{
     CloseClipboard, EmptyClipboard, GetClipboardData, OpenClipboard, SetClipboardData,
 };
@@ -199,9 +203,7 @@ pub fn sync_startup_setting(auto_start: bool, run_as_admin: bool) {
     };
 
     if auto_start && !run_as_admin {
-        let _ = Command::new("schtasks")
-            .args(["/Delete", "/TN", "MSKeyAutoStart", "/F"])
-            .output();
+        delete_autostart_task();
         if status == 0 && !exe_str.is_empty() {
             let wide_val = to_wide(&exe_str);
             unsafe {
@@ -227,25 +229,152 @@ pub fn sync_startup_setting(auto_start: bool, run_as_admin: bool) {
     }
 
     if auto_start && run_as_admin && is_elevated() && !exe_str.is_empty() {
-        let _ = Command::new("schtasks")
-            .args([
-                "/Create",
-                "/TN",
-                "MSKeyAutoStart",
-                "/SC",
-                "ONLOGON",
-                "/RL",
-                "HIGHEST",
-                "/F",
-                "/TR",
-                &exe_str,
-            ])
-            .output();
+        register_autostart_task();
     } else if !auto_start || !run_as_admin {
-        let _ = Command::new("schtasks")
-            .args(["/Delete", "/TN", "MSKeyAutoStart", "/F"])
-            .output();
+        delete_autostart_task();
     }
+}
+
+const AUTOSTART_TASK: &str = "MSKeyAutoStart";
+const CREATE_NO_WINDOW: u32 = 0x0800_0000;
+
+fn schtasks() -> Command {
+    let mut cmd = Command::new("schtasks");
+    cmd.creation_flags(CREATE_NO_WINDOW);
+    cmd
+}
+
+fn delete_autostart_task() {
+    let _ = schtasks()
+        .args(["/Delete", "/TN", AUTOSTART_TASK, "/F"])
+        .output();
+}
+
+fn register_autostart_task() -> bool {
+    let Ok(exe) = env::current_exe() else {
+        return false;
+    };
+    let Some(sid) = current_user_sid() else {
+        return false;
+    };
+    let xml = autostart_task_xml(&exe, &sid);
+    let path = env::temp_dir().join(format!("mskey-autostart-{}.xml", std::process::id()));
+    let mut bytes = vec![0xFF, 0xFE];
+    for unit in xml.encode_utf16() {
+        bytes.extend_from_slice(&unit.to_le_bytes());
+    }
+    if fs::write(&path, &bytes).is_err() {
+        return false;
+    }
+    let created = schtasks()
+        .args(["/Create", "/TN", AUTOSTART_TASK, "/F", "/XML"])
+        .arg(&path)
+        .output()
+        .map(|o| o.status.success())
+        .unwrap_or(false);
+    let _ = fs::remove_file(&path);
+    created
+}
+
+fn xml_escape(value: &str) -> String {
+    value
+        .replace('&', "&amp;")
+        .replace('<', "&lt;")
+        .replace('>', "&gt;")
+        .replace('"', "&quot;")
+        .replace('\'', "&apos;")
+}
+
+fn autostart_task_xml(exe: &Path, user_sid: &str) -> String {
+    let command = xml_escape(&exe.display().to_string());
+    let work_dir = exe
+        .parent()
+        .map(|p| xml_escape(&p.display().to_string()))
+        .unwrap_or_default();
+    let sid = xml_escape(user_sid);
+    format!(
+        r#"<?xml version="1.0" encoding="UTF-16"?>
+<Task version="1.2" xmlns="http://schemas.microsoft.com/windows/2004/02/mit/task">
+  <RegistrationInfo>
+    <Description>Start MS Key when this user signs in</Description>
+  </RegistrationInfo>
+  <Triggers>
+    <LogonTrigger>
+      <Enabled>true</Enabled>
+      <UserId>{sid}</UserId>
+      <Delay>PT5S</Delay>
+    </LogonTrigger>
+  </Triggers>
+  <Principals>
+    <Principal id="Author">
+      <UserId>{sid}</UserId>
+      <LogonType>InteractiveToken</LogonType>
+      <RunLevel>HighestAvailable</RunLevel>
+    </Principal>
+  </Principals>
+  <Settings>
+    <MultipleInstancesPolicy>IgnoreNew</MultipleInstancesPolicy>
+    <DisallowStartIfOnBatteries>false</DisallowStartIfOnBatteries>
+    <StopIfGoingOnBatteries>false</StopIfGoingOnBatteries>
+    <StartWhenAvailable>true</StartWhenAvailable>
+    <ExecutionTimeLimit>PT0S</ExecutionTimeLimit>
+    <Priority>4</Priority>
+    <RestartOnFailure>
+      <Interval>PT1M</Interval>
+      <Count>3</Count>
+    </RestartOnFailure>
+  </Settings>
+  <Actions Context="Author">
+    <Exec>
+      <Command>{command}</Command>
+      <WorkingDirectory>{work_dir}</WorkingDirectory>
+    </Exec>
+  </Actions>
+</Task>
+"#
+    )
+}
+
+fn current_user_sid() -> Option<String> {
+    let mut token: HANDLE = ptr::null_mut();
+    let opened = unsafe { OpenProcessToken(GetCurrentProcess(), TOKEN_QUERY, &mut token) };
+    if opened == 0 || token.is_null() {
+        return None;
+    }
+    let mut needed = 0u32;
+    unsafe {
+        GetTokenInformation(token, TokenUser, ptr::null_mut(), 0, &mut needed);
+    }
+    let mut buffer = vec![0u64; (needed as usize).div_ceil(8).max(1)];
+    let ok = unsafe {
+        GetTokenInformation(
+            token,
+            TokenUser,
+            buffer.as_mut_ptr() as *mut _,
+            (buffer.len() * 8) as u32,
+            &mut needed,
+        )
+    };
+    unsafe {
+        CloseHandle(token);
+    }
+    if ok == 0 {
+        return None;
+    }
+    let user = unsafe { &*(buffer.as_ptr() as *const TOKEN_USER) };
+    let mut text: *mut u16 = ptr::null_mut();
+    if unsafe { ConvertSidToStringSidW(user.User.Sid, &mut text) } == 0 || text.is_null() {
+        return None;
+    }
+    let mut len = 0usize;
+    while unsafe { *text.add(len) } != 0 {
+        len += 1;
+    }
+    let sid = String::from_utf16_lossy(unsafe { std::slice::from_raw_parts(text, len) });
+    unsafe {
+        LocalFree(text as *mut _);
+    }
+    Some(sid)
 }
 
 fn process_name_from_pid(pid: u32) -> String {
@@ -411,5 +540,36 @@ pub fn write_clipboard_text(text: &str) -> bool {
 pub fn play_switch_beep() {
     unsafe {
         MessageBeep(0);
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn autostart_task_xml_never_expires_and_runs_at_normal_priority() {
+        let xml = autostart_task_xml(
+            Path::new(r"C:\Users\A&B\AppData\Local\Programs\MS Key\MSKey.exe"),
+            "S-1-5-21-1-2-3-1001",
+        );
+        assert!(xml.contains("<ExecutionTimeLimit>PT0S</ExecutionTimeLimit>"));
+        assert!(xml.contains("<Priority>4</Priority>"));
+        assert!(xml.contains("<Delay>PT5S</Delay>"));
+        assert!(xml.contains("<RunLevel>HighestAvailable</RunLevel>"));
+        assert!(xml.contains("<LogonType>InteractiveToken</LogonType>"));
+        assert_eq!(xml.matches("<UserId>S-1-5-21-1-2-3-1001</UserId>").count(), 2);
+        assert!(xml.contains(
+            r"<Command>C:\Users\A&amp;B\AppData\Local\Programs\MS Key\MSKey.exe</Command>"
+        ));
+        assert!(xml.contains(
+            r"<WorkingDirectory>C:\Users\A&amp;B\AppData\Local\Programs\MS Key</WorkingDirectory>"
+        ));
+    }
+
+    #[test]
+    fn current_user_sid_is_a_user_sid() {
+        let sid = current_user_sid().expect("token user sid");
+        assert!(sid.starts_with("S-1-5-"), "{sid}");
     }
 }
