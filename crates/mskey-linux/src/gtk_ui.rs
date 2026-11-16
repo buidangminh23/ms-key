@@ -23,14 +23,15 @@ use crate::gtk_ffi::{
     gtk_window_set_position, gtk_window_set_resizable, gtk_window_set_title,
 };
 use crate::gtk_helpers::{
-    get_combo, make_button, make_hbox, make_label, make_vbox, pack, read_entry, set_label_text,
-    show_info_modal, write_entry,
+    create_modal_gtk, get_combo, make_button, make_hbox, make_label, make_vbox, pack, read_entry,
+    run_modal_gtk, set_label_text, show_info_modal, write_entry,
 };
 use crate::gtk_theme::apply_gtk_theme;
 use crate::gtk_ui_tabs::{UiState, build_header_box, build_tab_basic, build_tab_hotkey, build_tab_system};
 use crate::linux_extra::{
-    acquire_setup_lock, check_latest_release, detect_active_app, format_update_check_message,
-    show_linux_switch_osd,
+    LinuxInstallOutcome, acquire_setup_lock, apply_linux_staged_update, check_latest_release,
+    detect_active_app, download_and_verify_linux_update, format_update_check_message,
+    select_linux_update_asset, show_linux_switch_osd,
 };
 
 thread_local! {
@@ -38,6 +39,7 @@ thread_local! {
     static LAST_APP: RefCell<String> = const { RefCell::new(String::new()) };
     static IS_INIT: Cell<bool> = const { Cell::new(false) };
     static SYNCING: Cell<bool> = const { Cell::new(false) };
+    static UPDATE_MODAL_CHOICE: Cell<u8> = const { Cell::new(0) };
 }
 
 pub fn ensure_gtk_init() -> bool {
@@ -497,6 +499,140 @@ struct UpdateResultPayload {
     show_modal: bool,
     has_newer: bool,
     msg: String,
+    release: Option<mskey_core::update::ReleaseInfo>,
+}
+
+struct UpdateInstallPayload {
+    result: Result<LinuxInstallOutcome, String>,
+    html_url: String,
+}
+
+unsafe extern "C" fn on_upd_choice_install(_: *mut GtkWidget, dlg: *mut c_void) {
+    UPDATE_MODAL_CHOICE.with(|c| c.set(1));
+    unsafe { gtk_widget_destroy(dlg as *mut GtkWidget) };
+}
+
+unsafe extern "C" fn on_upd_choice_github(_: *mut GtkWidget, dlg: *mut c_void) {
+    UPDATE_MODAL_CHOICE.with(|c| c.set(2));
+    unsafe { gtk_widget_destroy(dlg as *mut GtkWidget) };
+}
+
+unsafe extern "C" fn on_upd_choice_close(_: *mut GtkWidget, dlg: *mut c_void) {
+    UPDATE_MODAL_CHOICE.with(|c| c.set(0));
+    unsafe { gtk_widget_destroy(dlg as *mut GtkWidget) };
+}
+
+fn show_update_available_dialog(
+    parent: *mut GtkWidget,
+    info: &mskey_core::update::ReleaseInfo,
+    asset: Option<&mskey_core::update::ReleaseAsset>,
+) -> u8 {
+    UPDATE_MODAL_CHOICE.with(|c| c.set(0));
+    let dlg = create_modal_gtk(parent, "Cập nhật MS Key", 460, 210);
+    let vbox = make_vbox(10);
+    let mut text = format!(
+        "Đã có phiên bản mới v{} (hiện tại v{}).",
+        info.version,
+        env!("CARGO_PKG_VERSION")
+    );
+    if let Some(a) = asset {
+        let sz = mskey_core::update::format_bytes_human(a.size);
+        let sz_part = if sz.is_empty() { String::new() } else { format!(" ({sz})") };
+        text.push_str(&format!("\nGói: {}{}\nXác thực chữ ký SHA-256 tự động.", a.name, sz_part));
+    }
+    let notes = mskey_core::update::release_notes_preview(&info.body, 280);
+    if !notes.is_empty() {
+        text.push_str("\n\nGhi chú:\n");
+        text.push_str(&notes);
+    }
+    let lbl = make_label(&text, false);
+    pack(vbox, lbl, true, true, 0);
+
+    let brow = make_hbox(8);
+    let btn_close = make_button("Để sau", false);
+    let btn_github = make_button("Mở trang phát hành", false);
+    pack(brow, btn_close, false, false, 0);
+    pack(brow, btn_github, false, false, 0);
+    if asset.is_some() {
+        let btn_install = make_button("Tải & Cập nhật", true);
+        connect_signal(btn_install, "clicked", on_upd_choice_install as *const c_void, dlg as usize);
+        pack(brow, btn_install, true, true, 0);
+    }
+    connect_signal(btn_github, "clicked", on_upd_choice_github as *const c_void, dlg as usize);
+    connect_signal(btn_close, "clicked", on_upd_choice_close as *const c_void, dlg as usize);
+    unsafe {
+        gtk_container_add(dlg, vbox);
+    }
+    pack(vbox, brow, false, false, 0);
+    run_modal_gtk(dlg);
+    UPDATE_MODAL_CHOICE.with(|c| c.get())
+}
+
+unsafe extern "C" fn on_update_install_done(data: *mut c_void) -> c_int {
+    if data.is_null() {
+        return 0;
+    }
+    let payload = unsafe { Box::from_raw(data as *mut UpdateInstallPayload) };
+    let (modal_win, close_win) = UI.with(|c| {
+        if let Some(st) = c.borrow().as_ref() {
+            unsafe { gtk_widget_set_sensitive(st.btn_check_update, 1) };
+            match &payload.result {
+                Ok(out) => {
+                    set_label_text(st.lbl_update_status, "Kiểm tra/cập nhật hoàn tất");
+                    return (Some(st.win), out.relaunched);
+                }
+                Err(err) => {
+                    set_label_text(st.lbl_update_status, err);
+                    return (Some(st.win), false);
+                }
+            }
+        }
+        (None, false)
+    });
+    if let Some(win) = modal_win {
+        match payload.result {
+            Ok(out) => {
+                show_info_modal(win, "Cập nhật MS Key", &out.message);
+                if close_win {
+                    unsafe { gtk_widget_destroy(win) };
+                }
+            }
+            Err(err) => {
+                show_info_modal(
+                    win,
+                    "Lỗi cập nhật MS Key",
+                    &format!("{err}\n\nTrang phát hành: {}", payload.html_url),
+                );
+            }
+        }
+    }
+    0
+}
+
+fn start_async_update_download(
+    info: mskey_core::update::ReleaseInfo,
+    asset: mskey_core::update::ReleaseAsset,
+    sums: mskey_core::update::ReleaseAsset,
+) {
+    UI.with(|c| {
+        if let Some(st) = c.borrow().as_ref() {
+            set_label_text(st.lbl_update_status, &format!("Đang tải {}...", asset.name));
+            unsafe { gtk_widget_set_sensitive(st.btn_check_update, 0) };
+        }
+    });
+    let html_url = if info.html_url.trim().is_empty() {
+        mskey_core::update::GITHUB_RELEASES_URL.to_string()
+    } else {
+        info.html_url.clone()
+    };
+    thread::spawn(move || {
+        let result = download_and_verify_linux_update(&info.version, &asset, &sums, None)
+            .and_then(|staged| apply_linux_staged_update(&staged));
+        let payload = Box::into_raw(Box::new(UpdateInstallPayload { result, html_url }));
+        unsafe {
+            g_idle_add(Some(on_update_install_done), payload as *mut c_void);
+        }
+    });
 }
 
 unsafe extern "C" fn on_update_check_done(data: *mut c_void) -> c_int {
@@ -515,7 +651,26 @@ unsafe extern "C" fn on_update_check_done(data: *mut c_void) -> c_int {
         None
     });
     if let Some(win) = modal_win {
-        show_info_modal(win, "Kiểm tra cập nhật", &payload.msg);
+        if payload.has_newer
+            && let Some(info) = payload.release
+        {
+            let pair = select_linux_update_asset(&info);
+            let choice = show_update_available_dialog(win, &info, pair.as_ref().map(|p| &p.0));
+            if choice == 1
+                && let Some((asset, sums)) = pair
+            {
+                start_async_update_download(info, asset, sums);
+            } else if choice == 2 {
+                let target = if info.html_url.trim().is_empty() {
+                    mskey_core::update::GITHUB_RELEASES_URL
+                } else {
+                    info.html_url.trim()
+                };
+                let _ = Command::new("xdg-open").arg(target).spawn();
+            }
+        } else {
+            show_info_modal(win, "Kiểm tra cập nhật", &payload.msg);
+        }
     }
     0
 }
@@ -529,11 +684,13 @@ fn start_async_update_check(show_modal: bool) {
     });
     thread::spawn(move || {
         let res = check_latest_release();
+        let release = res.as_ref().ok().cloned();
         let (has_newer, msg) = format_update_check_message(env!("CARGO_PKG_VERSION"), res);
         let payload = Box::into_raw(Box::new(UpdateResultPayload {
             show_modal,
             has_newer,
             msg,
+            release: if has_newer { release } else { None },
         }));
         unsafe {
             g_idle_add(Some(on_update_check_done), payload as *mut c_void);

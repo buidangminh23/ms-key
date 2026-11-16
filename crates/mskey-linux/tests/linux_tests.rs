@@ -1,7 +1,7 @@
 use std::fs;
 use std::time::Duration;
 
-use mskey_core::update::ReleaseInfo;
+use mskey_core::update::{ReleaseAsset, ReleaseInfo};
 use mskey_core::{
     AppBehavior, Config, HoldEnglishKey, HotkeyCombo, InputMethod, MacroEntry, Mechanism,
     SwitchPreset,
@@ -21,9 +21,9 @@ use mskey_linux::keyval::{
 };
 use mskey_linux::linux_extra::{
     ActiveWindowInfo, format_update_check_message, is_browser_app, is_terminal_app,
-    is_us_xkb_layout, parse_gnome_eval_class, parse_gnome_mru_xkb, parse_hypr_active_class,
-    parse_hypr_active_window, parse_setxkbmap_layout, parse_sway_focused_app,
-    parse_sway_focused_window,
+    is_us_xkb_layout, linux_downloads_dir, parse_gnome_eval_class, parse_gnome_mru_xkb,
+    parse_hypr_active_class, parse_hypr_active_window, parse_setxkbmap_layout,
+    parse_sway_focused_app, parse_sway_focused_window, select_linux_update_asset,
 };
 
 fn type_preedit_string(sess: &mut IbusSession, s: &str) -> Vec<String> {
@@ -614,4 +614,39 @@ fn undo_last_word_cursor_clipboard_hold_and_capslock() {
     );
     assert!(!has_same);
     assert!(msg_same.contains("1.0.0"));
+
+    let release_with_assets = ReleaseInfo {
+        tag_name: "v0.2.0".to_string(),
+        version: "0.2.0".to_string(),
+        html_url: "https://github.com/buidangminh23/ms-key/releases/tag/v0.2.0".to_string(),
+        body: String::new(),
+        assets: vec![
+            ReleaseAsset {
+                name: "SHA256SUMS".to_string(),
+                download_url: "https://example.invalid/SHA256SUMS".to_string(),
+                size: 512,
+            },
+            ReleaseAsset {
+                name: "mskey_0.2.0_amd64.deb".to_string(),
+                download_url: "https://example.invalid/mskey_0.2.0_amd64.deb".to_string(),
+                size: 2048,
+            },
+            ReleaseAsset {
+                name: "MSKey-0.2.0-linux-amd64.tar.gz".to_string(),
+                download_url: "https://example.invalid/MSKey-0.2.0-linux-amd64.tar.gz".to_string(),
+                size: 4096,
+            },
+            ReleaseAsset {
+                name: "mskey-cli-0.2.0-linux-amd64.tar.gz".to_string(),
+                download_url: "https://example.invalid/mskey-cli-0.2.0-linux-amd64.tar.gz".to_string(),
+                size: 1024,
+            },
+        ],
+    };
+    let selected = select_linux_update_asset(&release_with_assets);
+    assert!(selected.is_some());
+    let (pkg, sums) = selected.unwrap();
+    assert!(!pkg.name.starts_with("mskey-cli-"));
+    assert_eq!(sums.name, "SHA256SUMS");
+    assert!(!linux_downloads_dir().as_os_str().is_empty());
 }

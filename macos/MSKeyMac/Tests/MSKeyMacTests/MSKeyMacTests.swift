@@ -406,6 +406,28 @@ final class MSKeyMacTests: XCTestCase {
         let sums = UpdateChecker.parseSHA256Sums("\(hex)  *./MSKey-0.2.0-macOS.dmg\n")
         XCTAssertTrue(UpdateChecker.verifySHA256(sums: sums, filename: "MSKey-0.2.0-macOS.dmg", actualHex: hex))
         XCTAssertFalse(UpdateChecker.verifySHA256(sums: sums, filename: "MSKey-0.2.0-macOS.dmg", actualHex: String(repeating: "0", count: 64)))
+
+        let mixedAssets = [
+            GitHubReleaseAsset(name: "mskey-cli-0.2.0-macos-universal.tar.gz", downloadURL: "https://example.com/cli.tar.gz"),
+            GitHubReleaseAsset(name: "MSKey-0.2.0-macos-universal.dmg", downloadURL: "https://example.com/app.dmg"),
+            GitHubReleaseAsset(name: "MSKey-0.2.0-macos-universal.zip", downloadURL: "https://example.com/app.zip"),
+        ]
+        XCTAssertEqual(
+            UpdateChecker.preferredMacAsset(from: mixedAssets, preferZipForSelfUpdate: true)?.name,
+            "MSKey-0.2.0-macos-universal.zip"
+        )
+        XCTAssertEqual(
+            UpdateChecker.preferredMacAsset(from: mixedAssets, preferZipForSelfUpdate: false)?.name,
+            "MSKey-0.2.0-macos-universal.dmg"
+        )
+        let replaceScript = UpdateChecker.buildSelfReplaceShellScript(
+            pid: 999999,
+            stagedAppPath: "/tmp/work/MSKey.app",
+            targetAppPath: "/Applications/MSKey.app",
+            workDirPath: "/tmp/work"
+        )
+        XCTAssertTrue(replaceScript.contains("xattr -dr com.apple.quarantine"))
+        XCTAssertTrue(replaceScript.contains("open -n '/Applications/MSKey.app'"))
     }
 
     func testTapHealthRestartsAfterPermissionReturnsAndStopsWhenRevoked() {

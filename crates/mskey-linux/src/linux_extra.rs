@@ -1,8 +1,14 @@
 use std::env;
+use std::fs;
 use std::io::Write;
+use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
 
-use mskey_core::update::{GITHUB_LATEST_RELEASE_API, ReleaseInfo, is_newer_version, parse_github_release_json};
+use mskey_core::update::{
+    GITHUB_LATEST_RELEASE_API, ReleaseAsset, ReleaseInfo, checksum_asset, expected_sha256_for,
+    is_newer_version, parse_github_release_json, parse_sha256sums, preferred_linux_asset,
+    sha256_file, verify_sha256_match,
+};
 use serde_json::Value;
 
 use crate::config_store::{detect_active_x11_window, list_x11_windows};
@@ -393,30 +399,77 @@ pub fn write_clipboard_text(text: &str) -> bool {
     }
 }
 
-pub fn check_latest_release() -> Result<ReleaseInfo, String> {
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct LinuxStagedUpdate {
+    pub version: String,
+    pub asset_name: String,
+    pub file_path: PathBuf,
+    pub sha256: String,
+    pub is_deb: bool,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct LinuxInstallOutcome {
+    pub relaunched: bool,
+    pub message: String,
+}
+
+fn linux_curl_bytes(url: &str, max_secs: &str, accept: Option<&str>) -> Result<Vec<u8>, String> {
+    let mut cmd = Command::new("curl");
+    cmd.args(["-fsSL", "--proto", "=https", "--max-time", max_secs]);
+    if let Some(hdr) = accept {
+        cmd.args(["-H", hdr]);
+    }
+    cmd.args(["-H", "User-Agent: MSKey-Linux", url]);
+    let out = cmd.output().map_err(|e| format!("Không thể chạy curl: {e}"))?;
+    if !out.status.success() {
+        let err = String::from_utf8_lossy(&out.stderr).trim().to_string();
+        return Err(if err.is_empty() {
+            format!("Lỗi kết nối HTTPS (mã {})", out.status)
+        } else {
+            format!("Lỗi kết nối HTTPS: {err}")
+        });
+    }
+    Ok(out.stdout)
+}
+
+fn linux_curl_to_file(url: &str, dest: &Path) -> Result<(), String> {
+    let dest_str = dest.to_string_lossy().to_string();
     let out = Command::new("curl")
         .args([
             "-fsSL",
+            "--proto",
+            "=https",
             "--max-time",
-            "8",
-            "-H",
-            "Accept: application/vnd.github+json",
+            "180",
             "-H",
             "User-Agent: MSKey-Linux",
-            GITHUB_LATEST_RELEASE_API,
+            "-o",
+            &dest_str,
+            url,
         ])
         .output()
         .map_err(|e| format!("Không thể chạy curl: {e}"))?;
     if !out.status.success() {
         let err = String::from_utf8_lossy(&out.stderr).trim().to_string();
         return Err(if err.is_empty() {
-            format!("Lỗi kiểm tra cập nhật (mã {})", out.status)
+            format!("Lỗi tải gói cập nhật (mã {})", out.status)
         } else {
-            format!("Lỗi kiểm tra cập nhật: {err}")
+            format!("Lỗi tải gói cập nhật: {err}")
         });
     }
-    let body = String::from_utf8_lossy(&out.stdout);
-    parse_github_release_json(&body).ok_or_else(|| "Không phân tích được thông tin phiên bản mới".to_string())
+    Ok(())
+}
+
+pub fn check_latest_release() -> Result<ReleaseInfo, String> {
+    let bytes = linux_curl_bytes(
+        GITHUB_LATEST_RELEASE_API,
+        "10",
+        Some("Accept: application/vnd.github+json"),
+    )?;
+    let body = String::from_utf8_lossy(&bytes);
+    parse_github_release_json(&body)
+        .ok_or_else(|| "Không phân tích được thông tin phiên bản mới".to_string())
 }
 
 pub fn format_update_check_message(current_version: &str, res: Result<ReleaseInfo, String>) -> (bool, String) {
@@ -436,6 +489,206 @@ pub fn format_update_check_message(current_version: &str, res: Result<ReleaseInf
         }
         Err(msg) => (false, msg),
     }
+}
+
+pub fn is_deb_installed() -> bool {
+    Path::new("/var/lib/dpkg/info/mskey.list").exists()
+        || env::current_exe()
+            .ok()
+            .is_some_and(|p| p.starts_with("/usr/bin/"))
+}
+
+pub fn select_linux_update_asset(info: &ReleaseInfo) -> Option<(ReleaseAsset, ReleaseAsset)> {
+    let asset = preferred_linux_asset(&info.assets, env::consts::ARCH, is_deb_installed())?.clone();
+    let sums = checksum_asset(&info.assets)?.clone();
+    Some((asset, sums))
+}
+
+pub fn linux_downloads_dir() -> PathBuf {
+    if let Some(xdg) = env::var_os("XDG_DOWNLOAD_DIR") {
+        let p = PathBuf::from(xdg);
+        if !p.as_os_str().is_empty() {
+            return p;
+        }
+    }
+    if let Some(home) = env::var_os("HOME") {
+        let dl = PathBuf::from(home).join("Downloads");
+        return dl;
+    }
+    env::temp_dir()
+}
+
+pub fn download_and_verify_linux_update(
+    version: &str,
+    asset: &ReleaseAsset,
+    sums_asset: &ReleaseAsset,
+    dest_dir: Option<&Path>,
+) -> Result<LinuxStagedUpdate, String> {
+    let sums_bytes = linux_curl_bytes(&sums_asset.download_url, "15", None)?;
+    let sums_text = String::from_utf8(sums_bytes)
+        .map_err(|_| "Tệp SHA256SUMS không phải UTF-8 hợp lệ".to_string())?;
+    let sums = parse_sha256sums(&sums_text);
+    if expected_sha256_for(&sums, &asset.name).is_none() {
+        return Err(format!(
+            "Không tìm thấy SHA-256 cho '{}' trong {}",
+            asset.name, sums_asset.name
+        ));
+    }
+
+    let dir = dest_dir
+        .map(Path::to_path_buf)
+        .unwrap_or_else(linux_downloads_dir);
+    fs::create_dir_all(&dir)
+        .map_err(|e| format!("Không tạo được thư mục tải về: {e}"))?;
+    let safe_name = asset
+        .name
+        .rsplit(['/', '\\'])
+        .next()
+        .unwrap_or("mskey-linux-update");
+    let file_path = dir.join(safe_name);
+    linux_curl_to_file(&asset.download_url, &file_path)?;
+
+    let actual_sha = match sha256_file(&file_path) {
+        Ok(h) => h,
+        Err(e) => {
+            let _ = fs::remove_file(&file_path);
+            return Err(format!("Không tính được SHA-256: {e}"));
+        }
+    };
+    if !verify_sha256_match(&sums, &asset.name, &actual_sha) {
+        let _ = fs::remove_file(&file_path);
+        return Err(format!(
+            "Sai mã SHA-256 cho {}. Tệp đã bị xóa.",
+            asset.name
+        ));
+    }
+
+    Ok(LinuxStagedUpdate {
+        version: version.to_string(),
+        asset_name: asset.name.clone(),
+        file_path,
+        sha256: actual_sha,
+        is_deb: asset.name.to_ascii_lowercase().ends_with(".deb"),
+    })
+}
+
+fn find_file_recursive(dir: &Path, filename: &str) -> Option<PathBuf> {
+    let entries = fs::read_dir(dir).ok()?;
+    for entry in entries.flatten() {
+        let p = entry.path();
+        if p.is_dir() {
+            if let Some(hit) = find_file_recursive(&p, filename) {
+                return Some(hit);
+            }
+        } else if p.file_name().and_then(|n| n.to_str()) == Some(filename) {
+            return Some(p);
+        }
+    }
+    None
+}
+
+pub fn apply_linux_staged_update(staged: &LinuxStagedUpdate) -> Result<LinuxInstallOutcome, String> {
+    let short_hash: String = staged.sha256.chars().take(12).collect();
+    if staged.is_deb {
+        let has_pkexec = Command::new("which")
+            .arg("pkexec")
+            .output()
+            .is_ok_and(|o| o.status.success());
+        if has_pkexec {
+            let pkg_str = staged.file_path.to_string_lossy().to_string();
+            if let Ok(out) = Command::new("pkexec").args(["dpkg", "-i", &pkg_str]).output()
+                && out.status.success()
+            {
+                let _ = Command::new("ibus").arg("restart").output();
+                if let Ok(exe) = env::current_exe() {
+                    let _ = Command::new(exe).arg("--setup").spawn();
+                    return Ok(LinuxInstallOutcome {
+                        relaunched: true,
+                        message: format!(
+                            "Đã cài đặt MS Key v{} (.deb, SHA-256 {}...) và khởi động lại.",
+                            staged.version, short_hash
+                        ),
+                    });
+                }
+                return Ok(LinuxInstallOutcome {
+                    relaunched: false,
+                    message: format!(
+                        "Đã cài đặt MS Key v{} (.deb, SHA-256 {}...).",
+                        staged.version, short_hash
+                    ),
+                });
+            }
+        }
+        if let Some(parent) = staged.file_path.parent() {
+            let _ = Command::new("xdg-open").arg(parent).spawn();
+        }
+        return Ok(LinuxInstallOutcome {
+            relaunched: false,
+            message: format!(
+                "Đã tải và xác thực SHA-256 ({}...) tại:\n{}\n\nChạy lệnh sau để cài đặt:\nsudo dpkg -i \"{}\"",
+                short_hash,
+                staged.file_path.display(),
+                staged.file_path.display()
+            ),
+        });
+    }
+
+    let extract_dir = env::temp_dir().join(format!("mskey-extract-{}", std::process::id()));
+    let _ = fs::remove_dir_all(&extract_dir);
+    fs::create_dir_all(&extract_dir)
+        .map_err(|e| format!("Không tạo được thư mục giải nén tạm: {e}"))?;
+    let tar_res = Command::new("tar")
+        .args([
+            "-xzf",
+            &staged.file_path.to_string_lossy(),
+            "-C",
+            &extract_dir.to_string_lossy(),
+        ])
+        .output()
+        .map_err(|e| format!("Không thể chạy tar: {e}"))?;
+    if !tar_res.status.success() {
+        let _ = fs::remove_dir_all(&extract_dir);
+        return Err("Giải nén gói cập nhật .tar.gz thất bại".to_string());
+    }
+
+    let new_bin = find_file_recursive(&extract_dir, "mskey-linux");
+    if let (Some(src_bin), Ok(cur_exe)) = (new_bin, env::current_exe())
+        && let Some(cur_dir) = cur_exe.parent()
+    {
+        let temp_dest = cur_dir.join(format!(".mskey-linux.new.{}", std::process::id()));
+        if fs::copy(&src_bin, &temp_dest).is_ok() {
+            #[cfg(unix)]
+            {
+                use std::os::unix::fs::PermissionsExt;
+                let _ = fs::set_permissions(&temp_dest, fs::Permissions::from_mode(0o755));
+            }
+            if fs::rename(&temp_dest, &cur_exe).is_ok() {
+                let _ = fs::remove_dir_all(&extract_dir);
+                let _ = Command::new(&cur_exe).arg("--setup").spawn();
+                return Ok(LinuxInstallOutcome {
+                    relaunched: true,
+                    message: format!(
+                        "Đã cập nhật MS Key v{} (SHA-256 {}...) và mở lại.",
+                        staged.version, short_hash
+                    ),
+                });
+            }
+            let _ = fs::remove_file(&temp_dest);
+        }
+    }
+
+    let _ = fs::remove_dir_all(&extract_dir);
+    if let Some(parent) = staged.file_path.parent() {
+        let _ = Command::new("xdg-open").arg(parent).spawn();
+    }
+    Ok(LinuxInstallOutcome {
+        relaunched: false,
+        message: format!(
+            "Đã tải và xác thực SHA-256 ({}...) tại:\n{}\n\nThư mục cài đặt cần quyền root; hãy giải nén và chạy install.sh với sudo.",
+            short_hash,
+            staged.file_path.display()
+        ),
+    })
 }
 
 pub fn is_us_keyboard_layout() -> bool {

@@ -3,6 +3,7 @@ import SwiftUI
 
 public struct SettingsTabsView: View {
     @ObservedObject public var store: MSKeyStore
+    @ObservedObject private var updater = UpdateChecker.shared
     public let selectedTab: Int
     @State private var profileNameInput = ""
 
@@ -284,10 +285,16 @@ public struct SettingsTabsView: View {
                         HStack(spacing: 8) {
                             Toggle("Tự kiểm tra cập nhật khi mở", isOn: binding(\.checkUpdatesOnStart))
                             Spacer()
-                            Button("Kiểm tra cập nhật...") {
+                            Button(updater.isDownloading ? "Đang tải..." : (updater.isChecking ? "Đang kiểm tra..." : "Kiểm tra cập nhật...")) {
                                 store.checkForUpdates(manual: true)
                             }
+                            .disabled(updater.isChecking || updater.isDownloading)
                             .frame(height: 28)
+                        }
+                        if !updater.statusText.isEmpty {
+                            Text(updater.statusText)
+                                .font(.caption)
+                                .foregroundStyle(.secondary)
                         }
                     }
                     .padding(8)

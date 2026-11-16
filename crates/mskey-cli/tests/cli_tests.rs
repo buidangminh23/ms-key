@@ -89,7 +89,12 @@ fn help_and_version_commands() {
         assert!(text.contains("check"));
         assert!(text.contains("import-evkey"));
         assert!(text.contains("macros"));
+        assert!(text.contains("update"));
     }
+
+    let update_help = run_args(&["help", "update"]);
+    assert!(update_help.status.success());
+    assert!(stdout_str(&update_help).contains("--checksums"));
 
     let topic_help = run_args(&["help", "convert"]);
     assert!(topic_help.status.success());
@@ -397,4 +402,119 @@ fn macros_import_and_export_roundtrip() {
 
     let missing_cfg = run_args(&["macros", "export", "--config", &dir.path_str("missing.json")]);
     assert!(!missing_cfg.status.success());
+}
+
+#[test]
+fn update_command_checks_and_downloads_with_sha256_verification() {
+    let dir = TempDir::new("mskey_cli_update");
+    let pkg_name = match std::env::consts::OS {
+        "windows" => match std::env::consts::ARCH {
+            "aarch64" => "MSKey-9.9.9-windows-arm64-portable.zip",
+            _ => "MSKey-9.9.9-windows-x64-portable.zip",
+        },
+        "macos" => "MSKey-9.9.9-macos-universal.dmg",
+        _ => match std::env::consts::ARCH {
+            "aarch64" => "MSKey-9.9.9-linux-arm64.tar.gz",
+            _ => "MSKey-9.9.9-linux-amd64.tar.gz",
+        },
+    };
+    let cli_name = match std::env::consts::OS {
+        "windows" => match std::env::consts::ARCH {
+            "aarch64" => "mskey-cli-9.9.9-windows-arm64.zip",
+            _ => "mskey-cli-9.9.9-windows-x64.zip",
+        },
+        "macos" => "mskey-cli-9.9.9-macos-universal.tar.gz",
+        _ => match std::env::consts::ARCH {
+            "aarch64" => "mskey-cli-9.9.9-linux-arm64.tar.gz",
+            _ => "mskey-cli-9.9.9-linux-amd64.tar.gz",
+        },
+    };
+
+    let src_payload = b"mskey-release-archive-bytes";
+    let src_file = dir.file(pkg_name);
+    fs::write(&src_file, src_payload).expect("write fake package");
+    let digest = mskey_core::update::sha256_bytes(src_payload);
+
+    let file_url = format!("file:///{}", src_file.to_string_lossy().trim_start_matches('/'));
+    let manifest_json = serde_json::json!({
+        "draft": false,
+        "tag_name": "v9.9.9",
+        "html_url": "https://github.com/buidangminh23/ms-key/releases/tag/v9.9.9",
+        "body": "Test release",
+        "assets": [
+            {
+                "name": pkg_name,
+                "browser_download_url": file_url,
+                "size": src_payload.len()
+            },
+            {
+                "name": cli_name,
+                "browser_download_url": file_url,
+                "size": src_payload.len()
+            },
+            {
+                "name": "SHA256SUMS",
+                "browser_download_url": "https://example.invalid/SHA256SUMS",
+                "size": 128
+            }
+        ]
+    });
+    let manifest_path = dir.file("release.json");
+    fs::write(&manifest_path, manifest_json.to_string()).expect("write manifest");
+
+    let sums_path = dir.file("SHA256SUMS");
+    fs::write(&sums_path, format!("{digest}  {pkg_name}\n")).expect("write sums");
+
+    let check_out = run_args(&[
+        "update",
+        "--check",
+        "--json",
+        "--manifest",
+        &manifest_path.to_string_lossy(),
+    ]);
+    assert!(check_out.status.success(), "{}", stderr_str(&check_out));
+    let parsed: Value = serde_json::from_str(&stdout_str(&check_out)).expect("parse check json");
+    assert_eq!(parsed["latest_version"], "9.9.9");
+    assert_eq!(parsed["update_available"], true);
+    assert_eq!(parsed["app_asset"]["name"], pkg_name);
+    assert_eq!(parsed["cli_asset"]["name"], cli_name);
+
+    let dl_dir = dir.file("downloads");
+    let dl_out = run_args(&[
+        "update",
+        "--download",
+        "--target",
+        "app",
+        "--to-dir",
+        &dl_dir.to_string_lossy(),
+        "--manifest",
+        &manifest_path.to_string_lossy(),
+        "--checksums",
+        &sums_path.to_string_lossy(),
+        "--json",
+    ]);
+    assert!(dl_out.status.success(), "{}", stderr_str(&dl_out));
+    let dl_json: Value = serde_json::from_str(&stdout_str(&dl_out)).expect("parse dl json");
+    assert_eq!(dl_json["status"], "downloaded");
+    assert_eq!(dl_json["sha256"], digest);
+    assert_file_exists(&dl_dir.join(pkg_name));
+
+    let bad_sums = dir.file("BADSUMS");
+    fs::write(&bad_sums, format!("{}  {pkg_name}\n", "0".repeat(64))).expect("write bad sums");
+    let bad_dir = dir.file("bad_downloads");
+    let bad_out = run_args(&[
+        "update",
+        "--download",
+        "--target",
+        "app",
+        "--to-dir",
+        &bad_dir.to_string_lossy(),
+        "--manifest",
+        &manifest_path.to_string_lossy(),
+        "--checksums",
+        &bad_sums.to_string_lossy(),
+    ]);
+    assert!(!bad_out.status.success());
+    assert!(stderr_str(&bad_out).contains("SHA-256 verification failed"));
+    assert!(!bad_dir.join(pkg_name).exists());
 }

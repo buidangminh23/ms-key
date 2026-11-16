@@ -10,6 +10,7 @@ COMMANDS:
     check          Validate Vietnamese words against dictionary and syllable rules
     import-evkey   Import an EVKey .tree configuration into MS Key JSON
     macros         Export or import text macros
+    update         Check for updates, download, or apply CLI self-update
     help           Print help for a command
     version        Print version information
 
@@ -75,6 +76,22 @@ OPTIONS:
     -h, --help       Print help
 ";
 
+const UPDATE_HELP: &str = "\
+USAGE:
+    mskey update [OPTIONS]
+
+OPTIONS:
+    --check              Check latest release without downloading (default)
+    --download           Download matching release asset and verify SHA-256
+    --apply              Download, verify SHA-256, and update the mskey CLI binary
+    --target <KIND>      Asset target: app|cli
+    --to-dir <PATH>      Download directory for --download (default: current dir)
+    --manifest <PATH>    Read GitHub release JSON from local file
+    --checksums <PATH>   Read SHA256SUMS from local file
+    --json               Print JSON output
+    -h, --help           Print help
+";
+
 pub fn global_help() -> &'static str {
     GLOBAL_HELP
 }
@@ -86,6 +103,7 @@ pub fn topic_help(topic: &str) -> Option<&'static str> {
         "check" => Some(CHECK_HELP),
         "import-evkey" => Some(IMPORT_EVKEY_HELP),
         "macros" => Some(MACROS_HELP),
+        "update" => Some(UPDATE_HELP),
         _ => None,
     }
 }

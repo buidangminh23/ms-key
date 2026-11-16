@@ -1,5 +1,8 @@
 use std::cmp::Ordering;
 use std::collections::BTreeMap;
+use std::fs::File;
+use std::io::{self, Read};
+use std::path::Path;
 
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
@@ -193,6 +196,401 @@ pub fn verify_sha256_match(
     })
 }
 
+pub fn expected_sha256_for<'a>(sums: &'a BTreeMap<String, String>, filename: &str) -> Option<&'a str> {
+    let clean = filename.trim().trim_start_matches("./");
+    if let Some(v) = sums.get(clean) {
+        return Some(v.as_str());
+    }
+    let base = clean.rsplit(['/', '\\']).next().unwrap_or(clean);
+    sums.iter().find_map(|(k, v)| {
+        let kb = k.rsplit(['/', '\\']).next().unwrap_or(k.as_str());
+        if kb == base { Some(v.as_str()) } else { None }
+    })
+}
+
+pub fn checksum_asset(assets: &[ReleaseAsset]) -> Option<&ReleaseAsset> {
+    assets
+        .iter()
+        .find(|a| a.name.eq_ignore_ascii_case("SHA256SUMS"))
+        .or_else(|| {
+            assets
+                .iter()
+                .find(|a| a.name.to_ascii_lowercase().ends_with(".sha256"))
+        })
+}
+
+fn norm_arch(arch: &str) -> (&'static str, &'static str) {
+    match arch.to_ascii_lowercase().as_str() {
+        "aarch64" | "arm64" => ("arm64", "arm64"),
+        _ => ("x64", "amd64"),
+    }
+}
+
+fn is_cli_asset(name_lower: &str) -> bool {
+    name_lower.starts_with("mskey-cli-") || name_lower.contains("-cli-")
+}
+
+pub fn preferred_windows_asset<'a>(
+    assets: &'a [ReleaseAsset],
+    arch: &str,
+    prefer_installer: bool,
+) -> Option<&'a ReleaseAsset> {
+    let (win_arch, _) = norm_arch(arch);
+    let matches_win = |name: &str| {
+        let low = name.to_ascii_lowercase();
+        !is_cli_asset(&low) && (low.contains("windows") || low.contains("-win-"))
+    };
+    let arch_matches = |name: &str| {
+        let low = name.to_ascii_lowercase();
+        low.contains(win_arch)
+    };
+    if prefer_installer {
+        if let Some(hit) = assets.iter().find(|a| {
+            let low = a.name.to_ascii_lowercase();
+            matches_win(&a.name) && low.ends_with(".exe") && arch_matches(&a.name)
+        }) {
+            return Some(hit);
+        }
+        if win_arch == "arm64"
+            && let Some(hit) = assets.iter().find(|a| {
+                let low = a.name.to_ascii_lowercase();
+                matches_win(&a.name) && low.ends_with(".zip") && arch_matches(&a.name)
+            })
+        {
+            return Some(hit);
+        }
+    }
+    assets
+        .iter()
+        .find(|a| {
+            let low = a.name.to_ascii_lowercase();
+            matches_win(&a.name) && low.ends_with(".zip") && arch_matches(&a.name)
+        })
+        .or_else(|| {
+            assets.iter().find(|a| {
+                let low = a.name.to_ascii_lowercase();
+                matches_win(&a.name) && low.ends_with(".exe") && arch_matches(&a.name)
+            })
+        })
+        .or_else(|| {
+            assets.iter().find(|a| {
+                let low = a.name.to_ascii_lowercase();
+                matches_win(&a.name) && (low.ends_with(".zip") || low.ends_with(".exe"))
+            })
+        })
+}
+
+pub fn preferred_linux_asset<'a>(
+    assets: &'a [ReleaseAsset],
+    arch: &str,
+    prefer_deb: bool,
+) -> Option<&'a ReleaseAsset> {
+    let (_, lin_arch) = norm_arch(arch);
+    let is_deb = |name: &str| {
+        let low = name.to_ascii_lowercase();
+        !is_cli_asset(&low) && low.ends_with(".deb")
+    };
+    let is_tar = |name: &str| {
+        let low = name.to_ascii_lowercase();
+        !is_cli_asset(&low) && low.contains("linux") && low.ends_with(".tar.gz")
+    };
+    let arch_ok = |name: &str| name.to_ascii_lowercase().contains(lin_arch);
+    if prefer_deb
+        && let Some(hit) = assets.iter().find(|a| is_deb(&a.name) && arch_ok(&a.name))
+    {
+        return Some(hit);
+    }
+    assets
+        .iter()
+        .find(|a| is_tar(&a.name) && arch_ok(&a.name))
+        .or_else(|| assets.iter().find(|a| is_deb(&a.name) && arch_ok(&a.name)))
+        .or_else(|| assets.iter().find(|a| is_tar(&a.name)))
+}
+
+pub fn preferred_macos_asset(assets: &[ReleaseAsset], prefer_zip: bool) -> Option<&ReleaseAsset> {
+    let is_mac = |name: &str| {
+        let low = name.to_ascii_lowercase();
+        !is_cli_asset(&low) && low.contains("macos")
+    };
+    let exts: &[&str] = if prefer_zip {
+        &[".zip", ".dmg", ".pkg"]
+    } else {
+        &[".dmg", ".pkg", ".zip"]
+    };
+    for ext in exts {
+        if let Some(hit) = assets
+            .iter()
+            .find(|a| is_mac(&a.name) && a.name.to_ascii_lowercase().ends_with(ext))
+        {
+            return Some(hit);
+        }
+    }
+    None
+}
+
+pub fn preferred_cli_asset<'a>(
+    assets: &'a [ReleaseAsset],
+    os: &str,
+    arch: &str,
+) -> Option<&'a ReleaseAsset> {
+    let (win_arch, lin_arch) = norm_arch(arch);
+    let os_low = os.to_ascii_lowercase();
+    let (os_key, arch_key, ext) = match os_low.as_str() {
+        "windows" => ("windows", win_arch, ".zip"),
+        "macos" | "darwin" => ("macos", "universal", ".tar.gz"),
+        _ => ("linux", lin_arch, ".tar.gz"),
+    };
+    assets.iter().find(|a| {
+        let low = a.name.to_ascii_lowercase();
+        is_cli_asset(&low) && low.contains(os_key) && low.contains(arch_key) && low.ends_with(ext)
+    })
+}
+
+pub fn format_bytes_human(bytes: u64) -> String {
+    if bytes == 0 {
+        return String::new();
+    }
+    if bytes >= 1024 * 1024 {
+        format!("{:.1} MB", bytes as f64 / (1024.0 * 1024.0))
+    } else if bytes >= 1024 {
+        format!("{} KB", (bytes + 512) / 1024)
+    } else {
+        format!("{bytes} B")
+    }
+}
+
+pub fn release_notes_preview(body: &str, max_chars: usize) -> String {
+    let trimmed = body.trim();
+    if trimmed.is_empty() || max_chars == 0 {
+        return String::new();
+    }
+    let mut out = String::new();
+    for (count, ch) in trimmed.chars().enumerate() {
+        if count >= max_chars {
+            out.push_str("...");
+            break;
+        }
+        out.push(ch);
+    }
+    out
+}
+
+const fn next_prime(mut n: u64) -> u64 {
+    loop {
+        if n <= 2 {
+            return 2;
+        }
+        let mut d = 2u64;
+        let mut ok = true;
+        while d * d <= n {
+            if n.is_multiple_of(d) {
+                ok = false;
+                break;
+            }
+            d += 1;
+        }
+        if ok {
+            return n;
+        }
+        n += 1;
+    }
+}
+
+const fn isqrt_u128(n: u128) -> u128 {
+    let mut lo = 0u128;
+    let mut hi = 1u128 << 36;
+    while lo < hi {
+        let mid = lo + (hi - lo).div_ceil(2);
+        if mid * mid <= n {
+            lo = mid;
+        } else {
+            hi = mid - 1;
+        }
+    }
+    lo
+}
+
+const fn icbrt_u128(n: u128) -> u128 {
+    let mut lo = 0u128;
+    let mut hi = 1u128 << 36;
+    while lo < hi {
+        let mid = lo + (hi - lo).div_ceil(2);
+        if mid * mid * mid <= n {
+            lo = mid;
+        } else {
+            hi = mid - 1;
+        }
+    }
+    lo
+}
+
+const fn build_sha256_init() -> [u32; 8] {
+    let mut out = [0u32; 8];
+    let mut p = 2u64;
+    let mut idx = 0usize;
+    while idx < 8 {
+        p = next_prime(p);
+        out[idx] = isqrt_u128((p as u128) << 64) as u32;
+        p += 1;
+        idx += 1;
+    }
+    out
+}
+
+const fn build_sha256_round_k() -> [u32; 64] {
+    let mut out = [0u32; 64];
+    let mut p = 2u64;
+    let mut idx = 0usize;
+    while idx < 64 {
+        p = next_prime(p);
+        out[idx] = icbrt_u128((p as u128) << 96) as u32;
+        p += 1;
+        idx += 1;
+    }
+    out
+}
+
+const SHA256_IV: [u32; 8] = build_sha256_init();
+const SHA256_RC: [u32; 64] = build_sha256_round_k();
+
+pub struct Sha256 {
+    state: [u32; 8],
+    block: [u8; 64],
+    block_len: usize,
+    total_bits: u64,
+}
+
+impl Default for Sha256 {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
+impl Sha256 {
+    pub fn new() -> Self {
+        Self {
+            state: SHA256_IV,
+            block: [0u8; 64],
+            block_len: 0,
+            total_bits: 0,
+        }
+    }
+
+    pub fn update(&mut self, data: &[u8]) {
+        self.total_bits = self.total_bits.wrapping_add((data.len() as u64).wrapping_mul(8));
+        let mut offset = 0usize;
+        if self.block_len > 0 {
+            let take = (64 - self.block_len).min(data.len());
+            self.block[self.block_len..self.block_len + take].copy_from_slice(&data[..take]);
+            self.block_len += take;
+            offset += take;
+            if self.block_len == 64 {
+                let blk = self.block;
+                self.compress(&blk);
+                self.block_len = 0;
+            }
+        }
+        while offset + 64 <= data.len() {
+            let mut blk = [0u8; 64];
+            blk.copy_from_slice(&data[offset..offset + 64]);
+            self.compress(&blk);
+            offset += 64;
+        }
+        if offset < data.len() {
+            let rem = data.len() - offset;
+            self.block[..rem].copy_from_slice(&data[offset..]);
+            self.block_len = rem;
+        }
+    }
+
+    pub fn finalize_hex(mut self) -> String {
+        let len = self.block_len;
+        self.block[len] = 0x80;
+        let mut pos = len + 1;
+        if pos > 56 {
+            self.block[pos..64].fill(0);
+            let blk = self.block;
+            self.compress(&blk);
+            pos = 0;
+        }
+        self.block[pos..56].fill(0);
+        self.block[56..64].copy_from_slice(&self.total_bits.to_be_bytes());
+        let blk = self.block;
+        self.compress(&blk);
+
+        let mut hex = String::with_capacity(64);
+        for word in self.state {
+            for b in word.to_be_bytes() {
+                const DIGITS: &[u8; 16] = b"0123456789abcdef";
+                hex.push(DIGITS[(b >> 4) as usize] as char);
+                hex.push(DIGITS[(b & 0x0f) as usize] as char);
+            }
+        }
+        hex
+    }
+
+    fn compress(&mut self, blk: &[u8; 64]) {
+        let mut sched = [0u32; 64];
+        for (item, &chunk) in sched[..16].iter_mut().zip(blk.as_chunks::<4>().0) {
+            *item = u32::from_be_bytes(chunk);
+        }
+        for i in 16..64 {
+            let s0 = sched[i - 15].rotate_right(7) ^ sched[i - 15].rotate_right(18) ^ (sched[i - 15] >> 3);
+            let s1 = sched[i - 2].rotate_right(17) ^ sched[i - 2].rotate_right(19) ^ (sched[i - 2] >> 10);
+            sched[i] = sched[i - 16]
+                .wrapping_add(s0)
+                .wrapping_add(sched[i - 7])
+                .wrapping_add(s1);
+        }
+        let [mut a, mut b, mut c, mut d, mut e, mut f, mut g, mut h] = self.state;
+        for i in 0..64 {
+            let s1 = e.rotate_right(6) ^ e.rotate_right(11) ^ e.rotate_right(25);
+            let ch = (e & f) ^ ((!e) & g);
+            let t1 = h
+                .wrapping_add(s1)
+                .wrapping_add(ch)
+                .wrapping_add(SHA256_RC[i])
+                .wrapping_add(sched[i]);
+            let s0 = a.rotate_right(2) ^ a.rotate_right(13) ^ a.rotate_right(22);
+            let maj = (a & b) ^ (a & c) ^ (b & c);
+            let t2 = s0.wrapping_add(maj);
+
+            h = g;
+            g = f;
+            f = e;
+            e = d.wrapping_add(t1);
+            d = c;
+            c = b;
+            b = a;
+            a = t1.wrapping_add(t2);
+        }
+        let delta = [a, b, c, d, e, f, g, h];
+        for i in 0..8 {
+            self.state[i] = self.state[i].wrapping_add(delta[i]);
+        }
+    }
+}
+
+pub fn sha256_bytes(data: &[u8]) -> String {
+    let mut h = Sha256::new();
+    h.update(data);
+    h.finalize_hex()
+}
+
+pub fn sha256_file(path: &Path) -> io::Result<String> {
+    let mut file = File::open(path)?;
+    let mut hasher = Sha256::new();
+    let mut buf = [0u8; 64 * 1024];
+    loop {
+        let n = file.read(&mut buf)?;
+        if n == 0 {
+            break;
+        }
+        hasher.update(&buf[..n]);
+    }
+    Ok(hasher.finalize_hex())
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -235,6 +633,99 @@ mod tests {
             "mskey-win-x64.zip",
             "0123456789ABCDEF0123456789ABCDEF0123456789ABCDEF0123456789ABCDEF"
         ));
+        assert_eq!(
+            expected_sha256_for(&sums, "mskey-win-x64.zip"),
+            Some("0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef")
+        );
         assert!(!verify_sha256_match(&sums, "mskey-win-x64.zip", "deadbeef"));
+    }
+
+    #[test]
+    fn sha256_matches_standard_vectors_and_files() {
+        assert_eq!(
+            sha256_bytes(b""),
+            "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+        );
+        assert_eq!(
+            sha256_bytes(b"abc"),
+            "ba7816bf8f01cfea414140de5dae2223b00361a396177a9cb410ff61f20015ad"
+        );
+        assert_eq!(
+            sha256_bytes(b"abcdbcdecdefdefgefghfghighijhijkijkljklmklmnlmnomnopnopq"),
+            "248d6a61d20638b8e5c026930c3e6039a33ce45964ff2167f6ecedd419db06c1"
+        );
+        let dir = std::env::temp_dir();
+        let path = dir.join(format!("mskey_sha_test_{}.bin", std::process::id()));
+        std::fs::write(&path, b"mskey-update-payload-0123456789").unwrap();
+        let file_hex = sha256_file(&path).unwrap();
+        let _ = std::fs::remove_file(&path);
+        assert_eq!(file_hex, sha256_bytes(b"mskey-update-payload-0123456789"));
+    }
+
+    #[test]
+    fn release_asset_selectors_pick_platform_packages() {
+        let mk = |name: &str| ReleaseAsset {
+            name: name.to_string(),
+            download_url: format!("https://example.com/{name}"),
+            size: 1024,
+        };
+        let assets = vec![
+            mk("SHA256SUMS"),
+            mk("MSKey-Setup-0.1.5-windows-x64.exe"),
+            mk("MSKey-0.1.5-windows-x64-portable.zip"),
+            mk("MSKey-0.1.5-windows-arm64-portable.zip"),
+            mk("mskey-cli-0.1.5-windows-x64.zip"),
+            mk("mskey_0.1.5_amd64.deb"),
+            mk("MSKey-0.1.5-linux-amd64.tar.gz"),
+            mk("mskey-cli-0.1.5-linux-amd64.tar.gz"),
+            mk("MSKey-0.1.5-macos-universal.dmg"),
+            mk("MSKey-0.1.5-macos-universal.zip"),
+            mk("mskey-cli-0.1.5-macos-universal.tar.gz"),
+        ];
+
+        assert_eq!(checksum_asset(&assets).unwrap().name, "SHA256SUMS");
+        assert_eq!(
+            preferred_windows_asset(&assets, "x86_64", true).unwrap().name,
+            "MSKey-Setup-0.1.5-windows-x64.exe"
+        );
+        assert_eq!(
+            preferred_windows_asset(&assets, "x86_64", false).unwrap().name,
+            "MSKey-0.1.5-windows-x64-portable.zip"
+        );
+        assert_eq!(
+            preferred_windows_asset(&assets, "aarch64", true).unwrap().name,
+            "MSKey-0.1.5-windows-arm64-portable.zip"
+        );
+        assert_eq!(
+            preferred_linux_asset(&assets, "x86_64", true).unwrap().name,
+            "mskey_0.1.5_amd64.deb"
+        );
+        assert_eq!(
+            preferred_linux_asset(&assets, "x86_64", false).unwrap().name,
+            "MSKey-0.1.5-linux-amd64.tar.gz"
+        );
+        assert_eq!(
+            preferred_macos_asset(&assets, true).unwrap().name,
+            "MSKey-0.1.5-macos-universal.zip"
+        );
+        assert_eq!(
+            preferred_macos_asset(&assets, false).unwrap().name,
+            "MSKey-0.1.5-macos-universal.dmg"
+        );
+        assert_eq!(
+            preferred_cli_asset(&assets, "windows", "x86_64").unwrap().name,
+            "mskey-cli-0.1.5-windows-x64.zip"
+        );
+        assert_eq!(
+            preferred_cli_asset(&assets, "linux", "x86_64").unwrap().name,
+            "mskey-cli-0.1.5-linux-amd64.tar.gz"
+        );
+        assert_eq!(
+            preferred_cli_asset(&assets, "macos", "aarch64").unwrap().name,
+            "mskey-cli-0.1.5-macos-universal.tar.gz"
+        );
+        assert_eq!(format_bytes_human(2_621_440), "2.5 MB");
+        assert_eq!(format_bytes_human(2048), "2 KB");
+        assert_eq!(release_notes_preview("abcdef", 4), "abcd...");
     }
 }

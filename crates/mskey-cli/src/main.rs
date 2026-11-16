@@ -2,6 +2,7 @@ mod args;
 mod commands;
 mod help;
 mod io_util;
+mod update_cmd;
 
 use std::io::{self, Write};
 use std::process::ExitCode;
@@ -51,6 +52,7 @@ fn run() -> Result<ExitCode, String> {
         "check" => commands::run_check(&args[1..]),
         "import-evkey" => commands::run_import_evkey(&args[1..]),
         "macros" => commands::run_macros(&args[1..]),
+        "update" => update_cmd::run_update(&args[1..]),
         other => Err(format!(
             "unknown command '{other}'; run 'mskey --help' for usage"
         )),
