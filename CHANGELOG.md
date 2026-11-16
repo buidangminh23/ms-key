@@ -2,6 +2,12 @@
 
 All notable changes to MS Key are documented here. The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and the project uses [Semantic Versioning](https://semver.org/).
 
+## [Unreleased]
+
+### Fixed
+
+- **Windows: MS Key closing by itself**: a panic in the release build aborted the app (`0xc0000409`) with nothing recorded, so the input method just disappeared. MS Key now writes the panic message and source location to `%APPDATA%\MSKey\crash.log` and starts itself again when it had been running for at least 30 seconds (a crash right at startup is not retried, to avoid a loop).
+
 ## [0.1.7] - 2026-11-16
 
 ### Fixed
