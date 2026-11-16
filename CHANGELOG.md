@@ -2,6 +2,13 @@
 
 All notable changes to MS Key are documented here. The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and the project uses [Semantic Versioning](https://semver.org/).
 
+## [Unreleased]
+
+### Fixed
+
+- **V/E switch popup still showing after 0.1.4**: settings saved before the popup default changed kept `show_switch_osd: true`, so the popup never went away for existing users. Configs without `config_version` now get the switch popup and caret HUD turned off once (Windows, Linux, CLI and macOS); turning them back on afterwards is kept.
+- **Windows single-instance**: a second launch now opens the running instance's window, and the single-instance lock is scoped per desktop.
+
 ## [0.1.6] - 2026-11-16
 
 ### Added

@@ -434,3 +434,25 @@ fn u_horn_w_ee_circumflex_revert_and_english_guards() {
     assert_eq!(type_with(|_| {}, "ghw"), "ghw");
     assert_eq!(type_with(|_| {}, "nghw"), "nghw");
 }
+
+#[test]
+fn legacy_config_turns_switch_popup_off_once() {
+    let legacy = r#"{"vietnamese_enabled":true,"show_switch_osd":true,"show_caret_osd":true}"#;
+    let migrated = Config::from_json_str(legacy).expect("parse legacy config");
+    assert!(!migrated.show_switch_osd);
+    assert!(!migrated.show_caret_osd);
+    assert_eq!(migrated.config_version, 1);
+
+    let mut chosen = migrated.clone();
+    chosen.show_switch_osd = true;
+    chosen.show_caret_osd = true;
+    let saved = chosen.to_json_pretty().expect("serialize config");
+    assert!(saved.contains("\"config_version\": 1"));
+    let reloaded = Config::from_json_str(&saved).expect("reload config");
+    assert!(reloaded.show_switch_osd);
+    assert!(reloaded.show_caret_osd);
+
+    let fresh = Config::from_json_str(&Config::default().to_json_pretty().unwrap()).unwrap();
+    assert_eq!(fresh, Config::default());
+    assert!(!fresh.show_switch_osd);
+}

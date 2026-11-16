@@ -251,7 +251,11 @@ pub struct Config {
     pub active_profile: String,
     pub profiles: Vec<ConfigProfile>,
     pub sync_config_path: String,
+    #[serde(default)]
+    pub config_version: u32,
 }
+
+pub const CONFIG_VERSION: u32 = 1;
 
 impl Default for Config {
     fn default() -> Self {
@@ -325,13 +329,24 @@ impl Default for Config {
             active_profile: "Mặc định".to_string(),
             profiles: Vec::new(),
             sync_config_path: String::new(),
+            config_version: CONFIG_VERSION,
         }
     }
 }
 
 impl Config {
     pub fn from_json_str(raw: &str) -> Result<Self, serde_json::Error> {
-        serde_json::from_str(raw)
+        let mut cfg: Self = serde_json::from_str(raw)?;
+        cfg.migrate();
+        Ok(cfg)
+    }
+
+    pub fn migrate(&mut self) {
+        if self.config_version < 1 {
+            self.show_switch_osd = false;
+            self.show_caret_osd = false;
+        }
+        self.config_version = self.config_version.max(CONFIG_VERSION);
     }
 
     pub fn to_json_pretty(&self) -> Result<String, serde_json::Error> {
