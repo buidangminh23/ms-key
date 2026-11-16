@@ -2,7 +2,7 @@
 
 All notable changes to MS Key are documented here. The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and the project uses [Semantic Versioning](https://semver.org/).
 
-## [Unreleased]
+## [0.1.4] - 2026-11-16
 
 ### Changed
 
@@ -23,6 +23,15 @@ All notable changes to MS Key are documented here. The format follows [Keep a Ch
 ### Fixed
 
 - **macOS: typing no longer stops silently after an update.** MS Key is ad-hoc signed, so every new build gets a new code hash and macOS stops honouring the old Accessibility grant. The app used to keep showing a red **V** while converting nothing. Now the letter turns grey, the menu explains that Accessibility is missing and offers **Cấp quyền Trợ năng...** and **Mở cài đặt Trợ năng...**, and a left click opens that menu instead of switching V/E. MS Key checks every 2 seconds and starts typing again as soon as access is granted, with no restart. It also rebuilds an event tap that macOS has disabled, and it can no longer end up with two taps when the first one starts slowly. The system permission prompt appears at most once per app version.
+
+### Downloads
+
+- macOS 13+ (Intel and Apple Silicon): run `curl -fsSL https://github.com/buidangminh23/ms-key/releases/latest/download/install-macos.sh | bash`. The DMG `MSKey-0.1.4-macos-universal.dmg` also works; after a browser download, run `xattr -dr com.apple.quarantine /Applications/MSKey.app`. After updating, macOS may stop honouring the old Accessibility grant: remove MS Key from System Settings → Privacy & Security → Accessibility with "–" and allow it again.
+- Windows 10/11: `MSKey-Setup-0.1.4-windows-x64.exe`, `MSKey-0.1.4-windows-x64-portable.zip` or `MSKey-0.1.4-windows-arm64-portable.zip`.
+- Linux: `mskey_0.1.4_amd64.deb`, `mskey_0.1.4_arm64.deb`, `MSKey-0.1.4-linux-amd64.tar.gz` or `MSKey-0.1.4-linux-arm64.tar.gz`.
+- Command-line tool `mskey`: `mskey-cli-0.1.4-<platform>.tar.gz` or `.zip` for Windows, Linux and macOS.
+
+All downloads include SHA-256 checksums.
 
 ## [0.1.3] - 2026-11-15
 
