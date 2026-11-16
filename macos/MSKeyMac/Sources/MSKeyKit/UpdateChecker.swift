@@ -210,6 +210,9 @@ public final class UpdateChecker: ObservableObject {
           i=$((i+1))
         done
         xattr -dr com.apple.quarantine \(staged) >/dev/null 2>&1 || true
+        if [ -f \(staged)/Contents/Resources/macos-local-sign.sh ]; then
+          /bin/bash \(staged)/Contents/Resources/macos-local-sign.sh \(staged) >/dev/null 2>&1 || true
+        fi
         rm -rf \(backup)
         if mv \(target) \(backup); then
           if mv \(staged) \(target); then

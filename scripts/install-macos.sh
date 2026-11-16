@@ -107,6 +107,14 @@ run_stage "Verifying app signature" codesign --verify --deep --strict "${NEW_APP
 
 find "${NEW_APP}" -exec xattr -d com.apple.quarantine {} \; 2>/dev/null || true
 
+LOCAL_SIGNED=0
+SIGNER="${NEW_APP}/Contents/Resources/macos-local-sign.sh"
+if [ -f "${SIGNER}" ] && run_stage "Signing with this Mac's MS Key certificate" bash "${SIGNER}" "${NEW_APP}"; then
+    LOCAL_SIGNED=1
+else
+    echo "Note: kept the release signature; Accessibility may need to be allowed again after this update."
+fi
+
 STAGED="${DEST_DIR}/.${APP_NAME}.new.$$"
 BACKUP="${DEST_DIR}/.${APP_NAME}.old.$$"
 rm -rf "${STAGED}"
@@ -125,8 +133,13 @@ REMAINING="$(find "${DEST_APP}" -exec xattr -p com.apple.quarantine {} \; 2>/dev
 [ "${REMAINING}" = "0" ] || fail "quarantine flag still present on ${REMAINING} files"
 
 echo "Installed MS Key ${VERSION} to ${DEST_APP}"
-echo "On first launch, allow MS Key in System Settings > Privacy & Security > Accessibility."
-echo "After each update, remove the old MS Key entry there and allow it again."
+if [ "${LOCAL_SIGNED}" = "1" ]; then
+    echo "MS Key is signed with a certificate kept on this Mac, so the Accessibility permission stays across future updates."
+    echo "If typing does not work after this first switch, remove the old MS Key entry in System Settings > Privacy & Security > Accessibility and allow it once more."
+else
+    echo "On first launch, allow MS Key in System Settings > Privacy & Security > Accessibility."
+    echo "After each update, remove the old MS Key entry there and allow it again."
+fi
 
 if [ "${LAUNCH}" = "1" ]; then
     open "${DEST_APP}"

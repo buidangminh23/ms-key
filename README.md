@@ -81,7 +81,7 @@ Or download `MSKey-<version>-macos-universal.dmg` from the latest release and op
 xattr -dr com.apple.quarantine /Applications/MSKey.app
 ```
 
-On first launch, allow MS Key in **System Settings > Privacy & Security > Accessibility**. After each update, remove the old MS Key entry there and allow it again.
+On first launch, allow MS Key in **System Settings > Privacy & Security > Accessibility**. The installer and the in-app updater sign MS Key with a certificate created once on your Mac (kept in `~/Library/Application Support/MSKey/signing`), so the permission stays across updates. If you installed by dragging the app out of the DMG, remove the old MS Key entry after an update and allow it again.
 
 ## Quick start
 

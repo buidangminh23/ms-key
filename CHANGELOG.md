@@ -2,6 +2,12 @@
 
 All notable changes to MS Key are documented here. The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and the project uses [Semantic Versioning](https://semver.org/).
 
+## [Unreleased]
+
+### Fixed
+
+- **macOS asking for Accessibility again after every update**: releases are ad-hoc signed, so each build had a new code hash and macOS treated it as a different app. The curl installer, the DMG installer and the in-app updater now sign MS Key with a certificate created once on the Mac (`~/Library/Application Support/MSKey/signing`, its own keychain, never added to the search list). The designated requirement becomes `identifier "org.mskey.mac" and certificate leaf = H"…"`, which stays the same across updates, so Accessibility only has to be allowed once more after this switch.
+
 ## [0.1.8] - 2026-11-16
 
 ### Fixed
