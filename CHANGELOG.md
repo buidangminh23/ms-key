@@ -7,6 +7,7 @@ All notable changes to MS Key are documented here. The format follows [Keep a Ch
 ### Fixed
 
 - **V/E switch popup still showing after 0.1.4**: settings saved before the popup default changed kept `show_switch_osd: true`, so the popup never went away for existing users. Configs without `config_version` now get the switch popup and caret HUD turned off once (Windows, Linux, CLI and macOS); turning them back on afterwards is kept.
+- **Windows tray click switching to English**: clicking or right-clicking the tray icon made the taskbar (`explorer.exe`) the foreground app, so an `explorer.exe` "always English" rule flipped the mode to E. The taskbar, tray overflow and MS Key's own windows no longer change the current app or its V/E mode; right-click only opens the quick settings menu.
 - **Windows single-instance**: a second launch now opens the running instance's window, and the single-instance lock is scoped per desktop.
 
 ## [0.1.6] - 2026-11-16
