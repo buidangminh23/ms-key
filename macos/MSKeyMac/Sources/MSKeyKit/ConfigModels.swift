@@ -436,7 +436,7 @@ public struct MSKeyConfig: Codable, Equatable, Sendable {
     public var custom_switch_hotkey: HotkeyComboModel = HotkeyComboModel(ctrl: true, alt: true, shift: false, win_cmd: false, key_code: 0x56)
     public var clipboard_convert_hotkey: HotkeyComboModel = HotkeyComboModel()
     public var beep_on_switch: Bool = false
-    public var show_switch_osd: Bool = true
+    public var show_switch_osd: Bool = false
     public var paste_via_shift_insert: Bool = false
     public var send_delay_ms: UInt8 = 2
     public var auto_start: Bool = true
@@ -454,7 +454,7 @@ public struct MSKeyConfig: Codable, Equatable, Sendable {
     public var quickCapslockSwitch: Bool = false
     public var undoLastWordHotkey: HotkeyComboModel = HotkeyComboModel(ctrl: true, alt: false, shift: true, win_cmd: false, key_code: 0x5A)
     public var convertSelectionHotkey: HotkeyComboModel = HotkeyComboModel(ctrl: true, alt: false, shift: true, win_cmd: false, key_code: 0x76)
-    public var showCaretOsd: Bool = true
+    public var showCaretOsd: Bool = false
     public var reeditSurroundingWord: Bool = true
     public var checkUpdatesOnStart: Bool = false
     public var activeProfile: String = "Mặc định"

@@ -67,7 +67,8 @@ final class MSKeyMacTests: XCTestCase {
         let legacyJSON = "{\"vietnamese_enabled\":false,\"custom_keymap\":{\"acute\":\"s\"}}"
         let legacyDecoded = legacyJSON.data(using: .utf8).flatMap { try? JSONDecoder().decode(MSKeyConfig.self, from: $0) }
         XCTAssertEqual(legacyDecoded?.vietnamese_enabled, false)
-        XCTAssertEqual(legacyDecoded?.show_switch_osd, true)
+        XCTAssertEqual(legacyDecoded?.show_switch_osd, false)
+        XCTAssertEqual(legacyDecoded?.showCaretOsd, false)
         XCTAssertEqual(legacyDecoded?.send_delay_ms, 2)
         XCTAssertEqual(legacyDecoded?.auto_start, true)
         XCTAssertEqual(legacyDecoded?.show_on_startup, false)
@@ -213,7 +214,7 @@ final class MSKeyMacTests: XCTestCase {
         cfg.quickCapslockSwitch = true
         cfg.undoLastWordHotkey = HotkeyComboModel(ctrl: true, alt: true, shift: false, win_cmd: false, key_code: 0x5A)
         cfg.convertSelectionHotkey = HotkeyComboModel(ctrl: true, alt: false, shift: true, win_cmd: false, key_code: 0x77)
-        cfg.showCaretOsd = false
+        cfg.showCaretOsd = true
         cfg.reeditSurroundingWord = false
         cfg.checkUpdatesOnStart = true
         cfg.activeProfile = "CustomDev"
@@ -231,7 +232,7 @@ final class MSKeyMacTests: XCTestCase {
         XCTAssertTrue(json.contains("\"smart_code_bypass\":false"))
         XCTAssertTrue(json.contains("\"macro_trigger_tab_only\":true"))
         XCTAssertTrue(json.contains("\"quick_capslock_switch\":true"))
-        XCTAssertTrue(json.contains("\"show_caret_osd\":false"))
+        XCTAssertTrue(json.contains("\"show_caret_osd\":true"))
         XCTAssertTrue(json.contains("\"reedit_surrounding_word\":false"))
         XCTAssertTrue(json.contains("\"check_updates_on_start\":true"))
         XCTAssertTrue(json.contains("\"sync_config_path\":\"\\/tmp\\/mskey-sync-test.json\"") || json.contains("\"sync_config_path\":\"/tmp/mskey-sync-test.json\""))
@@ -251,7 +252,7 @@ final class MSKeyMacTests: XCTestCase {
         XCTAssertEqual(decoded.quickCapslockSwitch, true)
         XCTAssertEqual(decoded.undoLastWordHotkey.key_code, 0x5A)
         XCTAssertEqual(decoded.convertSelectionHotkey.key_code, 0x77)
-        XCTAssertEqual(decoded.showCaretOsd, false)
+        XCTAssertEqual(decoded.showCaretOsd, true)
         XCTAssertEqual(decoded.reeditSurroundingWord, false)
         XCTAssertEqual(decoded.checkUpdatesOnStart, true)
         XCTAssertEqual(decoded.activeProfile, "CustomDev")
@@ -264,7 +265,7 @@ final class MSKeyMacTests: XCTestCase {
         XCTAssertEqual(legacy.macroTriggerTabOnly, false)
         XCTAssertEqual(legacy.holdEnglishKey, .none)
         XCTAssertEqual(legacy.quickCapslockSwitch, false)
-        XCTAssertEqual(legacy.showCaretOsd, true)
+        XCTAssertEqual(legacy.showCaretOsd, false)
         XCTAssertEqual(legacy.reeditSurroundingWord, true)
         XCTAssertEqual(legacy.checkUpdatesOnStart, false)
         XCTAssertEqual(legacy.activeProfile, "Mặc định")

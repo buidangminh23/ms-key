@@ -110,7 +110,7 @@ Press **Esc** right after a word to undo the Vietnamese marks and get back the k
 - **Hold-to-English & CapsLock Quick Switch**: hold `RightShift`, `LeftShift`, `RightAlt`, `RightCtrl`, or `CapsLock` (`hold_english_key`) to temporarily type English, or enable single-tap CapsLock mode switching (`quick_capslock_switch`).
 - **Undo Last Word** (`Ctrl+Shift+Z` by default, alongside `Esc` before delimiters): restores raw keystrokes on the previous committed word.
 - **Surrounding-text Re-edit** (`reedit_surrounding_word`): continues editing marks and tones when returning to an existing word before the cursor.
-- **Caret HUD** (`show_caret_osd`): compact **V**/**E** overlay near the caret on mode switches.
+- **Caret HUD** (`show_caret_osd`): compact **V**/**E** overlay near the caret on mode switches. Off by default, like the mode-switch popup (`show_switch_osd`); turn them on in settings.
 - Quick typing: `w` → `ư`, `[` → `ơ`, `]` → `ư`, `cc` → `ch`, `nn` → `ng`, `f` → `ph` at the start of a word, and more.
 - Optional capitalisation at the start of a sentence.
 
