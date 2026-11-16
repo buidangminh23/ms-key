@@ -1,5 +1,6 @@
 #![cfg_attr(not(test), windows_subsystem = "windows")]
 
+mod crash;
 mod dialog_convert;
 mod dialog_custom;
 mod dialog_helpers;
@@ -49,6 +50,7 @@ fn main() {
         return;
     }
 
+    crate::crash::install(true);
     let relaunching = args.iter().any(|a| a == "--relaunch");
     let want_show = args.iter().any(|a| a == "--show");
     let mut instance_guard = acquire_single_instance_for(relaunching);
