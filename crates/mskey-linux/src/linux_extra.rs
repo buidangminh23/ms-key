@@ -385,10 +385,12 @@ pub fn write_clipboard_text(text: &str) -> bool {
     }
     #[cfg(target_os = "linux")]
     {
-        return linux_gui::write_clipboard_gtk_safe(text);
+        linux_gui::write_clipboard_gtk_safe(text)
     }
     #[cfg(not(target_os = "linux"))]
-    false
+    {
+        false
+    }
 }
 
 pub fn check_latest_release() -> Result<ReleaseInfo, String> {
@@ -645,7 +647,7 @@ mod linux_gui {
         }
     }
 
-    fn hide_popup(cell_ref: &std::thread::LocalKey<RefCell<Option<OsdWidgets>>>) {
+    fn hide_popup(cell_ref: &'static std::thread::LocalKey<RefCell<Option<OsdWidgets>>>) {
         cell_ref.with(|cell| {
             if let Some(ref mut w) = *cell.borrow_mut() {
                 if w.timer_id != 0 {
@@ -753,7 +755,7 @@ mod linux_gui {
     }
 
     fn show_popup_pill(
-        cell_ref: &std::thread::LocalKey<RefCell<Option<OsdWidgets>>>,
+        cell_ref: &'static std::thread::LocalKey<RefCell<Option<OsdWidgets>>>,
         init_fn: fn() -> OsdWidgets,
         text: &str,
         vietnamese: bool,
