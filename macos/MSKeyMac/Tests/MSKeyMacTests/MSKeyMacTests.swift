@@ -406,4 +406,23 @@ final class MSKeyMacTests: XCTestCase {
         XCTAssertTrue(UpdateChecker.verifySHA256(sums: sums, filename: "MSKey-0.2.0-macOS.dmg", actualHex: hex))
         XCTAssertFalse(UpdateChecker.verifySHA256(sums: sums, filename: "MSKey-0.2.0-macOS.dmg", actualHex: String(repeating: "0", count: 64)))
     }
+
+    func testTapHealthRestartsAfterPermissionReturnsAndStopsWhenRevoked() {
+        XCTAssertEqual(EventTapManager.healthAction(trusted: true, state: .stopped), .start)
+        XCTAssertEqual(EventTapManager.healthAction(trusted: true, state: .disabled), .recover)
+        XCTAssertEqual(EventTapManager.healthAction(trusted: true, state: .starting), .none)
+        XCTAssertEqual(EventTapManager.healthAction(trusted: true, state: .enabled), .none)
+        XCTAssertEqual(EventTapManager.healthAction(trusted: false, state: .enabled), .stop)
+        XCTAssertEqual(EventTapManager.healthAction(trusted: false, state: .disabled), .stop)
+        XCTAssertEqual(EventTapManager.healthAction(trusted: false, state: .starting), .stop)
+        XCTAssertEqual(EventTapManager.healthAction(trusted: false, state: .stopped), .none)
+    }
+
+    @MainActor
+    func testMenuBarLetterKeepsSizeWhenTypingIsUnavailable() {
+        let ready = MenuBarController.letterImage(letter: "V", vietnamese: true)
+        let blocked = MenuBarController.letterImage(letter: "V", vietnamese: true, ready: false)
+        XCTAssertEqual(ready.size, blocked.size)
+        XCTAssertGreaterThanOrEqual(blocked.size.width, 18)
+    }
 }

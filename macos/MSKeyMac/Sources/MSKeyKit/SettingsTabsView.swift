@@ -180,8 +180,9 @@ public struct SettingsTabsView: View {
                     HStack(spacing: 8) {
                         Image(systemName: "exclamationmark.triangle.fill")
                             .foregroundStyle(.orange)
-                        Text("Cần cấp quyền Accessibility để gõ Tiếng Việt trên toàn hệ thống.")
+                        Text("Cần cấp quyền Trợ năng (Accessibility) để gõ Tiếng Việt. Sau khi cập nhật MS Key, macOS có thể không nhận quyền cũ: nếu MS Key đã có trong danh sách mà vẫn không gõ được, xoá nó (–) rồi cấp lại.")
                             .font(.caption)
+                            .fixedSize(horizontal: false, vertical: true)
                         Spacer()
                         Button("Cấp quyền") {
                             store.requestAccessibility()

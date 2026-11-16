@@ -87,9 +87,11 @@ public final class MSKeyStore: ObservableObject {
                 self.tapManager.notifyAppActivated(name, windowTitle: title)
             }
         }
-        if !tapManager.start() {
-            startPermissionWatch()
+        refreshTapHealth()
+        if !accessibilityGranted {
+            promptAccessibilityOncePerVersion()
         }
+        startTapHealthWatch()
         if config.show_on_startup {
             showMainWindow()
         }
@@ -100,29 +102,53 @@ public final class MSKeyStore: ObservableObject {
         }
     }
 
-    private func startPermissionWatch() {
+    private func startTapHealthWatch() {
         permTimer?.invalidate()
-        permTimer = Timer.scheduledTimer(withTimeInterval: 1.5, repeats: true) { [weak self] _ in
+        let timer = Timer(timeInterval: 2.0, repeats: true) { [weak self] _ in
             DispatchQueue.main.async {
-                guard let self else { return }
-                let ok = EventTapManager.hasAccessibilityPermission(prompt: false)
-                self.accessibilityGranted = ok
-                if ok {
-                    _ = self.tapManager.start()
-                    self.permTimer?.invalidate()
-                    self.permTimer = nil
-                }
+                self?.refreshTapHealth()
             }
         }
+        RunLoop.main.add(timer, forMode: .common)
+        permTimer = timer
+    }
+
+    public func refreshTapHealth() {
+        let trusted = EventTapManager.hasAccessibilityPermission(prompt: false)
+        switch EventTapManager.healthAction(trusted: trusted, state: tapManager.tapState) {
+        case .start:
+            tapManager.start()
+        case .recover:
+            tapManager.recover()
+        case .stop:
+            tapManager.stop()
+        case .none:
+            break
+        }
+        if accessibilityGranted != trusted {
+            accessibilityGranted = trusted
+        }
+        menuBar?.setTypingReady(trusted && tapManager.tapState == .enabled)
+    }
+
+    private func promptAccessibilityOncePerVersion() {
+        let key = "mskey.accessibilityPromptVersion"
+        let version = MSKeyBrand.version
+        guard UserDefaults.standard.string(forKey: key) != version else { return }
+        UserDefaults.standard.set(version, forKey: key)
+        _ = EventTapManager.hasAccessibilityPermission(prompt: true)
     }
 
     public func requestAccessibility() {
-        accessibilityGranted = EventTapManager.hasAccessibilityPermission(prompt: true)
-        if accessibilityGranted {
-            _ = tapManager.start()
-        } else {
-            startPermissionWatch()
+        _ = EventTapManager.hasAccessibilityPermission(prompt: true)
+        refreshTapHealth()
+    }
+
+    public static func openAccessibilitySettings() {
+        guard let url = URL(string: "x-apple.systempreferences:com.apple.preference.security?Privacy_Accessibility") else {
+            return
         }
+        NSWorkspace.shared.open(url)
     }
 
     public func toggleVE() {

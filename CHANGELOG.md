@@ -16,6 +16,10 @@ All notable changes to MS Key are documented here. The format follows [Keep a Ch
 - **`mskey` CLI (`crates/mskey-cli`)**: added standalone command-line tool with `convert`, `detect`, `check`, `import-evkey`, and `macros export`/`import` subcommands.
 - **Packaging & Release Matrix**: added manifests under `packaging/` for WinGet, Scoop, Homebrew (Cask + CLI Formula), and AUR (`PKGBUILD` + `.SRCINFO`); expanded CI with `cargo test -p mskey-cli` and `cargo clippy -- -D warnings`, and added `windows-arm64`, `linux-arm64`, and universal `mskey-cli` release builds.
 
+### Fixed
+
+- **macOS: typing no longer stops silently after an update.** MS Key is ad-hoc signed, so every new build gets a new code hash and macOS stops honouring the old Accessibility grant. The app used to keep showing a red **V** while converting nothing. Now the letter turns grey, the menu explains that Accessibility is missing and offers **Cấp quyền Trợ năng...** and **Mở cài đặt Trợ năng...**, and a left click opens that menu instead of switching V/E. MS Key checks every 2 seconds and starts typing again as soon as access is granted, with no restart. It also rebuilds an event tap that macOS has disabled, and it can no longer end up with two taps when the first one starts slowly. The system permission prompt appears at most once per app version.
+
 ## [0.1.3] - 2026-11-15
 
 ### Changed

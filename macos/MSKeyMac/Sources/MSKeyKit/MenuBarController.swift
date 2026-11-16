@@ -6,6 +6,7 @@ public final class MenuBarController: NSObject {
     private var statusItem: NSStatusItem?
     private var menu = NSMenu()
     private weak var store: MSKeyStore?
+    private var typingReady = true
 
     public init(store: MSKeyStore) {
         self.store = store
@@ -23,9 +24,19 @@ public final class MenuBarController: NSObject {
 
     public func updateStatusIcon(vietnamese: Bool) {
         guard let button = statusItem?.button else { return }
-        button.image = Self.letterImage(letter: vietnamese ? "V" : "E", vietnamese: vietnamese)
-        button.toolTip = vietnamese ? "MS Key — Tiếng Việt (V)" : "MS Key — Tiếng Anh (E)"
+        button.image = Self.letterImage(letter: vietnamese ? "V" : "E", vietnamese: vietnamese, ready: typingReady)
+        if typingReady {
+            button.toolTip = vietnamese ? "MS Key — Tiếng Việt (V)" : "MS Key — Tiếng Anh (E)"
+        } else {
+            button.toolTip = "MS Key — chưa gõ được tiếng Việt vì thiếu quyền Trợ năng. Bấm để xem cách cấp quyền."
+        }
         rebuildMenu()
+    }
+
+    public func setTypingReady(_ ready: Bool) {
+        guard ready != typingReady else { return }
+        typingReady = ready
+        updateStatusIcon(vietnamese: store?.effectiveVE ?? true)
     }
 
     public func refreshProfilesMenu() {
@@ -35,6 +46,18 @@ public final class MenuBarController: NSObject {
     public func rebuildMenu() {
         guard let store else { return }
         let menu = NSMenu()
+        if !typingReady {
+            let warning = NSMenuItem(title: "Chưa gõ được tiếng Việt: MS Key thiếu quyền Trợ năng", action: nil, keyEquivalent: "")
+            warning.image = NSImage(systemSymbolName: "exclamationmark.triangle.fill", accessibilityDescription: nil)
+            warning.isEnabled = false
+            menu.addItem(warning)
+            menu.addItem(makeItem("Cấp quyền Trợ năng...", action: #selector(onGrantAccessibility)))
+            menu.addItem(makeItem("Mở cài đặt Trợ năng...", action: #selector(onOpenAccessibilitySettings)))
+            let hint = NSMenuItem(title: "Đã bật mà vẫn lỗi: xoá MS Key khỏi danh sách (–) rồi cấp lại", action: nil, keyEquivalent: "")
+            hint.isEnabled = false
+            menu.addItem(hint)
+            menu.addItem(.separator())
+        }
         let toggleTitle = store.effectiveVE ? "Chuyển sang Tiếng Anh (E)" : "Chuyển sang Tiếng Việt (V)"
         menu.addItem(makeItem(toggleTitle, action: #selector(onToggleVE)))
         menu.addItem(makeItem("Mở Bảng điều khiển...", action: #selector(onOpenSettings)))
@@ -89,7 +112,9 @@ public final class MenuBarController: NSObject {
 
     @objc private func onStatusClick() {
         let event = NSApp.currentEvent
-        let wantsMenu = event?.type == .rightMouseUp || event?.modifierFlags.contains(.control) == true
+        let wantsMenu = !typingReady
+            || event?.type == .rightMouseUp
+            || event?.modifierFlags.contains(.control) == true
         guard wantsMenu, let item = statusItem, let button = item.button else {
             store?.toggleVE()
             return
@@ -108,10 +133,15 @@ public final class MenuBarController: NSObject {
 
     static let letterInkHeight: CGFloat = 16
 
-    static func letterImage(letter: String, vietnamese: Bool) -> NSImage {
-        let color = vietnamese
-            ? NSColor(srgbRed: 0xD1 / 255, green: 0x34 / 255, blue: 0x38 / 255, alpha: 1)
-            : NSColor(srgbRed: 0x00 / 255, green: 0x78 / 255, blue: 0xD4 / 255, alpha: 1)
+    static func letterImage(letter: String, vietnamese: Bool, ready: Bool = true) -> NSImage {
+        let color: NSColor
+        if !ready {
+            color = .secondaryLabelColor
+        } else if vietnamese {
+            color = NSColor(srgbRed: 0xD1 / 255, green: 0x34 / 255, blue: 0x38 / 255, alpha: 1)
+        } else {
+            color = NSColor(srgbRed: 0x00 / 255, green: 0x78 / 255, blue: 0xD4 / 255, alpha: 1)
+        }
         let probe = NSFont.systemFont(ofSize: 100, weight: .bold)
         let font = NSFont.systemFont(ofSize: 100 * letterInkHeight / probe.capHeight, weight: .bold)
         let text = NSAttributedString(string: letter, attributes: [.font: font, .foregroundColor: color])
@@ -127,6 +157,8 @@ public final class MenuBarController: NSObject {
     }
 
     @objc private func onToggleVE() { store?.toggleVE() }
+    @objc private func onGrantAccessibility() { store?.requestAccessibility() }
+    @objc private func onOpenAccessibilitySettings() { MSKeyStore.openAccessibilitySettings() }
     @objc private func onOpenSettings() { store?.showMainWindow() }
     @objc private func onOpenConverter() { store?.openSheet(.converter) }
     @objc private func onOpenMacros() { store?.openSheet(.macros) }
