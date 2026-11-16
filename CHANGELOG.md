@@ -4,6 +4,10 @@ All notable changes to MS Key are documented here. The format follows [Keep a Ch
 
 ## [Unreleased]
 
+### Changed
+
+- The V/E popup no longer appears when you switch between Vietnamese and English. The mode-switch popup (`show_switch_osd`) and the caret HUD (`show_caret_osd`) are now off by default on Windows, macOS and Linux. Existing settings are kept, and both can still be turned on in settings.
+
 ### Added
 
 - **Smart Code Bypass** (`smart_code_bypass`): automatically leaves camelCase, `snake_case`/`__init__`, alphanumeric tokens (such as `sha256`), URLs, email addresses, and file paths unaccented.

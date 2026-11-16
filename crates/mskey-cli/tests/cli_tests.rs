@@ -289,7 +289,7 @@ fn import_evkey_writes_valid_config_json() {
     let tree_path = dir.file("evkey.tree");
     let out_path = dir.file("config.json");
 
-    let tree = "setting{\nQTelex=1\nSStartConsonant=1\nSEndConsonant=1\nSKey=4\nShowOSD=0\n}\n[macro]\nddn:Đà Nẵng\\nVN\non_vn{\n*chrome*\n}\n";
+    let tree = "setting{\nQTelex=1\nSStartConsonant=1\nSEndConsonant=1\nSKey=4\nShowOSD=1\n}\n[macro]\nddn:Đà Nẵng\\nVN\non_vn{\n*chrome*\n}\n";
     fs::write(&tree_path, tree).expect("write tree file");
 
     let out = run_args(&[
@@ -307,7 +307,7 @@ fn import_evkey_writes_valid_config_json() {
     assert!(cfg.quick_start_consonant);
     assert!(cfg.quick_end_consonant);
     assert_eq!(cfg.switch_preset, SwitchPreset::ShiftShift);
-    assert!(!cfg.show_switch_osd);
+    assert!(cfg.show_switch_osd);
     assert_eq!(
         cfg.behavior_for_app("Google-chrome.exe"),
         AppBehavior::ForceVietnamese

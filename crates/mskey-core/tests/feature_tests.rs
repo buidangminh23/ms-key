@@ -193,11 +193,11 @@ fn encoding_detect_viqr_strip_title_and_evkey_import() {
     assert_eq!(detect_convert_encoding(&nfd), ConvertEncoding::UnicodeComposite);
     assert_eq!(detect_convert_encoding("Con mèo"), ConvertEncoding::Unicode);
 
-    let ini = "setting{\nQTelex=1\nSStartConsonant=1\nSEndConsonant=1\nSKey=4\nShowOSD=0\n}\n[macro]\nddn:Đà Nẵng\\nVN\non_vn{\n*chrome*\n}\n";
+    let ini = "setting{\nQTelex=1\nSStartConsonant=1\nSEndConsonant=1\nSKey=4\nShowOSD=1\n}\n[macro]\nddn:Đà Nẵng\\nVN\non_vn{\n*chrome*\n}\n";
     let imported = Config::import_evkey_tree(ini);
     assert!(imported.quick_telex && imported.quick_start_consonant && imported.quick_end_consonant);
     assert_eq!(imported.switch_preset, SwitchPreset::ShiftShift);
-    assert!(!imported.show_switch_osd);
+    assert!(imported.show_switch_osd);
     assert_eq!(imported.behavior_for_app("Google-chrome.exe"), AppBehavior::ForceVietnamese);
     assert_eq!(imported.macros.len(), 1);
     assert_eq!(imported.macros[0].expansion, "Đà Nẵng\nVN");
