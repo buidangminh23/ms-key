@@ -25,6 +25,7 @@ public final class EventTapManager: @unchecked Sendable {
     private var runLoopSource: CFRunLoopSource?
     private var tapRunLoop: CFRunLoop?
     private var tapThread: Thread?
+    private var tapGeneration: UInt64 = 0
     private var sandboxFocused = false
     private var bufferActive = false
     private var isSelectionPopupOpen = false
@@ -52,6 +53,50 @@ public final class EventTapManager: @unchecked Sendable {
         return AXIsProcessTrusted()
     }
 
+    public enum TapState: Equatable, Sendable {
+        case stopped
+        case starting
+        case enabled
+        case disabled
+    }
+
+    public enum HealthAction: Equatable, Sendable {
+        case none
+        case start
+        case recover
+        case stop
+    }
+
+    public static func healthAction(trusted: Bool, state: TapState) -> HealthAction {
+        switch (trusted, state) {
+        case (true, .stopped): return .start
+        case (true, .disabled): return .recover
+        case (false, .starting), (false, .enabled), (false, .disabled): return .stop
+        default: return .none
+        }
+    }
+
+    public var tapState: TapState {
+        lock.lock()
+        defer { lock.unlock() }
+        guard let tap = eventTap else {
+            return tapThread == nil ? .stopped : .starting
+        }
+        return CGEvent.tapIsEnabled(tap: tap) ? .enabled : .disabled
+    }
+
+    public func recover() {
+        lock.lock()
+        let tap = eventTap
+        lock.unlock()
+        if let tap {
+            CGEvent.tapEnable(tap: tap, enable: true)
+            if CGEvent.tapIsEnabled(tap: tap) { return }
+        }
+        stop()
+        start()
+    }
+
     @discardableResult
     public func start() -> Bool {
         lock.lock()
@@ -61,12 +106,14 @@ public final class EventTapManager: @unchecked Sendable {
         guard Self.hasAccessibilityPermission(prompt: false) else { return false }
 
         let ready = DispatchSemaphore(value: 0)
+        lock.lock()
+        tapGeneration &+= 1
+        let generation = tapGeneration
         let thread = Thread { [weak self] in
-            self?.runTapLoop(ready: ready)
+            self?.runTapLoop(generation: generation, ready: ready)
         }
         thread.name = "mskey.event-tap"
         thread.qualityOfService = .userInteractive
-        lock.lock()
         tapThread = thread
         lock.unlock()
         thread.start()
@@ -74,14 +121,11 @@ public final class EventTapManager: @unchecked Sendable {
 
         lock.lock()
         let started = eventTap != nil
-        if !started {
-            tapThread = nil
-        }
         lock.unlock()
         return started
     }
 
-    private func runTapLoop(ready: DispatchSemaphore) {
+    private func runTapLoop(generation: UInt64, ready: DispatchSemaphore) {
         let mask = (1 << CGEventType.keyDown.rawValue)
             | (1 << CGEventType.flagsChanged.rawValue)
             | (1 << CGEventType.leftMouseDown.rawValue)
@@ -95,12 +139,24 @@ public final class EventTapManager: @unchecked Sendable {
             callback: cgEventTapCallback,
             userInfo: refcon
         ) else {
+            lock.lock()
+            if tapGeneration == generation {
+                tapThread = nil
+            }
+            lock.unlock()
             ready.signal()
             return
         }
         let source = CFMachPortCreateRunLoopSource(kCFAllocatorDefault, tap, 0)
         let rl = CFRunLoopGetCurrent()
         lock.lock()
+        guard tapGeneration == generation else {
+            lock.unlock()
+            CGEvent.tapEnable(tap: tap, enable: false)
+            CFMachPortInvalidate(tap)
+            ready.signal()
+            return
+        }
         eventTap = tap
         runLoopSource = source
         tapRunLoop = rl
@@ -126,6 +182,7 @@ public final class EventTapManager: @unchecked Sendable {
 
     public func stop() {
         lock.lock()
+        tapGeneration &+= 1
         let tap = eventTap
         let src = runLoopSource
         let rl = tapRunLoop
