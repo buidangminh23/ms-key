@@ -1,7 +1,8 @@
 use crate::config::InputMethod;
 use crate::engine::Engine;
+use crate::engine_helpers::has_vietnamese_diacritics;
 use crate::engine_quick::promote_open_u_ohorn;
-use crate::syllable::parse_syllable;
+use crate::syllable::{is_valid_typing_prefix, parse_syllable};
 use crate::tables::{BaseVowel, Tone, VowelFamily, decode_vowel, is_vietnamese_vowel};
 use crate::transform::{
     KeyRole, TransformOutcome, reanchor_tone, try_apply_breve, try_apply_circumflex,
@@ -91,7 +92,14 @@ impl Engine {
 
     pub(crate) fn apply_key_role(&mut self, ch: char, role: KeyRole) -> bool {
         self.last_bracket = None;
-        if !matches!(role, KeyRole::HornOrBreve(_) | KeyRole::Horn(_)) {
+        if !matches!(
+            role,
+            KeyRole::Normal
+                | KeyRole::HornOrBreve(_)
+                | KeyRole::Horn(_)
+                | KeyRole::Tone(_)
+                | KeyRole::RemoveTone
+        ) {
             self.auto_o_horn = false;
         }
         match role {
@@ -108,6 +116,14 @@ impl Engine {
                 TransformOutcome::Applied
             ),
             KeyRole::QuickOHornBracket | KeyRole::QuickUHornBracket => false,
+        }
+    }
+
+    fn sync_reverted_plain_ascii(&mut self) {
+        if !has_vietnamese_diacritics(&self.display) && self.display.iter().all(|c| c.is_ascii()) {
+            self.raw = self.display.clone();
+            self.char_raw_starts = (0..self.display.len()).collect();
+            self.had_transform = false;
         }
     }
 
@@ -128,6 +144,7 @@ impl Engine {
             TransformOutcome::Reverted => {
                 self.reverted_d = true;
                 self.display.push(ch);
+                self.sync_reverted_plain_ascii();
                 true
             }
             TransformOutcome::Ignored => false,
@@ -147,6 +164,7 @@ impl Engine {
             TransformOutcome::Reverted => {
                 self.reverted_circumflex = family.or_else(|| self.last_vowel_family());
                 self.display.push(ch);
+                self.sync_reverted_plain_ascii();
                 true
             }
             TransformOutcome::Ignored => false,
@@ -165,6 +183,7 @@ impl Engine {
             TransformOutcome::Reverted => {
                 self.reverted_breve = true;
                 self.display.push(ch);
+                self.sync_reverted_plain_ascii();
                 true
             }
             TransformOutcome::Ignored => false,
@@ -187,6 +206,7 @@ impl Engine {
             TransformOutcome::Reverted => {
                 self.reverted_horn = true;
                 self.display.push(ch);
+                self.sync_reverted_plain_ascii();
                 true
             }
             TransformOutcome::Ignored => false,
@@ -231,6 +251,7 @@ impl Engine {
                     self.reverted_horn = true;
                     self.display.push(ch);
                     self.last_w_standalone = false;
+                    self.sync_reverted_plain_ascii();
                     return true;
                 }
                 TransformOutcome::Ignored => {}
@@ -247,6 +268,7 @@ impl Engine {
                     self.reverted_breve = true;
                     self.display.push(ch);
                     self.last_w_standalone = false;
+                    self.sync_reverted_plain_ascii();
                     return true;
                 }
                 TransformOutcome::Ignored => {}
@@ -267,11 +289,7 @@ impl Engine {
         });
         self.last_w_standalone = false;
         self.reverted_w_standalone = true;
-        if self.display.len() == 1 {
-            self.raw = self.display.clone();
-            self.char_raw_starts = vec![0];
-            self.had_transform = false;
-        }
+        self.sync_reverted_plain_ascii();
         true
     }
 
@@ -302,12 +320,18 @@ impl Engine {
         }
         let mut candidate = self.display.clone();
         candidate.push('ư');
-        parse_syllable(&candidate, self.config.allow_fjwz).is_some()
+        parse_syllable(&candidate, self.config.allow_fjwz).is_some_and(|parsed| {
+            parsed.vowels.len() == 1
+                && parsed.onset != "p"
+                && is_valid_typing_prefix(&parsed, self.config.allow_fjwz)
+        })
     }
 
     pub(crate) fn append_normal_char(&mut self, ch: char) {
         self.last_w_standalone = false;
-        self.auto_o_horn = false;
+        if is_vietnamese_vowel(ch) && !matches!(ch.to_ascii_lowercase(), 'i' | 'u') {
+            self.auto_o_horn = false;
+        }
         if self.config.vietnamese_enabled
             && matches!(ch, 'o' | 'O')
             && !self.reverted_horn

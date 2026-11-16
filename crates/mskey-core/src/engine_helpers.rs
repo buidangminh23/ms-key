@@ -73,6 +73,8 @@ pub(crate) fn should_auto_restore(
     display_str: &str,
     raw_str: &str,
     has_reverted: bool,
+    reverted_circumflex: Option<crate::tables::VowelFamily>,
+    delimiter: char,
 ) -> bool {
     if display_str == raw_str {
         return false;
@@ -80,9 +82,18 @@ pub(crate) fn should_auto_restore(
     if is_standalone_marked_letter(display) && raw_str.chars().count() <= 2 {
         return false;
     }
+    if delimiter == '\'' && is_english_contraction_stem(raw_str) {
+        return true;
+    }
     if has_reverted
         && !has_vietnamese_diacritics(display)
         && !dict::is_english_word(raw_str)
+    {
+        return false;
+    }
+    if let Some(fam) = reverted_circumflex
+        && !dict::is_english_word(raw_str)
+        && has_reverted_circumflex_pair(display, fam)
     {
         return false;
     }
@@ -102,10 +113,48 @@ pub(crate) fn should_auto_restore(
     let Some(parsed) = parse_syllable(display, config.allow_fjwz) else {
         return true;
     };
+    if matches!(parsed.onset.as_str(), "f" | "j" | "w" | "z") {
+        return true;
+    }
     if !is_valid_complete_syllable(&parsed, config.allow_fjwz) {
         return true;
     }
     dict::is_english_word(raw_str) && !dict::is_keep_word(raw_str)
+}
+
+fn is_english_contraction_stem(raw_str: &str) -> bool {
+    let lower = raw_str.to_ascii_lowercase();
+    matches!(
+        lower.as_str(),
+        "didn"
+            | "doesn"
+            | "don"
+            | "hadn"
+            | "hasn"
+            | "haven"
+            | "isn"
+            | "aren"
+            | "wasn"
+            | "weren"
+            | "wouldn"
+            | "couldn"
+            | "shouldn"
+            | "mustn"
+            | "needn"
+            | "ain"
+    )
+}
+
+fn has_reverted_circumflex_pair(display: &[char], fam: crate::tables::VowelFamily) -> bool {
+    let target = match fam {
+        crate::tables::VowelFamily::A => 'a',
+        crate::tables::VowelFamily::E => 'e',
+        crate::tables::VowelFamily::O => 'o',
+        _ => return false,
+    };
+    display
+        .windows(2)
+        .any(|w| w[0].to_ascii_lowercase() == target && w[1].to_ascii_lowercase() == target)
 }
 
 fn is_non_canonical_english_collision(
@@ -172,7 +221,7 @@ fn is_standalone_marked_letter(display: &[char]) -> bool {
         || decode_vowel(*c).is_some_and(|(b, t, _)| t == Tone::None && strip_vowel_diacritic(b) != b)
 }
 
-fn has_vietnamese_diacritics(display: &[char]) -> bool {
+pub(crate) fn has_vietnamese_diacritics(display: &[char]) -> bool {
     display.iter().any(|&c| {
         matches!(c, 'đ' | 'Đ')
             || decode_vowel(c).is_some_and(|(b, t, _)| t != Tone::None || strip_vowel_diacritic(b) != b)

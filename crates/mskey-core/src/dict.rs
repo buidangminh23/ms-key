@@ -67,7 +67,32 @@ pub fn is_english_word(word: &str) -> bool {
         return false;
     }
     let lower = word.to_lowercase();
-    EN_WORDS.contains(lower.as_str())
+    if EN_WORDS.contains(lower.as_str()) {
+        return true;
+    }
+    has_english_inflected_stem(&lower)
+}
+
+fn has_english_inflected_stem(lower: &str) -> bool {
+    if lower.len() < 5 || !lower.is_ascii() {
+        return false;
+    }
+    if let Some(stem) = lower.strip_suffix('s')
+        && stem.len() >= 4
+        && !stem.ends_with('s')
+        && EN_WORDS.contains(stem)
+    {
+        return true;
+    }
+    for suffix in ["es", "ed", "ing"] {
+        if let Some(stem) = lower.strip_suffix(suffix)
+            && stem.len() >= 4
+            && EN_WORDS.contains(stem)
+        {
+            return true;
+        }
+    }
+    false
 }
 
 pub fn is_keep_word(word: &str) -> bool {

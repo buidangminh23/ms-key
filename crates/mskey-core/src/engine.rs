@@ -426,9 +426,7 @@ impl Engine {
         } else if !self.raw.is_empty() {
             self.raw.pop();
         }
-        self.last_w_standalone = false;
-        self.last_bracket = None;
-        self.auto_o_horn = false;
+        self.reset_revert_flags();
         if self.display.is_empty() {
             self.clear_active_word();
         } else if self.word_bypassed {
@@ -491,7 +489,7 @@ impl Engine {
             return EngineAction::PassThrough;
         }
 
-        let display_str = self.current_word();
+        let mut display_str = self.current_word();
         let raw_str = self.raw_word();
         let tab_ok = !self.config.macro_trigger_tab_only || delimiter == '\t';
         let allow_macro = self.config.macro_enabled
@@ -568,6 +566,17 @@ impl Engine {
             };
         }
 
+        let pre_delim_display = self.display.clone();
+        if active_vietnamese
+            && !self.bypass_until_whitespace
+            && !self.word_bypassed
+            && self.config.spelling_check
+            && self.had_transform
+            && self.normalize_open_u_ohorn_word(&raw_str)
+        {
+            display_str = self.current_word();
+        }
+
         if active_vietnamese
             && !self.bypass_until_whitespace
             && !self.word_bypassed
@@ -579,9 +588,11 @@ impl Engine {
                 &display_str,
                 &raw_str,
                 self.has_any_revert(),
+                self.reverted_circumflex,
+                delimiter,
             )
         {
-            let backspaces = encoded_len(self.config.charset, &self.display);
+            let backspaces = encoded_len(self.config.charset, &pre_delim_display);
             let mut out = raw_str;
             out.push(delimiter);
             self.display = self.raw.clone();
@@ -601,6 +612,18 @@ impl Engine {
             };
         }
 
+        let norm_action = if self.display != pre_delim_display {
+            match self.diff_action(&pre_delim_display) {
+                EngineAction::Replace { backspaces, mut text } => {
+                    text.push(delimiter);
+                    EngineAction::Replace { backspaces, text }
+                }
+                EngineAction::PassThrough => EngineAction::PassThrough,
+            }
+        } else {
+            EngineAction::PassThrough
+        };
+
         self.push_history(delimiter);
         self.clear_active_word();
         self.can_pop_history = true;
@@ -609,7 +632,7 @@ impl Engine {
             self.bypass_until_whitespace = false;
         }
         self.update_sentence_state(delimiter);
-        EngineAction::PassThrough
+        norm_action
     }
 
     fn should_handle_as_delimiter(&self, ch: char) -> bool {
@@ -786,6 +809,36 @@ impl Engine {
         self.last_w_standalone = false;
         self.last_bracket = None;
         self.auto_o_horn = false;
+    }
+
+    fn normalize_open_u_ohorn_word(&mut self, raw_str: &str) -> bool {
+        if raw_str.to_ascii_lowercase().starts_with('w') || crate::dict::is_english_word(raw_str) {
+            return false;
+        }
+        let Some(parsed) = crate::syllable::parse_syllable(&self.display, self.config.allow_fjwz) else {
+            return false;
+        };
+        if !parsed.coda.is_empty() || parsed.vowels.len() != 2 {
+            return false;
+        }
+        let (b0, t0, u0) = parsed.vowels[0];
+        let (b1, _, _) = parsed.vowels[1];
+        if b0 != crate::tables::BaseVowel::UHorn || b1 != crate::tables::BaseVowel::OHorn {
+            return false;
+        }
+        let mut candidate = self.display.clone();
+        candidate[parsed.vowel_start] =
+            crate::tables::encode_vowel(crate::tables::BaseVowel::U, t0, u0);
+        let cand_str: String = candidate.iter().collect();
+        if crate::dict::is_vietnamese_word_with_custom(
+            &cand_str,
+            self.config.allow_fjwz,
+            &self.config.user_dict_words,
+        ) {
+            self.display = candidate;
+            return true;
+        }
+        false
     }
 
     fn has_any_revert(&self) -> bool {

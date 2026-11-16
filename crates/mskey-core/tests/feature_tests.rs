@@ -382,3 +382,55 @@ fn oaw_oao_oeo_cuuw_tone_before_mod_and_english_collisions() {
         "was won worst defend reset theme these there here hero visa virus sofa chose lose dose boxes xerox congo mono honor verse cheers refer refers veers texts nextjs "
     );
 }
+
+#[test]
+fn u_horn_w_ee_circumflex_revert_and_english_guards() {
+    assert_eq!(
+        type_with(
+            |_| {},
+            "thuwor thuowr thuorw huwo huow khuwo khuow dduwocjw dduowcj dduocjw nuwocsw nuwocws nguwoif nguowif nguoifw nguwowif nguwoifw giuwax giuaxw giuwx giuxw huowu huwou huouw ruowuj ruwouj ruoujw cuuws cuwus cuusw luuw luwu quawmf quawts "
+        ),
+        "thuở thuở thuở huơ huơ khuơ khuơ được được được nước nước người người người người người giữa giữa giữ giữ hươu hươu hươu rượu rượu rượu cứu cứu cứu lưu lưu quằm quắt "
+    );
+
+    assert_eq!(
+        type_with(
+            |_| {},
+            "tieesng tieseng tiengse tieejt vieejt viejte gieengs giengse quyeets quyetes quyetse nguyeenx nguyexne nguyenxe yeeu yeue hieeur hieure gheenhf ghenhfe ngheenh nghenhe ddeem ddeme demde "
+        ),
+        "tiếng tiếng tiếng tiệt việt việt giếng giếng quyết quyết quyết nguyễn nguyễn nguyễn yêu yêu hiểu hiểu ghềnh ghềnh nghênh nghênh đêm đêm đêm "
+    );
+
+    assert_eq!(
+        type_with(
+            |_| {},
+            "beee\x08e beee\x08\x08ee tuww\x08w sww\x08w ddd\x08d cooo\x08o toiss\x08s beee\x08t tuww\x08i sww tuww coww boook ddeee "
+        ),
+        "bê bê tư sư đ cô tói bet tui sw tuw cow book đee "
+    );
+
+    assert_eq!(
+        type_with(
+            |_| {},
+            "pw kw didn't hadn't doesn't wasn't foos jaws wasm aws github vercel nextjs svelte typescript javascript regex mutex tokio serde tweet tweets tweeting attendee attendees vars cors "
+        ),
+        "pw kw didn't hadn't doesn't wasn't foos jaws wasm aws github vercel nextjs svelte typescript javascript regex mutex tokio serde tweet tweets tweeting attendee attendees vars cors "
+    );
+
+    assert_eq!(
+        type_with(
+            |_| {},
+            "two who why what when where which while white switch sweet swim swap swift dwarf dwell twin twice twist tween between window windows follow followed following browser browsers network networks software hardware workflow workspace framework frameworks password passwords download downloads forward backward keyword keywords new views reviews engineer engineers feedback weekend delete select "
+        ),
+        "two who why what when where which while white switch sweet swim swap swift dwarf dwell twin twice twist tween between window windows follow followed following browser browsers network networks software hardware workflow workspace framework frameworks password passwords download downloads forward backward keyword keywords new views reviews engineer engineers feedback weekend delete select "
+    );
+
+    assert_eq!(type_with(|_| {}, "new"), "new");
+    assert_eq!(type_with(|_| {}, "view"), "view");
+    assert_eq!(type_with(|_| {}, "review"), "review");
+    assert_eq!(type_with(|_| {}, "kw"), "kw");
+    assert_eq!(type_with(|_| {}, "pw"), "pw");
+    assert_eq!(type_with(|_| {}, "quw"), "quw");
+    assert_eq!(type_with(|_| {}, "ghw"), "ghw");
+    assert_eq!(type_with(|_| {}, "nghw"), "nghw");
+}

@@ -58,10 +58,28 @@ fn capture_held_modifiers(candidates: &[(u16, bool)]) -> Vec<(u16, bool)> {
         .collect()
 }
 
+fn should_cycle_modifiers(
+    p: &ReplacePayload,
+    step_delay: u32,
+    restore_before_trailing: bool,
+) -> bool {
+    step_delay == 0
+        || p.use_clipboard
+        || p.browser_suggest_2
+        || restore_before_trailing
+        || p.standard_key_send
+}
+
 pub fn dispatch_payload(p: ReplacePayload) {
-    let held_mods = capture_held_modifiers(MODIFIER_VKS);
     let scan_mode = p.standard_key_send;
     let step_delay = effective_step_delay(&p);
+    let restore_before_trailing = matches!(p.trailing_vk, Some(VK_RETURN | VK_TAB));
+    let cycle_mods = should_cycle_modifiers(&p, step_delay, restore_before_trailing);
+    let held_mods = if cycle_mods {
+        capture_held_modifiers(MODIFIER_VKS)
+    } else {
+        Vec::new()
+    };
     let mut pre = Vec::with_capacity(p.backspaces * 2 + held_mods.len() + 6);
 
     if p.backspaces > 0 || !p.text.is_empty() {
@@ -105,7 +123,6 @@ pub fn dispatch_payload(p: ReplacePayload) {
         }
     }
 
-    let restore_before_trailing = matches!(p.trailing_vk, Some(VK_RETURN | VK_TAB));
     if (p.backspaces > 0 || !p.text.is_empty()) && restore_before_trailing {
         for &(vk, extended) in &held_mods {
             push_vk(&mut post, vk, true, extended, scan_mode);
@@ -404,5 +421,48 @@ mod tests {
         )
         .expect("payload");
         assert_eq!(effective_step_delay(&compat), 2);
+    }
+
+    #[test]
+    fn compatible_hook_skips_modifier_cycling_when_no_special_path_is_used() {
+        let compat_cfg = Config {
+            mechanism: Mechanism::CompatibleHook,
+            ..Config::default()
+        };
+        let compat = build_replace_payload(
+            EngineAction::Replace {
+                backspaces: 2,
+                text: "ào".to_string(),
+            },
+            None,
+            &compat_cfg,
+            "Notepad",
+            "notepad.exe",
+        )
+        .expect("payload");
+        assert!(!should_cycle_modifiers(
+            &compat,
+            effective_step_delay(&compat),
+            false,
+        ));
+        assert!(should_cycle_modifiers(
+            &compat,
+            effective_step_delay(&compat),
+            true,
+        ));
+
+        let kb_cfg = Config::default();
+        let kb = build_replace_payload(
+            EngineAction::Replace {
+                backspaces: 2,
+                text: "ào".to_string(),
+            },
+            None,
+            &kb_cfg,
+            "Notepad",
+            "notepad.exe",
+        )
+        .expect("payload");
+        assert!(should_cycle_modifiers(&kb, effective_step_delay(&kb), false));
     }
 }
