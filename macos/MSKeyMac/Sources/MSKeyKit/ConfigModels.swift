@@ -460,6 +460,9 @@ public struct MSKeyConfig: Codable, Equatable, Sendable {
     public var activeProfile: String = "Mặc định"
     public var profiles: [ConfigProfile] = []
     public var syncConfigPath: String = ""
+    public var configVersion: Int = MSKeyConfig.currentConfigVersion
+
+    public static let currentConfigVersion = 1
 
     enum CodingKeys: String, CodingKey {
         case vietnamese_enabled
@@ -513,6 +516,7 @@ public struct MSKeyConfig: Codable, Equatable, Sendable {
         case activeProfile = "active_profile"
         case profiles
         case syncConfigPath = "sync_config_path"
+        case configVersion = "config_version"
     }
 
     public init() {}
@@ -571,6 +575,12 @@ public struct MSKeyConfig: Codable, Equatable, Sendable {
         activeProfile = try c.decodeIfPresent(String.self, forKey: .activeProfile) ?? d.activeProfile
         profiles = try c.decodeIfPresent([ConfigProfile].self, forKey: .profiles) ?? d.profiles
         syncConfigPath = try c.decodeIfPresent(String.self, forKey: .syncConfigPath) ?? d.syncConfigPath
+        configVersion = try c.decodeIfPresent(Int.self, forKey: .configVersion) ?? 0
+        if configVersion < 1 {
+            show_switch_osd = false
+            showCaretOsd = false
+        }
+        configVersion = max(configVersion, MSKeyConfig.currentConfigVersion)
     }
 
     public static let builtinProfileNames = ["Mặc định", "Lập trình", "Soạn thảo"]

@@ -74,6 +74,16 @@ final class MSKeyMacTests: XCTestCase {
         XCTAssertEqual(legacyDecoded?.show_on_startup, false)
         XCTAssertEqual(legacyDecoded?.custom_keymap.quick_u_horn, "w")
 
+        let oldOsdJSON = "{\"show_switch_osd\":true,\"show_caret_osd\":true}"
+        let oldOsd = oldOsdJSON.data(using: .utf8).flatMap { try? JSONDecoder().decode(MSKeyConfig.self, from: $0) }
+        XCTAssertEqual(oldOsd?.show_switch_osd, false)
+        XCTAssertEqual(oldOsd?.showCaretOsd, false)
+        XCTAssertEqual(oldOsd?.configVersion, 1)
+        let chosenOsdJSON = "{\"show_switch_osd\":true,\"show_caret_osd\":true,\"config_version\":1}"
+        let chosenOsd = chosenOsdJSON.data(using: .utf8).flatMap { try? JSONDecoder().decode(MSKeyConfig.self, from: $0) }
+        XCTAssertEqual(chosenOsd?.show_switch_osd, true)
+        XCTAssertEqual(chosenOsd?.showCaretOsd, true)
+
         let tcvn3 = RustEngine.convertWithEncoding("Tiếng Việt", from: .unicode, to: .tcvn3)
         XCTAssertEqual(RustEngine.detectCharset(tcvn3), .tcvn3)
         XCTAssertEqual(RustEngine.convertWithEncoding(tcvn3, from: .auto, to: .unicode), "Tiếng Việt")
