@@ -1,5 +1,6 @@
 use crate::config::{Config, InputMethod};
-use crate::syllable::{is_valid_typing_prefix, parse_syllable, tone_target_index};
+use crate::dict;
+use crate::syllable::{is_checked_coda, is_valid_typing_prefix, parse_syllable, tone_target_index};
 use crate::tables::{
     BaseVowel, Tone, VowelFamily, base_family, decode_vowel, encode_vowel, is_d_or_d_stroke,
     to_d_stroke, to_plain_d, toggle_breve, toggle_circumflex, toggle_horn,
@@ -400,6 +401,12 @@ pub fn try_apply_tone(chars: &mut Vec<char>, target_tone: Tone, config: &Config)
         clear_all_tones(chars, &parsed);
         return TransformOutcome::Reverted;
     }
+    if config.spelling_check
+        && is_checked_coda(&parsed.coda)
+        && !matches!(parsed.active_tone, Tone::None | Tone::Acute | Tone::DotBelow)
+    {
+        return TransformOutcome::Ignored;
+    }
     let Some(v_rel_idx) = tone_target_index(&parsed, config.modern_tone) else {
         return TransformOutcome::Ignored;
     };
@@ -447,10 +454,13 @@ fn validate_candidate(candidate: &[char], config: &Config) -> bool {
     if !config.spelling_check {
         return true;
     }
-    let Some(parsed) = parse_syllable(candidate, config.allow_fjwz) else {
-        return false;
-    };
-    is_valid_typing_prefix(&parsed, config.allow_fjwz)
+    if let Some(parsed) = parse_syllable(candidate, config.allow_fjwz)
+        && is_valid_typing_prefix(&parsed, config.allow_fjwz)
+    {
+        return true;
+    }
+    let word: String = candidate.iter().collect();
+    dict::is_vietnamese_word_with_custom(&word, config.allow_fjwz, &config.user_dict_words)
 }
 
 fn vowel_scan_order(chars: &[char], vowel_start: Option<usize>, free_tone: bool) -> Vec<usize> {

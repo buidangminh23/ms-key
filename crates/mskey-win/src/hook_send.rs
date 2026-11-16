@@ -4,11 +4,12 @@ use mskey_core::{
     CaseTransform, Charset, Config, ConvertEncoding, EngineAction, Mechanism, convert_with_encoding,
     detect_convert_encoding,
 };
+use windows_sys::Win32::Media::{timeBeginPeriod, timeEndPeriod};
 use windows_sys::Win32::UI::Input::KeyboardAndMouse::{
     GetAsyncKeyState, INPUT, INPUT_0, INPUT_KEYBOARD, KEYBDINPUT, KEYEVENTF_EXTENDEDKEY,
     KEYEVENTF_KEYUP, KEYEVENTF_UNICODE, MAPVK_VK_TO_VSC, MapVirtualKeyW, SendInput, VK_BACK,
     VK_CAPITAL, VK_INSERT, VK_LCONTROL, VK_LEFT, VK_LMENU, VK_LSHIFT, VK_LWIN, VK_RCONTROL,
-    VK_RIGHT, VK_RMENU, VK_RSHIFT, VK_RWIN,
+    VK_RETURN, VK_RIGHT, VK_RMENU, VK_RSHIFT, VK_RWIN, VK_TAB,
 };
 
 use crate::platform::write_clipboard_text;
@@ -61,10 +62,12 @@ pub fn dispatch_payload(p: ReplacePayload) {
     let held_mods = capture_held_modifiers(MODIFIER_VKS);
     let scan_mode = p.standard_key_send;
     let step_delay = effective_step_delay(&p);
-    let mut pre = Vec::with_capacity(p.backspaces * 2 + 20);
+    let mut pre = Vec::with_capacity(p.backspaces * 2 + held_mods.len() + 6);
 
-    for &(vk, extended) in &held_mods {
-        push_vk(&mut pre, vk, false, extended, scan_mode);
+    if p.backspaces > 0 || !p.text.is_empty() {
+        for &(vk, extended) in &held_mods {
+            push_vk(&mut pre, vk, false, extended, scan_mode);
+        }
     }
 
     if p.backspaces > 0 {
@@ -80,36 +83,64 @@ pub fn dispatch_payload(p: ReplacePayload) {
         }
     }
 
+    let mut post = Vec::with_capacity(p.text.len() * 2 + held_mods.len() + 4);
     let mut did_clip_paste = false;
     if !p.text.is_empty()
         && p.use_clipboard
         && write_clipboard_for_paste_with_restore(&p.text)
     {
-        send_paced(&pre, step_delay);
+        send_slice(&pre);
         pre.clear();
-        if step_delay > 0 {
-            std::thread::sleep(Duration::from_millis(6));
-        }
+        sleep_precise_ms(step_delay.clamp(6, 12));
         send_paste_combo(p.paste_via_shift_insert, scan_mode);
         if p.trailing_vk.is_some() || !held_mods.is_empty() {
-            std::thread::sleep(Duration::from_millis(8));
+            sleep_precise_ms(8);
         }
         did_clip_paste = true;
     }
 
     if !did_clip_paste && !p.text.is_empty() {
         for unit in p.text.encode_utf16() {
-            push_unicode_u16(&mut pre, unit);
+            push_unicode_u16(&mut post, unit);
         }
     }
 
+    let restore_before_trailing = matches!(p.trailing_vk, Some(VK_RETURN | VK_TAB));
+    if (p.backspaces > 0 || !p.text.is_empty()) && restore_before_trailing {
+        for &(vk, extended) in &held_mods {
+            push_vk(&mut post, vk, true, extended, scan_mode);
+        }
+    }
     if let Some(vk) = p.trailing_vk {
-        push_vk_tap(&mut pre, vk, false, scan_mode);
+        push_vk_tap(&mut post, vk, false, scan_mode);
     }
-    for &(vk, extended) in &held_mods {
-        push_vk(&mut pre, vk, true, extended, scan_mode);
+    if (p.backspaces > 0 || !p.text.is_empty()) && !restore_before_trailing {
+        for &(vk, extended) in &held_mods {
+            push_vk(&mut post, vk, true, extended, scan_mode);
+        }
     }
-    send_paced(&pre, step_delay);
+
+    if step_delay == 0 || pre.is_empty() || post.is_empty() {
+        pre.extend_from_slice(&post);
+        send_slice(&pre);
+    } else {
+        send_slice(&pre);
+        sleep_precise_ms(step_delay.min(5));
+        send_slice(&post);
+    }
+}
+
+fn sleep_precise_ms(ms: u32) {
+    if ms == 0 {
+        return;
+    }
+    unsafe {
+        timeBeginPeriod(1);
+    }
+    std::thread::sleep(Duration::from_millis(ms as u64));
+    unsafe {
+        timeEndPeriod(1);
+    }
 }
 
 pub fn send_cursor_left(steps: usize) {
@@ -145,10 +176,10 @@ pub fn send_ctrl_key(vk: u16) {
 }
 
 fn effective_step_delay(p: &ReplacePayload) -> u32 {
-    if p.send_delay_ms > 0 {
-        p.send_delay_ms.min(25)
-    } else if p.compatible_hook {
-        1
+    if p.compatible_hook {
+        p.send_delay_ms.clamp(1, 10)
+    } else if p.send_delay_ms > 2 {
+        p.send_delay_ms.min(10)
     } else {
         0
     }
@@ -168,22 +199,6 @@ fn send_paste_combo(shift_insert: bool, scan_mode: bool) {
     send_slice(&paste);
 }
 
-fn send_paced(inputs: &[INPUT], step_delay_ms: u32) {
-    if inputs.is_empty() {
-        return;
-    }
-    if step_delay_ms == 0 || inputs.len() <= 2 {
-        send_slice(inputs);
-        return;
-    }
-    let chunks = inputs.len().div_ceil(2) as u32;
-    let gap = step_delay_ms.min((120 / chunks.max(1)).max(1));
-    for pair in inputs.chunks(2) {
-        send_slice(pair);
-        std::thread::sleep(Duration::from_millis(gap as u64));
-    }
-}
-
 fn send_slice(inputs: &[INPUT]) {
     if inputs.is_empty() {
         return;
@@ -197,16 +212,12 @@ fn send_slice(inputs: &[INPUT]) {
     }
 }
 
-fn push_vk(inputs: &mut Vec<INPUT>, vk: u16, down: bool, extended: bool, scan_mode: bool) {
+fn push_vk(inputs: &mut Vec<INPUT>, vk: u16, down: bool, extended: bool, _scan_mode: bool) {
     let mut flags = if down { 0 } else { KEYEVENTF_KEYUP };
     if extended {
         flags |= KEYEVENTF_EXTENDEDKEY;
     }
-    let scan = if scan_mode {
-        unsafe { MapVirtualKeyW(vk as u32, MAPVK_VK_TO_VSC) as u16 }
-    } else {
-        0
-    };
+    let scan = unsafe { MapVirtualKeyW(vk as u32, MAPVK_VK_TO_VSC) as u16 };
     inputs.push(INPUT {
         r#type: INPUT_KEYBOARD,
         Anonymous: INPUT_0 {
@@ -250,10 +261,22 @@ fn push_unicode_u16(inputs: &mut Vec<INPUT>, unit: u16) {
     }
 }
 
-pub fn is_browser_class(class_name: &str) -> bool {
-    class_name.starts_with("Chrome_WidgetWin")
-        || class_name == "MozillaWindowClass"
-        || class_name == "ApplicationFrameWindow"
+pub fn is_browser_process(process_name: &str) -> bool {
+    matches!(
+        process_name.to_ascii_lowercase().as_str(),
+        "chrome.exe"
+            | "msedge.exe"
+            | "brave.exe"
+            | "opera.exe"
+            | "vivaldi.exe"
+            | "coccoc.exe"
+            | "browser.exe"
+            | "arc.exe"
+            | "firefox.exe"
+            | "waterfox.exe"
+            | "floorp.exe"
+            | "zen.exe"
+    )
 }
 
 pub fn is_terminal_class(class_name: &str) -> bool {
@@ -269,6 +292,7 @@ pub fn build_replace_payload(
     trailing_vk: Option<u16>,
     cfg: &Config,
     fg_class: &str,
+    fg_process: &str,
 ) -> Option<ReplacePayload> {
     match act {
         EngineAction::PassThrough => None,
@@ -285,14 +309,14 @@ pub fn build_replace_payload(
                     send_trailing_vk = Some(vk);
                 }
             }
-            let browser = is_browser_class(fg_class);
+            let browser_omnibox = is_browser_process(fg_process) && crate::uia::is_browser_omnibox();
             let terminal = is_terminal_class(fg_class);
             Some(ReplacePayload {
                 backspaces,
                 text,
                 trailing_vk: send_trailing_vk,
-                browser_suggest_1: browser && cfg.fix_browser_suggest_1,
-                browser_suggest_2: browser && cfg.fix_browser_suggest_2,
+                browser_suggest_1: browser_omnibox && cfg.fix_browser_suggest_1,
+                browser_suggest_2: browser_omnibox && cfg.fix_browser_suggest_2,
                 use_clipboard: cfg.use_clipboard_send,
                 standard_key_send: cfg.standard_key_send || terminal,
                 compatible_hook: cfg.mechanism == Mechanism::CompatibleHook || terminal,
@@ -314,5 +338,71 @@ pub fn convert_clipboard_now(target: Charset) {
         };
         let converted = convert_with_encoding(&src, from, to, CaseTransform::None);
         write_clipboard_text(&converted);
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn browser_process_excludes_electron_ides_and_terminals() {
+        assert!(is_browser_process("chrome.exe"));
+        assert!(is_browser_process("msedge.exe"));
+        assert!(is_browser_process("firefox.exe"));
+        assert!(!is_browser_process("Antigravity.exe"));
+        assert!(!is_browser_process("Code.exe"));
+        assert!(!is_browser_process("Claude.exe"));
+        assert!(!is_browser_process("WindowsTerminal.exe"));
+    }
+
+    #[test]
+    fn non_browser_chrome_widget_never_triggers_suggest_zero_width_space() {
+        let cfg = Config::default();
+        let payload = build_replace_payload(
+            EngineAction::Replace {
+                backspaces: 2,
+                text: "ào".to_string(),
+            },
+            None,
+            &cfg,
+            "Chrome_WidgetWin_1",
+            "Antigravity.exe",
+        )
+        .expect("payload");
+        assert!(!payload.browser_suggest_1);
+        assert!(!payload.browser_suggest_2);
+    }
+
+    #[test]
+    fn effective_delay_keeps_keyboard_hook_atomic_by_default() {
+        let cfg = Config::default();
+        let kb = build_replace_payload(
+            EngineAction::Replace {
+                backspaces: 2,
+                text: "ào".to_string(),
+            },
+            None,
+            &cfg,
+            "Notepad",
+            "notepad.exe",
+        )
+        .expect("payload");
+        assert_eq!(effective_step_delay(&kb), 0);
+
+        let mut compat_cfg = cfg;
+        compat_cfg.mechanism = Mechanism::CompatibleHook;
+        let compat = build_replace_payload(
+            EngineAction::Replace {
+                backspaces: 2,
+                text: "ào".to_string(),
+            },
+            None,
+            &compat_cfg,
+            "Notepad",
+            "notepad.exe",
+        )
+        .expect("payload");
+        assert_eq!(effective_step_delay(&compat), 2);
     }
 }

@@ -6,12 +6,20 @@ const KEEP_DIC_RAW: &str = include_str!("../data/keep.dic");
 const EN_DIC_RAW: &str = include_str!("../data/english_dict_merged.txt");
 
 static VI_WORDS: LazyLock<HashSet<String>> = LazyLock::new(|| {
-    VI_DIC_RAW
-        .lines()
-        .skip(1)
-        .map(|s| s.trim().to_lowercase())
-        .filter(|s| !s.is_empty())
-        .collect()
+    let mut set = HashSet::new();
+    for line in VI_DIC_RAW.lines().skip(1) {
+        let trimmed = line.trim();
+        if trimmed.is_empty() {
+            continue;
+        }
+        let lower = trimmed.to_lowercase();
+        let modern = crate::converter_extra::normalize_tone_style(&lower, true);
+        let classic = crate::converter_extra::normalize_tone_style(&lower, false);
+        set.insert(lower);
+        set.insert(modern);
+        set.insert(classic);
+    }
+    set
 });
 
 static KEEP_WORDS: LazyLock<HashSet<&'static str>> =

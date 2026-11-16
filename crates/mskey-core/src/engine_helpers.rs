@@ -1,9 +1,9 @@
-use crate::config::{Charset, Config};
+use crate::config::{Charset, Config, InputMethod};
 use crate::converter::encode_char_for_charset;
 use crate::dict;
 use crate::engine_quick::{MacroExpansion, expand_macro_variables_with_context};
 use crate::syllable::{is_valid_complete_syllable, parse_syllable};
-use crate::tables::{Tone, decode_vowel, strip_vowel_diacritic};
+use crate::tables::{BaseVowel, Tone, decode_vowel, strip_vowel_diacritic};
 
 pub(crate) fn match_macro(
     config: &Config,
@@ -97,7 +97,7 @@ pub(crate) fn should_auto_restore(
         config.allow_fjwz,
         &config.user_dict_words,
     ) {
-        return false;
+        return is_non_canonical_english_collision(config, display, raw_str);
     }
     let Some(parsed) = parse_syllable(display, config.allow_fjwz) else {
         return true;
@@ -106,6 +106,62 @@ pub(crate) fn should_auto_restore(
         return true;
     }
     dict::is_english_word(raw_str) && !dict::is_keep_word(raw_str)
+}
+
+fn is_non_canonical_english_collision(
+    config: &Config,
+    display: &[char],
+    raw_str: &str,
+) -> bool {
+    if !matches!(
+        config.input_method,
+        InputMethod::Telex | InputMethod::SimpleTelex
+    ) || !raw_str.is_ascii()
+        || !dict::is_english_word(raw_str)
+        || dict::is_keep_word(raw_str)
+    {
+        return false;
+    }
+    let lower = raw_str.to_ascii_lowercase();
+    let starts_u_horn = display
+        .first()
+        .is_some_and(|&c| decode_vowel(c).is_some_and(|(b, _, _)| b == BaseVowel::UHorn));
+    if lower.len() >= 2 && lower.starts_with('w') && starts_u_horn {
+        return true;
+    }
+    let bytes = lower.as_bytes();
+    let Some(first_vowel) = bytes
+        .iter()
+        .position(|b| matches!(b, b'a' | b'e' | b'i' | b'o' | b'u' | b'y'))
+    else {
+        return false;
+    };
+    let is_tone_key = |b: u8| matches!(b, b's' | b'f' | b'r' | b'x' | b'j');
+    let is_vowel_key = |b: u8| matches!(b, b'a' | b'e' | b'i' | b'o' | b'u' | b'y');
+    let mut tone_count = 0usize;
+    for (idx, &b) in bytes.iter().enumerate().skip(first_vowel + 1) {
+        if is_tone_key(b) {
+            tone_count += 1;
+            if bytes[idx + 1..].iter().any(|&next| is_vowel_key(next)) {
+                return true;
+            }
+        }
+    }
+    if tone_count >= 2 {
+        return true;
+    }
+    let has_d_stroke = display.iter().any(|&c| matches!(c, 'đ' | 'Đ'));
+    if has_d_stroke && !lower.contains("dd") {
+        return true;
+    }
+    let has_circumflex = |target: BaseVowel| {
+        display
+            .iter()
+            .any(|&c| decode_vowel(c).is_some_and(|(base, _, _)| base == target))
+    };
+    (has_circumflex(BaseVowel::ACircumflex) && !lower.contains("aa"))
+        || (has_circumflex(BaseVowel::ECircumflex) && !lower.contains("ee"))
+        || (has_circumflex(BaseVowel::OCircumflex) && !lower.contains("oo"))
 }
 
 fn is_standalone_marked_letter(display: &[char]) -> bool {

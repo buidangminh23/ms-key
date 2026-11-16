@@ -215,22 +215,34 @@ pub fn is_valid_typing_prefix(syllable: &ParsedSyllable, allow_fjwz: bool) -> bo
     {
         return false;
     }
-    let rime_match = find_exact_rime(&bases).or_else(|| find_stripped_rime(&bases));
-    let Some(rule) = rime_match else {
-        return false;
-    };
-    if syllable.coda.is_empty() {
-        return true;
-    }
+    has_compatible_typing_rime(syllable, &bases)
+}
+
+fn has_compatible_typing_rime(syllable: &ParsedSyllable, bases: &[BaseVowel]) -> bool {
     if syllable.onset == "gi"
-        && matches!(bases.as_slice(), [BaseVowel::E] | [BaseVowel::ECircumflex])
+        && matches!(bases, [BaseVowel::E] | [BaseVowel::ECircumflex])
         && matches!(syllable.coda.as_str(), "c" | "n" | "ng")
     {
         return true;
     }
-    rule.codas
-        .iter()
-        .any(|valid| valid.starts_with(syllable.coda.as_str()))
+    RIMES.iter().any(|rule| {
+        if rule.vowels.len() != bases.len() {
+            return false;
+        }
+        let vowels_ok = rule
+            .vowels
+            .iter()
+            .zip(bases.iter())
+            .all(|(rv, bv)| *bv == *rv || *bv == strip_vowel_diacritic(*rv));
+        if !vowels_ok {
+            return false;
+        }
+        syllable.coda.is_empty()
+            || rule
+                .codas
+                .iter()
+                .any(|valid| valid.starts_with(syllable.coda.as_str()))
+    })
 }
 
 pub fn is_checked_coda(coda: &str) -> bool {
@@ -267,17 +279,4 @@ fn onset_compatible(syllable: &ParsedSyllable, allow_fjwz: bool) -> bool {
 
 fn find_exact_rime(bases: &[BaseVowel]) -> Option<&'static RimeRule> {
     RIMES.iter().find(|r| r.vowels == bases)
-}
-
-fn find_stripped_rime(bases: &[BaseVowel]) -> Option<&'static RimeRule> {
-    let stripped: Vec<BaseVowel> = bases.iter().map(|b| strip_vowel_diacritic(*b)).collect();
-    RIMES.iter().find(|r| {
-        if r.vowels.len() != stripped.len() {
-            return false;
-        }
-        r.vowels
-            .iter()
-            .zip(stripped.iter())
-            .all(|(rv, sv)| strip_vowel_diacritic(*rv) == *sv)
-    })
 }

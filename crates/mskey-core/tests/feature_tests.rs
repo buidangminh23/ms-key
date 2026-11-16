@@ -356,3 +356,29 @@ fn tone_normalization_window_rules_profiles_and_update_helpers() {
     assert!(!cfg.modern_tone);
     assert!(update::is_newer_version("0.1.2", "v0.1.3"));
 }
+
+#[test]
+fn oaw_oao_oeo_cuuw_tone_before_mod_and_english_collisions() {
+    assert_eq!(
+        type_with(
+            |_| {},
+            "hoawcj hoacwj bawn khoawn loawngf ngoawngf ngoaos ngoeof cuuw "
+        ),
+        "hoặc hoặc băn khoăn loằng ngoằng ngoáo ngoèo cưu "
+    );
+    assert_eq!(
+        type_with(
+            |_| {},
+            "benhje benhfe chuanra huansa tuanfa luatja chechse ghenhfe "
+        ),
+        "bệnh bềnh chuẩn huấn tuần luật chếch ghềnh "
+    );
+    assert_eq!(type_with(|_| {}, "DDawks Lawks "), "Đắk Lắk ");
+    assert_eq!(
+        type_with(
+            |_| {},
+            "was won worst defend reset theme these there here hero visa virus sofa chose lose dose boxes xerox congo mono honor verse cheers refer refers veers texts nextjs "
+        ),
+        "was won worst defend reset theme these there here hero visa virus sofa chose lose dose boxes xerox congo mono honor verse cheers refer refers veers texts nextjs "
+    );
+}

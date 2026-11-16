@@ -3,6 +3,7 @@ use std::sync::{Mutex, OnceLock};
 
 use mskey_core::{AppBehavior, Config, Engine};
 use windows_sys::Win32::Foundation::HWND;
+use windows_sys::Win32::UI::Input::KeyboardAndMouse::{GetKeyState, VK_CAPITAL};
 
 pub const WM_APP_TRAY: u32 = 0x8001;
 pub const WM_APP_SYNC_UI: u32 = 0x8002;
@@ -31,6 +32,16 @@ pub struct AppState {
     pub shift_down: bool,
     pub alt_down: bool,
     pub win_down: bool,
+    pub l_ctrl_down: bool,
+    pub r_ctrl_down: bool,
+    pub l_shift_down: bool,
+    pub r_shift_down: bool,
+    pub l_alt_down: bool,
+    pub r_alt_down: bool,
+    pub l_win_down: bool,
+    pub r_win_down: bool,
+    pub caps_lock_on: bool,
+    pub caps_key_down: bool,
 }
 
 static STATE: OnceLock<Mutex<AppState>> = OnceLock::new();
@@ -39,6 +50,7 @@ pub fn init_state(config: Config) {
     let pref = config.vietnamese_enabled;
     let mut engine = Engine::new(config);
     engine.set_clock_offset_secs(crate::platform_extra::local_utc_offset_secs());
+    let caps_init = (unsafe { GetKeyState(VK_CAPITAL as i32) } & 1) != 0;
     let _ = STATE.set(Mutex::new(AppState {
         engine,
         main_hwnd: 0,
@@ -56,6 +68,16 @@ pub fn init_state(config: Config) {
         shift_down: false,
         alt_down: false,
         win_down: false,
+        l_ctrl_down: false,
+        r_ctrl_down: false,
+        l_shift_down: false,
+        r_shift_down: false,
+        l_alt_down: false,
+        r_alt_down: false,
+        l_win_down: false,
+        r_win_down: false,
+        caps_lock_on: caps_init,
+        caps_key_down: false,
     }));
 }
 

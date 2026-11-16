@@ -7,7 +7,7 @@ use windows_sys::Win32::Foundation::{HWND, LPARAM, LRESULT, WPARAM};
 use windows_sys::Win32::UI::Accessibility::{HWINEVENTHOOK, SetWinEventHook, UnhookWinEvent};
 use windows_sys::Win32::UI::Input::KeyboardAndMouse::{
     GetAsyncKeyState, GetKeyboardLayout, GetKeyboardState, ToUnicodeEx, VK_BACK, VK_CAPITAL,
-    VK_CONTROL, VK_DELETE, VK_DOWN, VK_END, VK_ESCAPE, VK_F1, VK_F24, VK_HOME, VK_INSERT,
+    VK_CONTROL, VK_DELETE, VK_DOWN, VK_END, VK_ESCAPE, VK_F1, VK_F6, VK_F24, VK_HOME, VK_INSERT,
     VK_LCONTROL, VK_LEFT, VK_LMENU, VK_LSHIFT, VK_LWIN, VK_MENU, VK_NEXT, VK_PRIOR, VK_RCONTROL,
     VK_RETURN, VK_RIGHT, VK_RMENU, VK_RSHIFT, VK_RWIN, VK_SHIFT, VK_SPACE, VK_TAB, VK_UP,
 };
@@ -329,15 +329,59 @@ fn update_modifier_flags(st: &mut AppState, hold_key: HoldEnglishKey, vk: u16, i
     if is_modifier_swallowed_for_hold(hold_key, vk) {
         return;
     }
-    if vk == VK_CONTROL || vk == VK_LCONTROL || vk == VK_RCONTROL {
-        st.ctrl_down = is_down;
-    } else if vk == VK_SHIFT || vk == VK_LSHIFT || vk == VK_RSHIFT {
-        st.shift_down = is_down;
-    } else if vk == VK_MENU || vk == VK_LMENU || vk == VK_RMENU {
-        st.alt_down = is_down;
-    } else if vk == VK_LWIN || vk == VK_RWIN {
-        st.win_down = is_down;
+    match vk {
+        VK_LCONTROL => st.l_ctrl_down = is_down,
+        VK_RCONTROL => st.r_ctrl_down = is_down,
+        VK_CONTROL => {
+            st.l_ctrl_down = is_down;
+            st.r_ctrl_down = is_down;
+        }
+        VK_LSHIFT => st.l_shift_down = is_down,
+        VK_RSHIFT => st.r_shift_down = is_down,
+        VK_SHIFT => {
+            st.l_shift_down = is_down;
+            st.r_shift_down = is_down;
+        }
+        VK_LMENU => st.l_alt_down = is_down,
+        VK_RMENU => st.r_alt_down = is_down,
+        VK_MENU => {
+            st.l_alt_down = is_down;
+            st.r_alt_down = is_down;
+        }
+        VK_LWIN => st.l_win_down = is_down,
+        VK_RWIN => st.r_win_down = is_down,
+        _ if is_down => {
+            if st.l_ctrl_down && unsafe { GetAsyncKeyState(VK_LCONTROL as i32) } >= 0 {
+                st.l_ctrl_down = false;
+            }
+            if st.r_ctrl_down && unsafe { GetAsyncKeyState(VK_RCONTROL as i32) } >= 0 {
+                st.r_ctrl_down = false;
+            }
+            if st.l_shift_down && unsafe { GetAsyncKeyState(VK_LSHIFT as i32) } >= 0 {
+                st.l_shift_down = false;
+            }
+            if st.r_shift_down && unsafe { GetAsyncKeyState(VK_RSHIFT as i32) } >= 0 {
+                st.r_shift_down = false;
+            }
+            if st.l_alt_down && unsafe { GetAsyncKeyState(VK_LMENU as i32) } >= 0 {
+                st.l_alt_down = false;
+            }
+            if st.r_alt_down && unsafe { GetAsyncKeyState(VK_RMENU as i32) } >= 0 {
+                st.r_alt_down = false;
+            }
+            if st.l_win_down && unsafe { GetAsyncKeyState(VK_LWIN as i32) } >= 0 {
+                st.l_win_down = false;
+            }
+            if st.r_win_down && unsafe { GetAsyncKeyState(VK_RWIN as i32) } >= 0 {
+                st.r_win_down = false;
+            }
+        }
+        _ => {}
     }
+    st.ctrl_down = st.l_ctrl_down || st.r_ctrl_down;
+    st.shift_down = st.l_shift_down || st.r_shift_down;
+    st.alt_down = st.l_alt_down || st.r_alt_down;
+    st.win_down = st.l_win_down || st.r_win_down;
 }
 
 fn trigger_ve_toggle(st: &mut AppState, next: bool, fx: &mut KeySideEffects) {
@@ -450,6 +494,7 @@ fn handle_quick_capslock(
         {
             caps.toggled_os = true;
             fx.send_os_capslock = true;
+            st.caps_lock_on = !st.caps_lock_on;
         }
         return Some(KeyDecision::Consume);
     }
@@ -464,6 +509,7 @@ fn handle_quick_capslock(
                 trigger_ve_toggle(st, !cfg.vietnamese_enabled, fx);
             } else if !had_other {
                 fx.send_os_capslock = true;
+                st.caps_lock_on = !st.caps_lock_on;
             }
         }
         return Some(KeyDecision::Consume);
@@ -563,8 +609,13 @@ fn check_hotkey_decision(
         vk as u32,
     ) {
         let act = st.engine.toggle_last_committed_word();
-        if let Some(payload) = crate::hook_send::build_replace_payload(act, None, &cfg, &st.fg_class)
-        {
+        if let Some(payload) = crate::hook_send::build_replace_payload(
+            act,
+            None,
+            &cfg,
+            &st.fg_class,
+            &st.fg_process,
+        ) {
             return Some(KeyDecision::Inject(payload));
         }
         return Some(KeyDecision::Pass);
@@ -621,10 +672,22 @@ fn dispatch_typing_key(st: &mut AppState, vk: u16, scan: u32) -> KeyDecision {
         return KeyDecision::Pass;
     }
     if vk == VK_BACK {
-        return map_action(st.engine.process_backspace(), None, &cfg, &st.fg_class);
+        return map_action(
+            st.engine.process_backspace(),
+            None,
+            &cfg,
+            &st.fg_class,
+            &st.fg_process,
+        );
     }
     if vk == VK_ESCAPE {
-        return map_action(st.engine.process_escape(), None, &cfg, &st.fg_class);
+        return map_action(
+            st.engine.process_escape(),
+            None,
+            &cfg,
+            &st.fg_class,
+            &st.fg_process,
+        );
     }
     if is_reset_navigation_vk(vk) {
         st.engine.reset_all();
@@ -632,20 +695,38 @@ fn dispatch_typing_key(st: &mut AppState, vk: u16, scan: u32) -> KeyDecision {
     }
     if vk == VK_RETURN {
         maybe_preload_macro_clipboard(st);
-        return map_action(st.engine.process_delimiter('\n'), Some(VK_RETURN), &cfg, &st.fg_class);
+        return map_action(
+            st.engine.process_delimiter('\n'),
+            Some(VK_RETURN),
+            &cfg,
+            &st.fg_class,
+            &st.fg_process,
+        );
     }
     if vk == VK_TAB {
         maybe_preload_macro_clipboard(st);
-        return map_action(st.engine.process_delimiter('\t'), Some(VK_TAB), &cfg, &st.fg_class);
+        return map_action(
+            st.engine.process_delimiter('\t'),
+            Some(VK_TAB),
+            &cfg,
+            &st.fg_class,
+            &st.fg_process,
+        );
     }
-    let Some(ch) = translate_vk_to_char(vk, scan, st.shift_down) else {
+    let Some(ch) = translate_vk_to_char(vk, scan, st.shift_down, st.caps_lock_on) else {
         return KeyDecision::Pass;
     };
     if st.engine.is_active_delimiter(ch) {
         maybe_preload_macro_clipboard(st);
     }
     let trailing = if ch == ' ' { Some(VK_SPACE) } else { None };
-    map_action(st.engine.process_key(ch), trailing, &cfg, &st.fg_class)
+    map_action(
+        st.engine.process_key(ch),
+        trailing,
+        &cfg,
+        &st.fg_class,
+        &st.fg_process,
+    )
 }
 
 fn handle_key_event(vk: u16, scan: u32, is_down: bool, is_up: bool) -> KeyDecision {
@@ -686,15 +767,17 @@ fn handle_key_event(vk: u16, scan: u32, is_down: bool, is_up: bool) -> KeyDecisi
         }
     }
 
-    if is_down && matches!(vk, VK_TAB | VK_RETURN) {
-        crate::uia::notify_focus_check();
-    }
-
     let mut fx = KeySideEffects::new();
 
     let decision = with_state(|st| {
         let hold_key = st.engine.config().hold_english_key;
         update_modifier_flags(st, hold_key, vk, is_down);
+        if is_down
+            && (matches!(vk, VK_TAB | VK_RETURN | VK_F6)
+                || ((st.ctrl_down || st.alt_down) && !is_modifier_vk(vk)))
+        {
+            crate::uia::notify_focus_check();
+        }
         if st.suspend_typing_for_hotkey {
             return KeyDecision::Pass;
         }
@@ -703,6 +786,16 @@ fn handle_key_event(vk: u16, scan: u32, is_down: bool, is_up: bool) -> KeyDecisi
         }
         if let Some(d) = handle_quick_capslock(st, vk, is_down, is_up, &mut fx) {
             return d;
+        }
+        if vk == VK_CAPITAL {
+            if is_down && !st.caps_key_down {
+                st.caps_key_down = true;
+                if !st.ctrl_down && !st.alt_down && !st.win_down {
+                    st.caps_lock_on = !st.caps_lock_on;
+                }
+            } else if is_up {
+                st.caps_key_down = false;
+            }
         }
         if is_down && matches!(vk, VK_TAB | VK_RETURN) && st.engine.config().show_caret_osd {
             fx.notify_hwnd = st.main_window();
@@ -788,14 +881,15 @@ fn map_action(
     trailing_vk: Option<u16>,
     cfg: &mskey_core::Config,
     fg_class: &str,
+    fg_process: &str,
 ) -> KeyDecision {
-    match crate::hook_send::build_replace_payload(act, trailing_vk, cfg, fg_class) {
+    match crate::hook_send::build_replace_payload(act, trailing_vk, cfg, fg_class, fg_process) {
         Some(p) => KeyDecision::Inject(p),
         None => KeyDecision::Pass,
     }
 }
 
-fn translate_vk_to_char(vk: u16, scan: u32, shift_down: bool) -> Option<char> {
+fn translate_vk_to_char(vk: u16, scan: u32, shift_down: bool, caps_on: bool) -> Option<char> {
     let mut state = [0u8; 256];
     let _ = unsafe { GetKeyboardState(state.as_mut_ptr()) };
     if shift_down || unsafe { GetAsyncKeyState(VK_SHIFT as i32) } < 0 {
@@ -809,9 +903,7 @@ fn translate_vk_to_char(vk: u16, scan: u32, shift_down: bool) -> Option<char> {
     state[VK_MENU as usize] = 0;
     state[VK_LMENU as usize] = 0;
     state[VK_RMENU as usize] = 0;
-    if (unsafe { GetAsyncKeyState(VK_CAPITAL as i32) } & 1) != 0 {
-        state[VK_CAPITAL as usize] |= 0x01;
-    }
+    state[VK_CAPITAL as usize] = if caps_on { 0x01 } else { 0 };
     let fg = unsafe { GetForegroundWindow() };
     let tid = if fg.is_null() {
         0
