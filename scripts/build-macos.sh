@@ -21,6 +21,8 @@ cp "${ROOT_DIR}/macos/MSKeyMac/Info.plist" "${APP_DIR}/Contents/Info.plist"
 plutil -replace CFBundleShortVersionString -string "${VERSION}" "${APP_DIR}/Contents/Info.plist"
 cp "${ROOT_DIR}/assets/branding/mskey.icns" "${APP_DIR}/Contents/Resources/mskey.icns"
 cp "${ROOT_DIR}/assets/branding/mskey-mark.png" "${APP_DIR}/Contents/Resources/mskey-mark.png"
+cp "${ROOT_DIR}/scripts/macos-local-sign.sh" "${APP_DIR}/Contents/Resources/macos-local-sign.sh"
+chmod 755 "${APP_DIR}/Contents/Resources/macos-local-sign.sh"
 chmod +x "${APP_DIR}/Contents/MacOS/MSKey"
 
 if command -v codesign >/dev/null 2>&1; then

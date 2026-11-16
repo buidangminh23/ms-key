@@ -128,6 +128,8 @@ plutil -replace CFBundleShortVersionString -string "${VERSION}" "${APP}/Contents
 plutil -replace CFBundleVersion -string "${BUILD_NUMBER}" "${APP}/Contents/Info.plist"
 cp "${ROOT_DIR}/LICENSE" "${APP}/Contents/Resources/LICENSE"
 cp "${ROOT_DIR}/THIRD-PARTY-NOTICES.md" "${APP}/Contents/Resources/THIRD-PARTY-NOTICES.md"
+cp "${ROOT_DIR}/scripts/macos-local-sign.sh" "${APP}/Contents/Resources/macos-local-sign.sh"
+chmod 755 "${APP}/Contents/Resources/macos-local-sign.sh"
 codesign --force --deep --sign - "${APP}"
 codesign --verify --deep --strict "${APP}"
 

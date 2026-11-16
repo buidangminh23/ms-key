@@ -437,6 +437,7 @@ final class MSKeyMacTests: XCTestCase {
             workDirPath: "/tmp/work"
         )
         XCTAssertTrue(replaceScript.contains("xattr -dr com.apple.quarantine"))
+        XCTAssertTrue(replaceScript.contains("Contents/Resources/macos-local-sign.sh"))
         XCTAssertTrue(replaceScript.contains("open -n '/Applications/MSKey.app'"))
     }
 
