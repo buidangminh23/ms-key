@@ -125,7 +125,11 @@ fn try_create_single_instance_mutex(name: &[u16]) -> Option<InstanceGuard> {
 
 pub fn acquire_single_instance_for(wait_for_release: bool) -> Option<InstanceGuard> {
     let mutex_name = single_instance_mutex_name_for(&current_desktop_tag());
-    let name = to_wide(&mutex_name);
+    acquire_named_instance(&mutex_name, wait_for_release)
+}
+
+fn acquire_named_instance(mutex_name: &str, wait_for_release: bool) -> Option<InstanceGuard> {
+    let name = to_wide(mutex_name);
     let attempts = if wait_for_release { 80 } else { 1 };
     for idx in 0..attempts {
         if let Some(guard) = try_create_single_instance_mutex(&name) {
@@ -670,9 +674,18 @@ mod tests {
         assert!(interactive.starts_with("Local\\MSKey_SingleInstance_"));
         assert!(!current_desktop_tag().is_empty());
 
-        let first = acquire_single_instance_for(false).expect("first instance lock");
-        assert!(acquire_single_instance_for(false).is_none());
+        let nanos = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map(|d| d.as_nanos())
+            .unwrap_or_default();
+        let test_name = format!(
+            "Local\\MSKey_SingleInstance_Test_{}_{nanos}",
+            std::process::id()
+        );
+        let first = acquire_named_instance(&test_name, false).expect("first instance lock");
+        assert!(acquire_named_instance(&test_name, false).is_none());
+        assert!(acquire_named_instance(&test_name, true).is_none());
         drop(first);
-        assert!(acquire_single_instance_for(false).is_some());
+        assert!(acquire_named_instance(&test_name, false).is_some());
     }
 }
