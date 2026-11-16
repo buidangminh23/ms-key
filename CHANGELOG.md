@@ -2,6 +2,17 @@
 
 All notable changes to MS Key are documented here. The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and the project uses [Semantic Versioning](https://semver.org/).
 
+## [0.1.5] - 2026-11-16
+
+### Fixed
+
+- **Windows: MS Key no longer stops after three days of uptime.** With "Chạy với quyền Admin" on, MS Key starts at sign-in through the scheduled task `MSKeyAutoStart`. The task was created with `schtasks /TR`, which applies Task Scheduler's defaults: a 72-hour run limit and Below Normal priority, so on a PC that stays on Task Scheduler closed MS Key after three days. The task is now registered from an XML definition with no run limit, Normal priority, a 5-second delay after sign-in, three restarts one minute apart if it fails, and a trigger bound to the signed-in user's SID. Saving settings from an elevated MS Key rewrites an existing task with these values.
+- **Windows: no console flash when the startup task is updated.** `schtasks` now runs without a window.
+
+### Downloads
+
+- Windows 10/11: `MSKey-Setup-0.1.5-windows-x64.exe`, `MSKey-0.1.5-windows-x64-portable.zip` or `MSKey-0.1.5-windows-arm64-portable.zip`. To repair an existing task, open MS Key's settings with "Chạy với quyền Admin" and "Khởi động cùng Windows" on and save once.
+- macOS 13+ (Intel and Apple Silicon): run `curl -fsSL https://github.com/buidangminh23/ms-key/releases/latest/download/install-macos.sh | bash`. The DMG `MSKey-0.1.5-macos-universal.dmg` also works; after a browser download, run `xattr -dr com.apple.quarantine /Applications/MSKey.app`. macOS and Linux have no behaviour change in this release.
 ## [0.1.4] - 2026-11-16
 
 ### Changed
