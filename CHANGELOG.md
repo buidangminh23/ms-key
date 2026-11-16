@@ -2,6 +2,35 @@
 
 All notable changes to MS Key are documented here. The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and the project uses [Semantic Versioning](https://semver.org/).
 
+## [0.1.6] - 2026-11-16
+
+### Added
+
+- **Check-for-updates & SHA-256 verified self-update across all platforms**:
+  - **Core (`mskey-core::update`) & CLI (`mskey update`)**: compares versions against GitHub's latest release, verifies release assets against `SHA256SUMS` using built-in SHA-256 verification, and supports `--check`, `--download`, `--apply`, `--target`, `--to-dir`, and `--json`.
+  - **Windows (`mskey-win`)**: adds "Kiểm tra cập nhật" / auto-check support in Settings and Tray, downloads installer or portable ZIP builds into `%TEMP%\mskey-update`, verifies SHA-256, and spawns a detached PowerShell updater that cleanly relaunches MS Key (preserving elevated task start when appropriate).
+  - **macOS (`MSKeyMac`)**: updates `UpdateChecker` to download, verify `SHA256SUMS`, extract/stage, and install `.zip` updates over the running `.app` bundle via Settings/menu actions.
+  - **Linux (`mskey-linux`)**: adds update check/download and `.deb` / tarball self-update helpers to GTK Settings and Tray.
+
+### Fixed
+
+- **Telex `ư`/`w`, double-key reverts, and `Backspace` re-typing**:
+  - Preserved `auto_o_horn` across trailing consonants and tone keys so accidental trailing `w` keystrokes do not break words such as `được`, `nước`, and `người`.
+  - Tightened `can_insert_w_as_u_horn` prefix checks so `new`, `view`, `review`, `kw`, `pw`, `quw`, `ghw`, and `nghw` do not turn `w` into `ư` mid-typing.
+  - Normalized open `ươ` syllables on delimiters (`thuwor ` → `thuở `, `huwo ` → `huơ `, `khuwo ` → `khuơ `) and validated `hoa/hoă/oă/oeo/băn khoăn` and tone-before-modifier sequences alongside checked-coda tone rules.
+  - Synchronized reverted `raw` buffers (`sync_reverted_plain_ascii`) across `d`-stroke, circumflex, breve, horn, and `w` reverts and reset revert state on `Backspace` (`beee\x08e` → `bê`, `tuww\x08w` → `tư`, `ddd\x08d` → `đ`, `cooo\x08o` → `cô`, `toiss\x08s` → `tói`, `beee\x08t` → `bet`, `tuww\x08i` → `tui`).
+- **English auto-restore accuracy**:
+  - Added inflected stem matching (`-s`, `-es`, `-ed`, `-ing` for stems ≥ 4 ASCII chars), apostrophe contraction restoration (`didn't`, `hadn't`, `doesn't`, `wasn't`), reverted-circumflex + `đ` preservation (`ddeee ` → `đee `), and `f`/`j`/`w`/`z` onset restoration (`foos`, `jaws`), plus expanded `english_dict_merged.txt` with non-colliding tech and `Cw`/`ee`/`oo` English words (`dwarf`, `dwell`, `tweet`, etc.).
+- **Windows hook stability & modifier handling**:
+  - Fixed modifier key tracking (per-side Ctrl/Shift/Alt/Win + CapsLock state), async UIA password detection hardening, and `CompatibleHook` `dispatch_payload` modifier cycling so fast uppercase typing does not leave `Shift` stuck.
+
+### Downloads
+
+- Windows 10/11: `MSKey-Setup-0.1.6-windows-x64.exe`, `MSKey-0.1.6-windows-x64-portable.zip`, or `MSKey-0.1.6-windows-arm64-portable.zip` (plus `mskey-cli-0.1.6-windows-x64.zip`).
+- macOS 13+ (Intel and Apple Silicon): run `curl -fsSL https://github.com/buidangminh23/ms-key/releases/latest/download/install-macos.sh | bash` or install from `MSKey-0.1.6-macos-universal.dmg` (if downloaded via browser, run `xattr -dr com.apple.quarantine /Applications/MSKey.app`).
+- Linux (amd64 / arm64): `mskey_0.1.6_amd64.deb`, `mskey_0.1.6_arm64.deb`, `MSKey-0.1.6-linux-amd64.tar.gz`, `MSKey-0.1.6-linux-arm64.tar.gz`, and `mskey-cli-0.1.6-linux-*.tar.gz`.
+- npm installer: `npx @minhspark/ms-key@0.1.6`
+
 ## [0.1.5] - 2026-11-16
 
 ### Fixed
