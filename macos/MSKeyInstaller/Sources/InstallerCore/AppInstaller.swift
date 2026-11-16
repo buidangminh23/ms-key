@@ -125,8 +125,9 @@ public struct AppInstaller: Sendable {
             throw InstallError.invalidApp("Nội dung ứng dụng đã thay đổi khi sao chép. Hãy mở lại trình cài đặt.")
         }
         try validate(stage)
-        Self.applyLocalSigning(stage)
-        try Self.validateSignature(stage)
+        if Self.applyLocalSigning(stage) {
+            try validate(stage)
+        }
         try validateTarget(target)
         guard !isRunning(target) else { throw InstallError.appRunning }
         try cancellation.check()
@@ -209,9 +210,10 @@ public struct AppInstaller: Sendable {
         return total
     }
 
-    private static func applyLocalSigning(_ app: URL) {
+    @discardableResult
+    private static func applyLocalSigning(_ app: URL) -> Bool {
         let signer = app.appendingPathComponent("Contents/Resources/macos-local-sign.sh")
-        guard FileManager.default.fileExists(atPath: signer.path) else { return }
+        guard FileManager.default.fileExists(atPath: signer.path) else { return false }
         let process = Process()
         process.executableURL = URL(fileURLWithPath: "/bin/bash")
         process.arguments = [signer.path, app.path]
@@ -221,8 +223,9 @@ public struct AppInstaller: Sendable {
             try process.run()
             process.waitUntilExit()
         } catch {
-            return
+            return false
         }
+        return process.terminationStatus == 0
     }
 
     private static func validateSignature(_ app: URL) throws {
