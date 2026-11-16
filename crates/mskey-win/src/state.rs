@@ -47,38 +47,72 @@ pub struct AppState {
 static STATE: OnceLock<Mutex<AppState>> = OnceLock::new();
 
 pub fn init_state(config: Config) {
-    let pref = config.vietnamese_enabled;
-    let mut engine = Engine::new(config);
-    engine.set_clock_offset_secs(crate::platform_extra::local_utc_offset_secs());
-    let caps_init = (unsafe { GetKeyState(VK_CAPITAL as i32) } & 1) != 0;
-    let _ = STATE.set(Mutex::new(AppState {
-        engine,
-        main_hwnd: 0,
-        fg_process: String::new(),
-        fg_class: String::new(),
-        fg_title: String::new(),
-        fg_is_us: true,
-        fg_hwnd: 0,
-        last_typing_hwnd: 0,
-        user_preferred_ve: pref,
-        app_ve_memory: HashMap::new(),
-        suspend_typing_for_hotkey: false,
-        pending_ctrl_shift: false,
-        ctrl_down: false,
-        shift_down: false,
-        alt_down: false,
-        win_down: false,
-        l_ctrl_down: false,
-        r_ctrl_down: false,
-        l_shift_down: false,
-        r_shift_down: false,
-        l_alt_down: false,
-        r_alt_down: false,
-        l_win_down: false,
-        r_win_down: false,
-        caps_lock_on: caps_init,
-        caps_key_down: false,
-    }));
+    let mut state = AppState::new(config);
+    state
+        .engine
+        .set_clock_offset_secs(crate::platform_extra::local_utc_offset_secs());
+    let _ = STATE.set(Mutex::new(state));
+}
+
+fn own_process_name() -> &'static str {
+    static NAME: OnceLock<String> = OnceLock::new();
+    NAME.get_or_init(|| {
+        std::env::current_exe()
+            .ok()
+            .and_then(|p| p.file_name().map(|n| n.to_string_lossy().into_owned()))
+            .unwrap_or_default()
+    })
+}
+
+fn is_shell_or_own_window(class_name: &str, process: &str) -> bool {
+    let own = own_process_name();
+    matches!(
+        class_name,
+        "Shell_TrayWnd"
+            | "Shell_SecondaryTrayWnd"
+            | "NotifyIconOverflowWindow"
+            | "TopLevelWindowForOverflowXamlIsland"
+            | "MSKeyMainWindow"
+            | "MSKeyConvertPopup"
+            | "MSKeyCaretHUD"
+            | "MSKeySwitchOSD"
+    ) || (!own.is_empty() && process.eq_ignore_ascii_case(own))
+}
+
+impl AppState {
+    pub fn new(config: Config) -> Self {
+        let pref = config.vietnamese_enabled;
+        let engine = Engine::new(config);
+        let caps_init = (unsafe { GetKeyState(VK_CAPITAL as i32) } & 1) != 0;
+        AppState {
+            engine,
+            main_hwnd: 0,
+            fg_process: String::new(),
+            fg_class: String::new(),
+            fg_title: String::new(),
+            fg_is_us: true,
+            fg_hwnd: 0,
+            last_typing_hwnd: 0,
+            user_preferred_ve: pref,
+            app_ve_memory: HashMap::new(),
+            suspend_typing_for_hotkey: false,
+            pending_ctrl_shift: false,
+            ctrl_down: false,
+            shift_down: false,
+            alt_down: false,
+            win_down: false,
+            l_ctrl_down: false,
+            r_ctrl_down: false,
+            l_shift_down: false,
+            r_shift_down: false,
+            l_alt_down: false,
+            r_alt_down: false,
+            l_win_down: false,
+            r_win_down: false,
+            caps_lock_on: caps_init,
+            caps_key_down: false,
+        }
+    }
 }
 
 pub fn with_state<R>(f: impl FnOnce(&mut AppState) -> R) -> R {
@@ -170,6 +204,11 @@ impl AppState {
         title: String,
         is_us: bool,
     ) {
+        if is_shell_or_own_window(&class_name, &process) {
+            self.fg_hwnd = hwnd;
+            self.engine.reset_all();
+            return;
+        }
         let same_app = self.fg_process.eq_ignore_ascii_case(&process) && !process.is_empty();
         let prev_behavior = self.current_window_behavior();
         self.fg_hwnd = hwnd;
@@ -224,5 +263,48 @@ impl AppState {
         self.apply_window_behavior();
         prev_active != self.engine.is_vietnamese_active()
             || prev_blacklisted != self.is_blacklisted()
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use mskey_core::AppRule;
+
+    fn state_with_explorer_rule() -> AppState {
+        AppState::new(Config {
+            vietnamese_enabled: true,
+            app_rules: vec![AppRule {
+                process_name: "explorer.exe".to_string(),
+                title_pattern: String::new(),
+                behavior: AppBehavior::ForceEnglish,
+            }],
+            ..Config::default()
+        })
+    }
+
+    #[test]
+    fn taskbar_and_own_windows_keep_the_current_app_mode() {
+        let mut st = state_with_explorer_rule();
+        st.update_foreground(10, "chrome.exe".into(), "Chrome_WidgetWin_1".into(), "Tab".into(), true);
+        assert!(st.effective_vietnamese());
+
+        st.update_foreground(11, "explorer.exe".into(), "Shell_TrayWnd".into(), String::new(), true);
+        assert!(st.effective_vietnamese());
+        assert_eq!(st.fg_process, "chrome.exe");
+
+        st.update_foreground(12, "explorer.exe".into(), "Shell_SecondaryTrayWnd".into(), String::new(), true);
+        assert!(st.effective_vietnamese());
+
+        let own = own_process_name().to_string();
+        st.update_foreground(13, own, "MSKeyMainWindow".into(), "MS Key".into(), true);
+        assert!(st.effective_vietnamese());
+        assert_eq!(st.fg_process, "chrome.exe");
+
+        st.update_foreground(14, "explorer.exe".into(), "CabinetWClass".into(), "Downloads".into(), true);
+        assert!(!st.effective_vietnamese());
+
+        st.update_foreground(10, "chrome.exe".into(), "Chrome_WidgetWin_1".into(), "Tab".into(), true);
+        assert!(st.effective_vietnamese());
     }
 }
