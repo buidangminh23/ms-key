@@ -385,10 +385,12 @@ pub fn write_clipboard_text(text: &str) -> bool {
     }
     #[cfg(target_os = "linux")]
     {
-        return linux_gui::write_clipboard_gtk_safe(text);
+        linux_gui::write_clipboard_gtk_safe(text)
     }
     #[cfg(not(target_os = "linux"))]
-    false
+    {
+        false
+    }
 }
 
 pub fn check_latest_release() -> Result<ReleaseInfo, String> {
