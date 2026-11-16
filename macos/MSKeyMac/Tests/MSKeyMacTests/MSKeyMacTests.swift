@@ -344,8 +344,12 @@ final class MSKeyMacTests: XCTestCase {
         engine.hydrateWord("xin tiếng")
         let hydratedEdit = engine.processKey(scalar: UnicodeScalar("f").value)
         XCTAssertTrue(hydratedEdit.replace)
-        XCTAssertEqual(hydratedEdit.text, "tiềng")
+        var screen = Array("xin tiếng")
+        screen.removeLast(Int(hydratedEdit.backspaces))
+        screen.append(contentsOf: hydratedEdit.text)
+        XCTAssertEqual(String(screen), "xin tiềng")
 
+        engine.resetWord()
         engine.setClipboardText("Swift6")
         XCTAssertEqual(typeTelex(engine, "cb "), "Hi Swift6 ")
         XCTAssertEqual(engine.takePendingCursorLeft(), 0)
