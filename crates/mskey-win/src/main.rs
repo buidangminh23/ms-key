@@ -28,7 +28,10 @@ use windows_sys::Win32::UI::HiDpi::{
 };
 
 use crate::hook::install_hooks;
-use crate::platform::{acquire_single_instance, is_elevated, load_config, relaunch_as_admin};
+use crate::platform::{
+    acquire_single_instance_for, is_elevated, load_config, relaunch_as_admin,
+    signal_existing_instance,
+};
 use crate::state::init_state;
 use crate::ui::create_and_run_main;
 
@@ -46,17 +49,29 @@ fn main() {
         return;
     }
 
-    let Some(_instance_guard) = acquire_single_instance() else {
+    let relaunching = args.iter().any(|a| a == "--relaunch");
+    let want_show = args.iter().any(|a| a == "--show");
+    let mut instance_guard = acquire_single_instance_for(relaunching);
+    if instance_guard.is_none() {
+        signal_existing_instance();
         return;
-    };
+    }
 
     let cfg = load_config();
-    if cfg.run_as_admin && !is_elevated() && !args.iter().any(|a| a == "--no-relaunch")
-        && relaunch_as_admin() {
+    if cfg.run_as_admin && !is_elevated() && !args.iter().any(|a| a == "--no-relaunch") {
+        instance_guard.take();
+        if relaunch_as_admin(want_show) {
             return;
         }
+        instance_guard = acquire_single_instance_for(false);
+        if instance_guard.is_none() {
+            signal_existing_instance();
+            return;
+        }
+    }
+    let _instance_guard = instance_guard;
 
-    let show_gui = cfg.show_on_startup || args.iter().any(|a| a == "--show");
+    let show_gui = cfg.show_on_startup || want_show;
     init_state(cfg);
     crate::uia::start();
     let _hooks = install_hooks();

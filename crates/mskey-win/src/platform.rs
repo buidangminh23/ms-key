@@ -1,11 +1,13 @@
 use std::collections::HashSet;
 use std::env;
+use std::ffi::c_void;
 use std::fs;
 use std::os::windows::ffi::OsStrExt;
 use std::os::windows::process::CommandExt;
 use std::path::{Path, PathBuf};
 use std::process::Command;
 use std::ptr;
+use std::time::Duration;
 
 use mskey_core::Config;
 use windows_sys::Win32::Foundation::{CloseHandle, GetLastError, HANDLE, HWND, LPARAM, LocalFree};
@@ -22,16 +24,21 @@ use windows_sys::Win32::System::Registry::{
     HKEY, HKEY_CURRENT_USER, KEY_READ, KEY_WRITE, REG_SZ, RegCloseKey, RegDeleteValueW,
     RegOpenKeyExW, RegSetValueExW,
 };
+use windows_sys::Win32::System::StationsAndDesktops::{
+    GetProcessWindowStation, GetThreadDesktop, GetUserObjectInformationW, UOI_NAME,
+};
 use windows_sys::Win32::System::Threading::{
-    CreateMutexW, GetCurrentProcess, OpenProcess, OpenProcessToken,
+    CreateMutexW, GetCurrentProcess, GetCurrentThreadId, OpenProcess, OpenProcessToken,
     PROCESS_QUERY_LIMITED_INFORMATION, QueryFullProcessImageNameW,
 };
 use windows_sys::Win32::UI::Input::KeyboardAndMouse::GetKeyboardLayout;
 use windows_sys::Win32::UI::Shell::ShellExecuteW;
 use windows_sys::Win32::UI::WindowsAndMessaging::{
-    EnumWindows, GetClassNameW, GetForegroundWindow, GetWindowTextW, GetWindowThreadProcessId,
-    IsWindowVisible, SW_SHOWNORMAL,
+    AllowSetForegroundWindow, EnumWindows, FindWindowW, GetClassNameW, GetForegroundWindow,
+    GetWindowTextW, GetWindowThreadProcessId, IsWindowVisible, PostMessageW, SW_SHOWNORMAL,
 };
+
+use crate::state::WM_APP_OPEN_MAIN;
 
 const ERROR_ALREADY_EXISTS: u32 = 183;
 const CF_UNICODETEXT_FMT: u32 = 13;
@@ -57,8 +64,51 @@ impl Drop for InstanceGuard {
     }
 }
 
-pub fn acquire_single_instance() -> Option<InstanceGuard> {
-    let name = to_wide("Local\\MSKey_SingleInstance_Mutex");
+fn user_object_name(handle: *mut c_void) -> String {
+    if handle.is_null() {
+        return String::new();
+    }
+    let mut needed = 0u32;
+    let mut buf = [0u16; 128];
+    let ok = unsafe {
+        GetUserObjectInformationW(
+            handle,
+            UOI_NAME,
+            buf.as_mut_ptr() as *mut c_void,
+            (buf.len() * 2) as u32,
+            &mut needed,
+        )
+    };
+    if ok == 0 || needed < 2 {
+        return String::new();
+    }
+    let units = ((needed as usize) / 2).min(buf.len());
+    from_wide_slice(&buf[..units])
+}
+
+fn current_desktop_tag() -> String {
+    let winsta = unsafe { GetProcessWindowStation() };
+    let desktop = unsafe { GetThreadDesktop(GetCurrentThreadId()) };
+    let ws = user_object_name(winsta);
+    let dk = user_object_name(desktop);
+    match (ws.is_empty(), dk.is_empty()) {
+        (false, false) => format!("{ws}\\{dk}"),
+        (true, false) => dk,
+        (false, true) => ws,
+        (true, true) => "default".to_string(),
+    }
+}
+
+fn single_instance_mutex_name_for(desktop_tag: &str) -> String {
+    let mut hash: u64 = 0xcbf2_9ce4_8422_2325;
+    for byte in desktop_tag.to_ascii_lowercase().as_bytes() {
+        hash ^= *byte as u64;
+        hash = hash.wrapping_mul(0x0100_0000_01b3);
+    }
+    format!("Local\\MSKey_SingleInstance_{hash:016x}")
+}
+
+fn try_create_single_instance_mutex(name: &[u16]) -> Option<InstanceGuard> {
     let handle = unsafe { CreateMutexW(ptr::null(), 1, name.as_ptr()) };
     if handle.is_null() {
         return None;
@@ -71,6 +121,42 @@ pub fn acquire_single_instance() -> Option<InstanceGuard> {
         return None;
     }
     Some(InstanceGuard(handle))
+}
+
+pub fn acquire_single_instance_for(wait_for_release: bool) -> Option<InstanceGuard> {
+    let mutex_name = single_instance_mutex_name_for(&current_desktop_tag());
+    let name = to_wide(&mutex_name);
+    let attempts = if wait_for_release { 80 } else { 1 };
+    for idx in 0..attempts {
+        if let Some(guard) = try_create_single_instance_mutex(&name) {
+            return Some(guard);
+        }
+        if idx + 1 < attempts {
+            std::thread::sleep(Duration::from_millis(25));
+        }
+    }
+    None
+}
+
+pub fn signal_existing_instance() -> bool {
+    let cls = to_wide("MSKeyMainWindow");
+    for attempt in 0..4 {
+        let hwnd = unsafe { FindWindowW(cls.as_ptr(), ptr::null()) };
+        if !hwnd.is_null() {
+            let mut pid = 0u32;
+            unsafe {
+                GetWindowThreadProcessId(hwnd, &mut pid);
+                if pid != 0 {
+                    let _ = AllowSetForegroundWindow(pid);
+                }
+            }
+            return unsafe { PostMessageW(hwnd, WM_APP_OPEN_MAIN, 0, 0) } != 0;
+        }
+        if attempt < 3 {
+            std::thread::sleep(Duration::from_millis(40));
+        }
+    }
+    false
 }
 
 pub fn config_file_path() -> PathBuf {
@@ -165,18 +251,19 @@ pub fn is_elevated() -> bool {
     res != 0 && elevation.TokenIsElevated != 0
 }
 
-pub fn relaunch_as_admin() -> bool {
+pub fn relaunch_as_admin(show: bool) -> bool {
     let Ok(exe) = env::current_exe() else {
         return false;
     };
     let verb = to_wide("runas");
     let file = to_wide(&exe.to_string_lossy());
+    let params = to_wide(if show { "--relaunch --show" } else { "--relaunch" });
     let ret = unsafe {
         ShellExecuteW(
             ptr::null_mut(),
             verb.as_ptr(),
             file.as_ptr(),
-            ptr::null(),
+            params.as_ptr(),
             ptr::null(),
             SW_SHOWNORMAL,
         )
@@ -571,5 +658,21 @@ mod tests {
     fn current_user_sid_is_a_user_sid() {
         let sid = current_user_sid().expect("token user sid");
         assert!(sid.starts_with("S-1-5-"), "{sid}");
+    }
+
+    #[test]
+    fn desktop_scoped_mutex_names_differ_across_desktops() {
+        let interactive = single_instance_mutex_name_for("WinSta0\\Default");
+        let same_case_insensitive = single_instance_mutex_name_for("winsta0\\default");
+        let isolated = single_instance_mutex_name_for("WinSta0\\exebox-test");
+        assert_eq!(interactive, same_case_insensitive);
+        assert_ne!(interactive, isolated);
+        assert!(interactive.starts_with("Local\\MSKey_SingleInstance_"));
+        assert!(!current_desktop_tag().is_empty());
+
+        let first = acquire_single_instance_for(false).expect("first instance lock");
+        assert!(acquire_single_instance_for(false).is_none());
+        drop(first);
+        assert!(acquire_single_instance_for(false).is_some());
     }
 }

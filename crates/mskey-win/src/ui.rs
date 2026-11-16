@@ -7,14 +7,14 @@ use windows_sys::Win32::Graphics::Gdi::{CreateSolidBrush, DeleteObject};
 use windows_sys::Win32::System::LibraryLoader::GetModuleHandleW;
 use windows_sys::Win32::UI::HiDpi::AdjustWindowRectExForDpi;
 use windows_sys::Win32::UI::WindowsAndMessaging::{
-    CreateWindowExW, DefWindowProcW, DestroyWindow, DispatchMessageW, GetMessageW,
-    GetSystemMetrics, ICON_BIG, ICON_SMALL, IsWindowVisible, KillTimer, MSG, PostQuitMessage,
-    RegisterClassExW, SM_CXSCREEN, SM_CYSCREEN, SPI_GETCLIENTAREAANIMATION, SW_HIDE, SW_RESTORE,
-    SW_SHOW, SendMessageW, SetForegroundWindow, SetTimer, SetWindowPos, ShowWindow,
-    SystemParametersInfoW, TranslateMessage, WM_CLOSE, WM_COMMAND, WM_CREATE, WM_CTLCOLOREDIT,
-    WM_CTLCOLORLISTBOX, WM_CTLCOLORSTATIC, WM_DESTROY, WM_DPICHANGED, WM_DRAWITEM, WM_LBUTTONDBLCLK,
-    WM_LBUTTONUP, WM_MBUTTONUP, WM_PAINT, WM_RBUTTONUP, WM_SETICON, WM_TIMER, WNDCLASSEXW,
-    WS_CAPTION, WS_MINIMIZEBOX, WS_SYSMENU,
+    ChangeWindowMessageFilterEx, CreateWindowExW, DefWindowProcW, DestroyWindow, DispatchMessageW,
+    GetMessageW, GetSystemMetrics, ICON_BIG, ICON_SMALL, IsWindowVisible, KillTimer,
+    MSGFLT_ALLOW, MSG, PostQuitMessage, RegisterClassExW, SM_CXSCREEN, SM_CYSCREEN,
+    SPI_GETCLIENTAREAANIMATION, SW_HIDE, SW_RESTORE, SW_SHOW, SendMessageW, SetForegroundWindow,
+    SetTimer, SetWindowPos, ShowWindow, SystemParametersInfoW, TranslateMessage, WM_CLOSE,
+    WM_COMMAND, WM_CREATE, WM_CTLCOLOREDIT, WM_CTLCOLORLISTBOX, WM_CTLCOLORSTATIC, WM_DESTROY,
+    WM_DPICHANGED, WM_DRAWITEM, WM_LBUTTONDBLCLK, WM_LBUTTONUP, WM_MBUTTONUP, WM_PAINT,
+    WM_RBUTTONUP, WM_SETICON, WM_TIMER, WNDCLASSEXW, WS_CAPTION, WS_MINIMIZEBOX, WS_SYSMENU,
 };
 
 use crate::dialog_convert::{capture_hotkey_dialog, show_converter_dialog};
@@ -145,6 +145,9 @@ fn show_and_focus(hwnd: HWND) {
 }
 
 fn on_main_create(hwnd: HWND) {
+    unsafe {
+        ChangeWindowMessageFilterEx(hwnd, WM_APP_OPEN_MAIN, MSGFLT_ALLOW, ptr::null_mut());
+    }
     let dpi = window_dpi(hwnd);
     let mut rc = RECT { left: 0, top: 0, right: scale_px(MAIN_W, dpi), bottom: scale_px(MAIN_H, dpi) };
     unsafe {
@@ -455,7 +458,7 @@ fn handle_command(hwnd: HWND, id: usize, code: usize) {
         }
         IDC_BTN_OPEN_CFG_DIR => open_config_directory(),
         IDC_BTN_RELAUNCH_ADMIN => {
-            if !is_elevated() && relaunch_as_admin() {
+            if !is_elevated() && relaunch_as_admin(true) {
                 unsafe {
                     DestroyWindow(hwnd);
                 }
