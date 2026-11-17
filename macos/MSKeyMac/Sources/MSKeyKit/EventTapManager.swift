@@ -28,6 +28,7 @@ public final class EventTapManager: @unchecked Sendable {
     private var tapGeneration: UInt64 = 0
     private var sandboxFocused = false
     private var bufferActive = false
+    private var usesUSKeyboardLayout = true
     private var isSelectionPopupOpen = false
     private var pasteGeneration: UInt64 = 0
     private var pendingSavedPasteboard: [[(String, Data)]]?
@@ -211,6 +212,17 @@ public final class EventTapManager: @unchecked Sendable {
         session.invalidateActive()
         session.setUserVE(cfg.vietnamese_enabled)
         lock.unlock()
+    }
+
+    func updateKeyboardLayout(isUS: Bool) {
+        lock.lock()
+        defer { lock.unlock() }
+        guard usesUSKeyboardLayout != isUS else { return }
+        usesUSKeyboardLayout = isUS
+        if config.disable_on_non_us_layout {
+            rust.resetAll()
+            bufferActive = false
+        }
     }
 
     public func setSandboxFocused(_ focused: Bool) {
@@ -408,7 +420,7 @@ public final class EventTapManager: @unchecked Sendable {
             return handleFlagsChanged(event)
         }
         if type == .keyDown {
-            return handleKeyDown(event)
+            return handleKeyDown(event, proxy: proxy)
         }
         return Unmanaged.passUnretained(event)
     }
@@ -434,7 +446,7 @@ public final class EventTapManager: @unchecked Sendable {
         return Unmanaged.passUnretained(event)
     }
 
-    private func handleKeyDown(_ event: CGEvent) -> Unmanaged<CGEvent>? {
+    private func handleKeyDown(_ event: CGEvent, proxy: CGEventTapProxy) -> Unmanaged<CGEvent>? {
         let keyCode = UInt16(event.getIntegerValueField(.keyboardEventKeycode))
         let vk = MacKeycode.toPortableVK(keyCode)
         let flags = event.flags.rawValue
@@ -512,7 +524,7 @@ public final class EventTapManager: @unchecked Sendable {
                 if let s = pendingAppSync {
                     DispatchQueue.main.async { self.onSyncUI?(s.0, s.1, false) }
                 }
-                return applyAction(undoAct, original: event, triggerKeyCode: keyCode, opts: undoOpts, cursorLeft: 0)
+                return applyAction(undoAct, original: event, triggerKeyCode: keyCode, opts: undoOpts, cursorLeft: 0, proxy: proxy)
             }
             lock.unlock()
             if let s = pendingAppSync {
@@ -538,14 +550,14 @@ public final class EventTapManager: @unchecked Sendable {
             return Unmanaged.passUnretained(event)
         }
 
-        let disableNonUS = config.disable_on_non_us_layout
+        let bypassLayout = config.disable_on_non_us_layout && !usesUSKeyboardLayout
         let opts = makeSendOptionsInsideLock(activeApp: activeApp)
         lock.unlock()
 
         if let s = pendingAppSync {
             DispatchQueue.main.async { self.onSyncUI?(s.0, s.1, false) }
         }
-        if disableNonUS && !MacAppDetector.isUSKeyboardLayout() {
+        if bypassLayout {
             return Unmanaged.passUnretained(event)
         }
         if MacAppDetector.isSecureInputOrPasswordFocused() {
@@ -555,10 +567,10 @@ public final class EventTapManager: @unchecked Sendable {
             lock.unlock()
             return Unmanaged.passUnretained(event)
         }
-        return processKeyAction(event: event, keyCode: keyCode, opts: opts)
+        return processKeyAction(event: event, keyCode: keyCode, opts: opts, proxy: proxy)
     }
 
-    private func processKeyAction(event: CGEvent, keyCode: UInt16, opts: SendOptions) -> Unmanaged<CGEvent>? {
+    private func processKeyAction(event: CGEvent, keyCode: UInt16, opts: SendOptions, proxy: CGEventTapProxy) -> Unmanaged<CGEvent>? {
         lock.lock()
         var cursorLeft = 0
         let act: KeyActionResult
@@ -611,7 +623,7 @@ public final class EventTapManager: @unchecked Sendable {
             return Unmanaged.passUnretained(event)
         }
         lock.unlock()
-        return applyAction(act, original: event, triggerKeyCode: keyCode, opts: opts, cursorLeft: cursorLeft)
+        return applyAction(act, original: event, triggerKeyCode: keyCode, opts: opts, cursorLeft: cursorLeft, proxy: proxy)
     }
 
     private func toggleVEInsideLock() -> (Bool, String, Bool) {
@@ -649,7 +661,8 @@ public final class EventTapManager: @unchecked Sendable {
         original: CGEvent,
         triggerKeyCode: UInt16,
         opts: SendOptions,
-        cursorLeft: Int
+        cursorLeft: Int,
+        proxy: CGEventTapProxy
     ) -> Unmanaged<CGEvent>? {
         guard act.replace else {
             return Unmanaged.passUnretained(original)
@@ -666,36 +679,36 @@ public final class EventTapManager: @unchecked Sendable {
 
         if act.backspaces > 0 {
             if opts.browserFix1 {
-                CGEventEmitter.postUnicodeText("\u{200B}", singleChar: true, delayMs: opts.delayMs)
-                CGEventEmitter.postBackspaces(1, delayMs: opts.delayMs)
+                CGEventEmitter.postUnicodeText("\u{200B}", singleChar: true, delayMs: opts.delayMs, proxy: proxy)
+                CGEventEmitter.postBackspaces(1, delayMs: opts.delayMs, proxy: proxy)
             }
             if opts.browserFix2 {
-                CGEventEmitter.postVirtualKey(CGKeyCode(kVK_RightArrow), flags: [], delayMs: opts.delayMs)
+                CGEventEmitter.postVirtualKey(CGKeyCode(kVK_RightArrow), flags: [], delayMs: opts.delayMs, proxy: proxy)
             }
-            CGEventEmitter.postBackspaces(act.backspaces, delayMs: opts.delayMs)
+            CGEventEmitter.postBackspaces(act.backspaces, delayMs: opts.delayMs, proxy: proxy)
         }
         if !body.isEmpty {
             if opts.useClipboard && body.count > 1 {
-                emitViaPasteboard(body, pasteShiftInsert: opts.pasteShiftInsert, delayMs: opts.delayMs)
+                emitViaPasteboard(body, pasteShiftInsert: opts.pasteShiftInsert, delayMs: opts.delayMs, proxy: proxy)
             } else {
-                CGEventEmitter.postUnicodeText(body, singleChar: opts.standardMode, delayMs: opts.delayMs)
+                CGEventEmitter.postUnicodeText(body, singleChar: opts.standardMode, delayMs: opts.delayMs, proxy: proxy)
             }
         }
         if let trailingVK {
             if opts.useClipboard && body.count > 1 { usleep(8000) }
-            CGEventEmitter.postVirtualKey(trailingVK, flags: [], delayMs: opts.delayMs)
+            CGEventEmitter.postVirtualKey(trailingVK, flags: [], delayMs: opts.delayMs, proxy: proxy)
         } else if cursorLeft > 0 && opts.useClipboard && body.count > 1 {
             usleep(8000)
         }
         if cursorLeft > 0 {
             for _ in 0..<cursorLeft {
-                CGEventEmitter.postVirtualKey(CGKeyCode(kVK_LeftArrow), flags: [], delayMs: opts.delayMs)
+                CGEventEmitter.postVirtualKey(CGKeyCode(kVK_LeftArrow), flags: [], delayMs: opts.delayMs, proxy: proxy)
             }
         }
         return nil
     }
 
-    private func emitViaPasteboard(_ text: String, pasteShiftInsert: Bool, delayMs: Int) {
+    private func emitViaPasteboard(_ text: String, pasteShiftInsert: Bool, delayMs: Int, proxy: CGEventTapProxy) {
         let result = runOnMainSync { () -> (UInt64, Int) in
             let pb = NSPasteboard.general
             self.lock.lock()
@@ -720,9 +733,9 @@ public final class EventTapManager: @unchecked Sendable {
             usleep(UInt32(min(delayMs, 10)) * 1000)
         }
         if pasteShiftInsert {
-            CGEventEmitter.postVirtualKey(CGKeyCode(kVK_Help), flags: .maskShift, delayMs: 0)
+            CGEventEmitter.postVirtualKey(CGKeyCode(kVK_Help), flags: .maskShift, delayMs: 0, proxy: proxy)
         } else {
-            CGEventEmitter.postVirtualKey(CGKeyCode(kVK_ANSI_V), flags: .maskCommand, delayMs: 0)
+            CGEventEmitter.postVirtualKey(CGKeyCode(kVK_ANSI_V), flags: .maskCommand, delayMs: 0, proxy: proxy)
         }
         let gen = result.0
         let expectedCount = result.1

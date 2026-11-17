@@ -66,7 +66,7 @@ struct SendOptions {
 let mskeyEventTag: Int64 = 0x4D53_4B59
 
 enum CGEventEmitter {
-    static func postVirtualKey(_ vk: CGKeyCode, flags: CGEventFlags, delayMs: Int) {
+    static func postVirtualKey(_ vk: CGKeyCode, flags: CGEventFlags, delayMs: Int, proxy: CGEventTapProxy? = nil) {
         let src = CGEventSource(stateID: .privateState)
         guard let down = CGEvent(keyboardEventSource: src, virtualKey: vk, keyDown: true),
               let up = CGEvent(keyboardEventSource: src, virtualKey: vk, keyDown: false) else {
@@ -76,25 +76,30 @@ enum CGEventEmitter {
         up.flags = flags
         down.setIntegerValueField(.eventSourceUserData, value: mskeyEventTag)
         up.setIntegerValueField(.eventSourceUserData, value: mskeyEventTag)
-        down.post(tap: .cghidEventTap)
-        up.post(tap: .cghidEventTap)
+        if let proxy {
+            down.tapPostEvent(proxy)
+            up.tapPostEvent(proxy)
+        } else {
+            down.post(tap: .cghidEventTap)
+            up.post(tap: .cghidEventTap)
+        }
         if delayMs > 0 {
             usleep(UInt32(delayMs) * 1000)
         }
     }
 
-    static func postBackspaces(_ count: Int, delayMs: Int) {
+    static func postBackspaces(_ count: Int, delayMs: Int, proxy: CGEventTapProxy) {
         for _ in 0..<count {
-            postVirtualKey(CGKeyCode(kVK_Delete), flags: [], delayMs: delayMs)
+            postVirtualKey(CGKeyCode(kVK_Delete), flags: [], delayMs: delayMs, proxy: proxy)
         }
     }
 
-    static func postUnicodeText(_ text: String, singleChar: Bool, delayMs: Int) {
+    static func postUnicodeText(_ text: String, singleChar: Bool, delayMs: Int, proxy: CGEventTapProxy) {
         let src = CGEventSource(stateID: .privateState)
         if singleChar {
             for scalar in text.unicodeScalars {
                 var units = Array(String(scalar).utf16)
-                postUnicodeUnits(&units, src: src, delayMs: delayMs)
+                postUnicodeUnits(&units, src: src, delayMs: delayMs, proxy: proxy)
             }
             return
         }
@@ -103,12 +108,12 @@ enum CGEventEmitter {
         while offset < units.count {
             let end = min(offset + 16, units.count)
             var slice = Array(units[offset..<end])
-            postUnicodeUnits(&slice, src: src, delayMs: delayMs)
+            postUnicodeUnits(&slice, src: src, delayMs: delayMs, proxy: proxy)
             offset = end
         }
     }
 
-    private static func postUnicodeUnits(_ units: inout [UniChar], src: CGEventSource?, delayMs: Int) {
+    private static func postUnicodeUnits(_ units: inout [UniChar], src: CGEventSource?, delayMs: Int, proxy: CGEventTapProxy) {
         guard let down = CGEvent(keyboardEventSource: src, virtualKey: 0, keyDown: true),
               let up = CGEvent(keyboardEventSource: src, virtualKey: 0, keyDown: false) else {
             return
@@ -119,8 +124,8 @@ enum CGEventEmitter {
         up.setIntegerValueField(.eventSourceUserData, value: mskeyEventTag)
         down.keyboardSetUnicodeString(stringLength: units.count, unicodeString: &units)
         up.keyboardSetUnicodeString(stringLength: units.count, unicodeString: &units)
-        down.post(tap: .cghidEventTap)
-        up.post(tap: .cghidEventTap)
+        down.tapPostEvent(proxy)
+        up.tapPostEvent(proxy)
         if delayMs > 0 {
             usleep(UInt32(delayMs) * 1000)
         }

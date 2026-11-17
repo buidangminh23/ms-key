@@ -37,6 +37,17 @@ final class MSKeyMacTests: XCTestCase {
         XCTAssertEqual(esc.text, "vieejt")
     }
 
+    func testSpaceKeepsCommittedVietnameseWord() {
+        for (keys, expected) in [
+            ("chayj", "chạy"), ("chajy", "chạy"), ("Chayj", "Chạy"),
+            ("hoong", "hông"), ("khoong", "không")
+        ] {
+            let engine = RustEngine()
+            XCTAssertEqual(typeTelex(engine, keys), expected, keys)
+            XCTAssertEqual(engine.processKey(scalar: 0x20), .passThrough, keys)
+        }
+    }
+
     func testConfigJSONRoundTripBackwardCompatAndCharsetConvert() {
         var cfg = MSKeyConfig()
         cfg.input_method = .vni

@@ -52,7 +52,7 @@ public final class UpdateChecker: ObservableObject {
     public static func currentAppVersion() -> String {
         let ver = MSKeyBrand.version.trimmingCharacters(in: .whitespacesAndNewlines)
         if ver.isEmpty || ver == "development" {
-            return "0.2.0"
+            return "0.2.1"
         }
         return ver
     }

@@ -1,4 +1,5 @@
 import AppKit
+import Carbon
 import Foundation
 import SwiftUI
 
@@ -32,6 +33,7 @@ public final class MSKeyStore: ObservableObject {
     public var menuBar: MenuBarController?
     private var mainWindow: NSWindow?
     private var workspaceObserver: NSObjectProtocol?
+    private var inputSourceObserver: NSObjectProtocol?
     private var permTimer: Timer?
 
     public init() {
@@ -88,6 +90,15 @@ public final class MSKeyStore: ObservableObject {
                 self.tapManager.notifyAppActivated(name, windowTitle: title)
             }
         }
+        inputSourceObserver = DistributedNotificationCenter.default().addObserver(
+            forName: Notification.Name(kTISNotifySelectedKeyboardInputSourceChanged as String),
+            object: nil,
+            queue: .main
+        ) { [weak self] _ in
+            DispatchQueue.main.async {
+                self?.refreshKeyboardLayout()
+            }
+        }
         refreshTapHealth()
         if !accessibilityGranted {
             promptAccessibilityOncePerVersion()
@@ -114,7 +125,12 @@ public final class MSKeyStore: ObservableObject {
         permTimer = timer
     }
 
+    private func refreshKeyboardLayout() {
+        tapManager.updateKeyboardLayout(isUS: MacAppDetector.isUSKeyboardLayout())
+    }
+
     public func refreshTapHealth() {
+        refreshKeyboardLayout()
         let trusted = EventTapManager.hasAccessibilityPermission(prompt: false)
         switch EventTapManager.healthAction(trusted: trusted, state: tapManager.tapState) {
         case .start:

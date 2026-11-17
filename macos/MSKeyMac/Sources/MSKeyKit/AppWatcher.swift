@@ -266,6 +266,7 @@ public enum MacAppDetector {
         return false
     }
 
+    @MainActor
     public static func isUSKeyboardLayout() -> Bool {
         guard let source = TISCopyCurrentKeyboardInputSource()?.takeRetainedValue(),
               let idPtr = TISGetInputSourceProperty(source, kTISPropertyInputSourceID) else {
