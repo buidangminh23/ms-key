@@ -1,9 +1,8 @@
 use std::cell::RefCell;
-use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 use std::ptr;
 use std::sync::atomic::{AtomicU64, Ordering};
-use std::sync::{Mutex, OnceLock};
+use std::sync::Mutex;
 use std::time::{Duration, Instant};
 
 use mskey_core::Config;
@@ -27,9 +26,8 @@ use windows_sys::Win32::UI::WindowsAndMessaging::{
     GetWindowLongW, GetWindowThreadProcessId, SMTO_ABORTIFHUNG, SMTO_BLOCK, SendMessageTimeoutW,
 };
 
-use crate::platform::{config_file_path, to_wide};
+use crate::platform::to_wide;
 
-static APP_MEMORY: OnceLock<Mutex<HashMap<String, bool>>> = OnceLock::new();
 pub type ClipboardSnapshot = Vec<(u32, Vec<u8>)>;
 
 static CLIP_SNAPSHOT: Mutex<Option<ClipboardSnapshot>> = Mutex::new(None);
@@ -54,54 +52,6 @@ pub fn local_utc_offset_secs() -> i64 {
         }
     }
     0
-}
-
-pub fn app_state_file_path() -> PathBuf {
-    let cfg = config_file_path();
-    cfg.parent()
-        .map(|p| p.join("app_state.json"))
-        .unwrap_or_else(|| PathBuf::from("app_state.json"))
-}
-
-pub fn load_app_state() -> HashMap<String, bool> {
-    let path = app_state_file_path();
-    let Ok(raw) = std::fs::read_to_string(path) else {
-        return HashMap::new();
-    };
-    serde_json::from_str(&raw).unwrap_or_default()
-}
-
-pub fn save_app_state(map: &HashMap<String, bool>) {
-    let path = app_state_file_path();
-    if let Some(dir) = path.parent() {
-        let _ = std::fs::create_dir_all(dir);
-    }
-    if let Ok(json) = serde_json::to_string_pretty(map) {
-        let _ = std::fs::write(path, json);
-    }
-}
-
-fn memory_store() -> &'static Mutex<HashMap<String, bool>> {
-    APP_MEMORY.get_or_init(|| Mutex::new(load_app_state()))
-}
-
-pub fn recalled_app_ve_memory(proc_name: &str) -> Option<bool> {
-    if proc_name.is_empty() {
-        return None;
-    }
-    let key = proc_name.to_ascii_lowercase();
-    memory_store().lock().ok().and_then(|m| m.get(&key).copied())
-}
-
-pub fn record_app_ve_memory(proc_name: &str, enabled: bool) {
-    if proc_name.is_empty() {
-        return;
-    }
-    let key = proc_name.to_ascii_lowercase();
-    if let Ok(mut guard) = memory_store().lock() {
-        guard.insert(key, enabled);
-        save_app_state(&guard);
-    }
 }
 
 pub fn export_config_json(cfg: &Config, path: &Path) -> Result<(), String> {

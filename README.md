@@ -126,7 +126,6 @@ Press **Esc** right after a word to undo the Vietnamese marks and get back the k
 
 **Per-app behaviour & Privacy**
 
-- Remember V or E per application automatically.
 - **Window Title Rules**: match per-app rules against `title_pattern` wildcards (`*`) to force Always English, Always Vietnamese, or Ignore.
 - **UIA Password detection (Windows)**: queries Windows UI Automation (`IUIAutomation` `IsPassword`) asynchronously so password boxes stay bypassed automatically.
 - Fixes for browser address bar suggestions and terminals.

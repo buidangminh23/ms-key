@@ -63,7 +63,6 @@ pub struct UiState {
     pub chk_autostart: *mut GtkWidget,
     pub chk_show_start: *mut GtkWidget,
     pub chk_check_updates: *mut GtkWidget,
-    pub chk_smart_app: *mut GtkWidget,
     pub ed_profile: *mut GtkWidget,
     pub ed_sync_path: *mut GtkWidget,
     pub btn_custom: *mut GtkWidget,
@@ -324,8 +323,7 @@ pub fn build_tab_system(st: &mut UiState) -> *mut GtkWidget {
     pack(sb, upd_r, false, false, 0);
     pack(page, sf, false, false, 0);
 
-    let (af, ab) = make_frame("Tự động chuyển V/E theo ứng dụng");
-    st.chk_smart_app = make_check("Tự động nhớ V/E theo ứng dụng");
+    let (af, ab) = make_frame("Quy tắc V/E theo ứng dụng");
     st.lbl_cur_app = make_label("App gần nhất: -", false);
     let brow = make_hbox(8);
     st.btn_apps = make_button("Danh sách ứng dụng...", false);
@@ -333,7 +331,6 @@ pub fn build_tab_system(st: &mut UiState) -> *mut GtkWidget {
     pack(brow, st.btn_apps, true, true, 0);
     pack(brow, st.btn_add_app, true, true, 0);
     let hint = make_label("Hỗ trợ Luôn Tiếng Anh, Luôn Tiếng Việt & Blacklist", true);
-    pack(ab, st.chk_smart_app, false, false, 0);
     pack(ab, st.lbl_cur_app, false, false, 0);
     pack(ab, brow, false, false, 0);
     pack(ab, hint, false, false, 0);
@@ -399,7 +396,6 @@ impl UiState {
             chk_autostart: n,
             chk_show_start: n,
             chk_check_updates: n,
-            chk_smart_app: n,
             ed_profile: n,
             ed_sync_path: n,
             btn_custom: n,
@@ -537,7 +533,6 @@ impl UiState {
         set_toggle(self.chk_autostart, c.auto_start);
         set_toggle(self.chk_show_start, c.show_on_startup);
         set_toggle(self.chk_check_updates, c.check_updates_on_start);
-        set_toggle(self.chk_smart_app, c.smart_app_switch);
     }
 
     pub fn read_to_config(&mut self) -> Option<ThemeMode> {
@@ -612,7 +607,6 @@ impl UiState {
         self.cfg.auto_start = get_toggle(self.chk_autostart);
         self.cfg.show_on_startup = get_toggle(self.chk_show_start);
         self.cfg.check_updates_on_start = get_toggle(self.chk_check_updates);
-        self.cfg.smart_app_switch = get_toggle(self.chk_smart_app);
         self.cfg.sync_config_path = read_entry(self.ed_sync_path).trim().to_string();
         if self.cfg.theme != prev_theme { Some(self.cfg.theme) } else { None }
     }

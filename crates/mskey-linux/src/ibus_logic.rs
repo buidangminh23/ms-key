@@ -1,8 +1,7 @@
-use std::collections::HashMap;
 
 use mskey_core::{AppBehavior, Config, Engine, EngineAction, Mechanism};
 
-use crate::config_store::{load_app_state, local_utc_offset_secs, save_app_state};
+use crate::config_store::local_utc_offset_secs;
 use crate::keyval::{
     HotkeySignal, HotkeyTracker, IBUS_CONTROL_MASK, IBUS_MOD1_MASK, IBUS_MOD4_MASK,
     IBUS_RELEASE_MASK, KEY_BACKSPACE, KEY_ESCAPE, KEY_KP_ENTER, KEY_KP_TAB, KEY_LEFT,
@@ -43,11 +42,9 @@ pub struct IbusSession {
     pub user_preferred_ve: bool,
     pub active_app: String,
     pub active_title: String,
-    pub app_ve_memory: HashMap<String, bool>,
     pub preedit: String,
     pub caps: u32,
     pub us_layout: bool,
-    pub persist_app_state: bool,
     pub cursor_rect: (i32, i32, i32, i32),
     pub surrounding_text: String,
     pub surrounding_cursor: u32,
@@ -68,11 +65,9 @@ impl IbusSession {
             user_preferred_ve: pref,
             active_app: String::new(),
             active_title: String::new(),
-            app_ve_memory: HashMap::new(),
             preedit: String::new(),
             caps: IBUS_CAP_PREEDIT_TEXT,
             us_layout: true,
-            persist_app_state: false,
             cursor_rect: (0, 0, 0, 0),
             surrounding_text: String::new(),
             surrounding_cursor: 0,
@@ -81,11 +76,6 @@ impl IbusSession {
             expected_surrounding_tail: None,
             hydrated_surrounding_len: 0,
         }
-    }
-
-    pub fn load_persisted_app_memory(&mut self) {
-        self.app_ve_memory = load_app_state();
-        self.persist_app_state = true;
     }
 
     pub fn set_us_layout(&mut self, us: bool) {
@@ -145,12 +135,6 @@ impl IbusSession {
 
     pub fn set_user_vietnamese(&mut self, enabled: bool) {
         self.user_preferred_ve = enabled;
-        if !self.active_app.is_empty() && self.engine.config().smart_app_switch {
-            self.app_ve_memory.insert(self.active_app.clone(), enabled);
-            if self.persist_app_state {
-                save_app_state(&self.app_ve_memory);
-            }
-        }
         self.engine.set_vietnamese_enabled(enabled);
         self.preedit.clear();
     }
@@ -220,13 +204,7 @@ impl IbusSession {
         let target = match cfg.behavior_for_window(&self.active_app, &self.active_title) {
             AppBehavior::ForceEnglish | AppBehavior::Blacklist => false,
             AppBehavior::ForceVietnamese => true,
-            AppBehavior::Default => {
-                if cfg.smart_app_switch && !self.active_app.is_empty() {
-                    *self.app_ve_memory.get(&self.active_app).unwrap_or(&self.user_preferred_ve)
-                } else {
-                    self.user_preferred_ve
-                }
-            }
+            AppBehavior::Default => self.user_preferred_ve,
         };
         if cfg.vietnamese_enabled != target {
             self.engine.set_vietnamese_enabled(target);

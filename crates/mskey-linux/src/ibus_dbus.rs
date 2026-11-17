@@ -109,7 +109,6 @@ pub fn run_ibus_service() -> i32 {
     let e_iface = unsafe { g_dbus_node_info_lookup_interface(e_node, e_name.as_ptr()) };
 
     let mut session = IbusSession::new(load_config());
-    session.load_persisted_app_memory();
     session.set_us_layout(is_us_keyboard_layout());
     let initial_mtime = effective_config_mtime_nanos(session.engine.config());
     DAEMON.with(|d| {
