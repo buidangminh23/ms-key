@@ -45,19 +45,19 @@ pub fn set_main_data(data: Option<MainWinData>) {
 }
 
 pub fn take_main_data() -> Option<MainWinData> {
-    MAIN_DATA.with(|c| c.borrow_mut().take())
+    MAIN_DATA.with(|c| c.try_borrow_mut().ok().and_then(|mut b| b.take()))
 }
 
 pub fn with_main_data<R>(f: impl FnOnce(&MainWinData) -> R) -> Option<R> {
     MAIN_DATA.with(|c| {
-        let borrow = c.borrow();
+        let borrow = c.try_borrow().ok()?;
         borrow.as_ref().map(f)
     })
 }
 
 pub fn with_main_data_mut<R>(f: impl FnOnce(&mut MainWinData) -> R) -> Option<R> {
     MAIN_DATA.with(|c| {
-        let mut borrow = c.borrow_mut();
+        let mut borrow = c.try_borrow_mut().ok()?;
         borrow.as_mut().map(f)
     })
 }

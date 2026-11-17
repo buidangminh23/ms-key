@@ -137,14 +137,8 @@ pub fn dispatch_payload(p: ReplacePayload) {
         }
     }
 
-    if step_delay == 0 || pre.is_empty() || post.is_empty() {
-        pre.extend_from_slice(&post);
-        send_slice(&pre);
-    } else {
-        send_slice(&pre);
-        sleep_precise_ms(step_delay.min(5));
-        send_slice(&post);
-    }
+    pre.extend_from_slice(&post);
+    send_slice(&pre);
 }
 
 fn sleep_precise_ms(ms: u32) {
