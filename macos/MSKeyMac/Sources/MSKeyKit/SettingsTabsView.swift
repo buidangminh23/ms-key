@@ -205,11 +205,10 @@ public struct SettingsTabsView: View {
                 HStack(spacing: 8) {
                     option("Tự kiểm tra cập nhật khi mở", \.checkUpdatesOnStart)
                     Spacer(minLength: 8)
-                    if updater.isChecking || updater.isDownloading {
+                    if updater.isBusy {
                         ProgressView().controlSize(.small)
                     }
-                    Button(updateButtonTitle) { store.checkForUpdates(manual: true) }
-                        .disabled(updater.isChecking || updater.isDownloading)
+                    Button("Cập nhật MS Key…") { store.checkForUpdates(manual: true) }
                 }
                 if !updater.statusText.isEmpty {
                     Text(updater.statusText)
@@ -241,12 +240,6 @@ public struct SettingsTabsView: View {
         }
         .padding(12)
         .background(.orange.opacity(0.12), in: RoundedRectangle(cornerRadius: 12))
-    }
-
-    private var updateButtonTitle: String {
-        if updater.isDownloading { return "Đang tải…" }
-        if updater.isChecking { return "Đang kiểm tra…" }
-        return "Kiểm tra cập nhật…"
     }
 
     private var profileName: String { profileNameInput.trimmingCharacters(in: .whitespacesAndNewlines) }

@@ -1,5 +1,6 @@
 import AppKit
 import Carbon
+import Darwin
 import Foundation
 import SwiftUI
 
@@ -67,7 +68,8 @@ public final class MSKeyStore: ObservableObject {
         }
     }
 
-    public func startRuntime() {
+    public func startRuntime(allowAutomaticUpdateCheck: Bool = true) {
+        UpdatePanelController.applyTheme(config.theme)
         menuBar = MenuBarController(store: self)
         let current = MacAppDetector.frontmostAppAndWindowTitle()
         if !current.appName.isEmpty {
@@ -107,7 +109,7 @@ public final class MSKeyStore: ObservableObject {
         if config.show_on_startup {
             showMainWindow()
         }
-        if config.checkUpdatesOnStart {
+        if allowAutomaticUpdateCheck && config.checkUpdatesOnStart {
             DispatchQueue.main.asyncAfter(deadline: .now() + .seconds(1)) {
                 UpdateChecker.shared.checkForUpdates(manual: false)
             }
@@ -358,6 +360,7 @@ public final class MSKeyStore: ObservableObject {
         case .dark: app = NSAppearance(named: .darkAqua)
         }
         mainWindow?.appearance = app
+        UpdatePanelController.applyTheme(mode)
     }
 }
 
@@ -372,11 +375,49 @@ public final class MSKeyAppDelegate: NSObject, NSApplicationDelegate {
 
     public func applicationDidFinishLaunching(_ notification: Notification) {
         NSApp.setActivationPolicy(.accessory)
-        store.startRuntime()
-        if CommandLine.arguments.contains("--show") { store.showMainWindow() }
+        let args = CommandLine.arguments
+        let failure = Self.updateMarker(in: args, argument: "--update-failure-file", name: "failure")
+        store.startRuntime(allowAutomaticUpdateCheck: failure == nil)
+        if args.contains("--show") { store.showMainWindow() }
         if openConverterOnLaunch {
             store.openSheet(.converter)
         }
+        DispatchQueue.main.async {
+            if let ready = Self.updateMarker(in: args, argument: "--update-ready-file", name: "ready") {
+                let pid = String(ProcessInfo.processInfo.processIdentifier)
+                try? Data(pid.utf8).write(to: ready, options: .atomic)
+            }
+            if let failure,
+               let values = try? failure.resourceValues(forKeys: [.isRegularFileKey, .isSymbolicLinkKey]),
+               values.isRegularFile == true, values.isSymbolicLink != true,
+               let handle = try? FileHandle(forReadingFrom: failure) {
+                defer { try? handle.close() }
+                if let data = try? handle.read(upToCount: 4_096),
+                   let message = String(data: data, encoding: .utf8), !message.isEmpty {
+                    UpdateChecker.shared.reportRestartFailure(message)
+                    try? FileManager.default.removeItem(at: failure)
+                }
+            }
+        }
+    }
+
+    static func updateMarker(in args: [String], argument: String, name: String) -> URL? {
+        guard let index = args.firstIndex(of: argument), index + 1 < args.count,
+              args[index + 1].hasPrefix("/") else { return nil }
+        let marker = URL(fileURLWithPath: args[index + 1]).standardizedFileURL
+        let parent = marker.deletingLastPathComponent().resolvingSymlinksInPath()
+        let root = FileManager.default.temporaryDirectory.resolvingSymlinksInPath().standardizedFileURL
+        let prefix = "mskey-update-"
+        guard marker.lastPathComponent == name,
+              parent.deletingLastPathComponent().path == root.path,
+              parent.lastPathComponent.hasPrefix(prefix),
+              UUID(uuidString: String(parent.lastPathComponent.dropFirst(prefix.count))) != nil,
+              let attributes = try? FileManager.default.attributesOfItem(atPath: parent.path),
+              (attributes[.type] as? FileAttributeType) == .typeDirectory,
+              (attributes[.ownerAccountID] as? NSNumber)?.uint32Value == geteuid(),
+              let permissions = attributes[.posixPermissions] as? NSNumber,
+              permissions.uint16Value & 0o077 == 0 else { return nil }
+        return parent.appendingPathComponent(name, isDirectory: false)
     }
 
     public func applicationWillTerminate(_ notification: Notification) {
@@ -388,6 +429,10 @@ public final class MSKeyAppDelegate: NSObject, NSApplicationDelegate {
 public enum MSKeyMainRunner {
     public static func run() {
         let args = CommandLine.arguments
+        if let index = args.firstIndex(of: "--update-helper"), index + 1 < args.count {
+            UpdateChecker.runUpdateHelper(manifestPath: args[index + 1])
+            return
+        }
         if args.contains("--print-default-config") {
             print(RustEngine.defaultConfigJSON())
             return

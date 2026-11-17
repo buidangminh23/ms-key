@@ -1,6 +1,7 @@
 import AppKit
 import Combine
 import CryptoKit
+import Darwin
 import Foundation
 
 public struct GitHubReleaseAsset: Equatable, Sendable {
@@ -37,22 +38,56 @@ public struct GitHubReleaseInfo: Equatable, Sendable {
     }
 }
 
+public enum UpdatePhase: Equatable, Sendable {
+    case idle, checking, upToDate, available, downloading, verifying, installing, restarting, downloaded, failed
+}
+
 @MainActor
 public final class UpdateChecker: ObservableObject {
     public static let shared = UpdateChecker()
     nonisolated public static let latestReleaseAPI = "https://api.github.com/repos/buidangminh23/ms-key/releases/latest"
     nonisolated public static let releasesPageURL = "https://github.com/buidangminh23/ms-key/releases"
 
-    @Published public private(set) var isChecking = false
-    @Published public private(set) var isDownloading = false
+    @Published public private(set) var phase: UpdatePhase = .idle
     @Published public private(set) var statusText = ""
+    @Published public private(set) var release: GitHubReleaseInfo?
+    @Published public private(set) var downloadedURL: URL?
+    @Published public private(set) var downloadedBytes: Int64 = 0
+    @Published public private(set) var totalBytes: Int64?
+
+    private enum Operation {
+        case check, install, download
+    }
+
+    private var operation: Operation = .check
+    private var transferID: UUID?
+
+    public var isChecking: Bool { phase == .checking }
+    public var isDownloading: Bool { [.downloading, .verifying, .installing, .restarting].contains(phase) }
+    public var isBusy: Bool { isChecking || isDownloading }
+
+    public var downloadProgress: Double? {
+        guard let totalBytes, totalBytes > 0 else { return nil }
+        return min(1, Double(downloadedBytes) / Double(totalBytes))
+    }
+
+    public var canInstall: Bool {
+        guard let release, Self.checksumAsset(from: release.assets) != nil else { return false }
+        return Self.installArchive(from: release.assets) != nil
+            && Self.isWritableAppBundle(bundleURL: Bundle.main.bundleURL)
+    }
+
+    public var canDownload: Bool {
+        guard let release, Self.checksumAsset(from: release.assets) != nil else { return false }
+        return Self.preferredMacAsset(from: release.assets) != nil
+    }
 
     private init() {}
 
     public static func currentAppVersion() -> String {
         let ver = MSKeyBrand.version.trimmingCharacters(in: .whitespacesAndNewlines)
         if ver.isEmpty || ver == "development" {
-            return "0.2.1"
+            return "0.2.2"
         }
         return ver
     }
@@ -189,46 +224,9 @@ public final class UpdateChecker: ObservableObject {
         return fm.isWritableFile(atPath: bundleURL.path) && fm.isWritableFile(atPath: parent.path)
     }
 
-    nonisolated public static func shellSingleQuote(_ value: String) -> String {
-        "'" + value.replacingOccurrences(of: "'", with: "'\"'\"'") + "'"
-    }
-
-    nonisolated public static func buildSelfReplaceShellScript(
-        pid: Int32,
-        stagedAppPath: String,
-        targetAppPath: String,
-        workDirPath: String
-    ) -> String {
-        let staged = shellSingleQuote(stagedAppPath)
-        let target = shellSingleQuote(targetAppPath)
-        let backup = shellSingleQuote(targetAppPath + ".bak")
-        let work = shellSingleQuote(workDirPath)
-        return """
-        i=0
-        while kill -0 \(pid) 2>/dev/null && [ $i -lt 120 ]; do
-          sleep 0.2
-          i=$((i+1))
-        done
-        xattr -dr com.apple.quarantine \(staged) >/dev/null 2>&1 || true
-        if [ -f \(staged)/Contents/Resources/macos-local-sign.sh ]; then
-          /bin/bash \(staged)/Contents/Resources/macos-local-sign.sh \(staged) >/dev/null 2>&1 || true
-        fi
-        rm -rf \(backup)
-        if mv \(target) \(backup); then
-          if mv \(staged) \(target); then
-            rm -rf \(backup)
-          else
-            mv \(backup) \(target) >/dev/null 2>&1 || true
-            rm -rf \(work)
-            exit 1
-          fi
-        else
-          rm -rf \(work)
-          exit 1
-        fi
-        rm -rf \(work)
-        open -n \(target) --args --show >/dev/null 2>&1 || open -n \(target) >/dev/null 2>&1 || true
-        """
+    nonisolated static func installArchive(from assets: [GitHubReleaseAsset]) -> GitHubReleaseAsset? {
+        let asset = preferredMacAsset(from: assets, preferZipForSelfUpdate: true)
+        return asset?.name.lowercased().hasSuffix(".zip") == true ? asset : nil
     }
 
     nonisolated public static func checksumAsset(from assets: [GitHubReleaseAsset]) -> GitHubReleaseAsset? {
@@ -239,336 +237,481 @@ public final class UpdateChecker: ObservableObject {
     }
 
     public func checkForUpdates(manual: Bool) {
-        guard !isChecking, !isDownloading else { return }
-        guard let url = URL(string: Self.latestReleaseAPI) else { return }
-        isChecking = true
-        statusText = "Đang kiểm tra cập nhật..."
+        if manual { UpdatePanelController.show() }
+        guard !isBusy else { return }
+        operation = .check
+        release = nil
+        downloadedURL = nil
+        transition(.checking, "Đang kiểm tra cập nhật…")
 
         Task {
-            defer { self.isChecking = false }
-            let current = Self.currentAppVersion()
             do {
-                var req = URLRequest(url: url, timeoutInterval: 15)
-                req.setValue("application/vnd.github+json", forHTTPHeaderField: "Accept")
-                req.setValue("MSKeyMac/\(current)", forHTTPHeaderField: "User-Agent")
-                let (data, response) = try await URLSession.shared.data(for: req)
-                if let http = response as? HTTPURLResponse, !(200...299).contains(http.statusCode) {
-                    statusText = "Lỗi HTTP \(http.statusCode)"
-                    if manual {
-                        presentInfoAlert(
-                            title: "Không thể kiểm tra cập nhật",
-                            message: "GitHub phản hồi mã lỗi HTTP \(http.statusCode)."
-                        )
-                    }
-                    return
+                let url = URL(string: Self.latestReleaseAPI)!
+                let (data, response) = try await URLSession.shared.data(for: request(url, timeout: 20, isAPI: true))
+                try Self.requireSuccess(response)
+                guard let release = String(data: data, encoding: .utf8).flatMap(Self.parseReleaseJSON) else {
+                    throw UpdateFailure("Dữ liệu phát hành từ GitHub không hợp lệ.")
                 }
-                guard let json = String(data: data, encoding: .utf8),
-                      let release = Self.parseReleaseJSON(json) else {
-                    statusText = "Dữ liệu phát hành không hợp lệ"
-                    if manual {
-                        presentInfoAlert(
-                            title: "Không thể đọc thông tin phát hành",
-                            message: "Dữ liệu phát hành từ GitHub không hợp lệ."
-                        )
-                    }
-                    return
-                }
-
+                let current = Self.currentAppVersion()
                 if RustEngine.isNewerVersion(current: current, candidate: release.version) {
-                    statusText = "Đã có phiên bản mới \(release.version)"
-                    presentUpdateAvailableAlert(release: release, current: current)
+                    self.release = release
+                    let asset = Self.installArchive(from: release.assets) ?? Self.preferredMacAsset(from: release.assets)
+                    let size = asset.flatMap { Int64(exactly: $0.size) }.flatMap { $0 > 0 ? $0 : nil }
+                    let summary = size.map { "Gói macOS · \(ByteCountFormatter.string(fromByteCount: $0, countStyle: .file))" }
+                    transition(.available, canDownload ? (summary ?? "Gói macOS") : "Mở trang phát hành để tải bản mới.")
+                    if !manual { UpdatePanelController.show() }
                 } else {
-                    statusText = "Đang dùng bản mới nhất (\(current))"
-                    if manual {
-                        presentInfoAlert(
-                            title: "Bạn đang dùng bản mới nhất",
-                            message: "MS Key phiên bản \(current) là phiên bản mới nhất hiện có."
-                        )
-                    }
+                    transition(.upToDate, "")
                 }
             } catch {
-                statusText = "Lỗi kiểm tra cập nhật"
-                if manual {
-                    presentInfoAlert(
-                        title: "Lỗi kết nối kiểm tra cập nhật",
-                        message: error.localizedDescription
-                    )
-                }
+                transition(.failed, error.localizedDescription)
             }
         }
     }
 
-    private func presentUpdateAvailableAlert(release: GitHubReleaseInfo, current: String) {
-        let canSelfInstall = Self.isWritableAppBundle(bundleURL: Bundle.main.bundleURL)
-        let installAsset = canSelfInstall
-            ? Self.preferredMacAsset(from: release.assets, preferZipForSelfUpdate: true)
-            : nil
-        let downloadAsset = Self.preferredMacAsset(from: release.assets, preferZipForSelfUpdate: false)
-        let shaAsset = Self.checksumAsset(from: release.assets)
+    public func installUpdate() {
+        guard !isBusy, canInstall, let release, let asset = Self.installArchive(from: release.assets) else { return }
+        fetchPackage(asset, release: release, install: true)
+    }
 
-        let alert = NSAlert()
-        alert.alertStyle = .informational
-        alert.messageText = "Có bản cập nhật mới: MS Key \(release.version)"
-        let notes = release.body.trimmingCharacters(in: .whitespacesAndNewlines)
-        let clippedNotes = notes.count > 420 ? String(notes.prefix(420)) + "…" : notes
-        var info = "Phiên bản hiện tại: \(current)\nPhiên bản mới: \(release.version)"
-        let previewAsset = installAsset ?? downloadAsset
-        if let previewAsset {
-            let sizeMB = Double(previewAsset.size) / 1_048_576.0
-            let sizeText = previewAsset.size > 0 ? String(format: " (%.1f MB)", sizeMB) : ""
-            info += "\nGói macOS: \(previewAsset.name)\(sizeText)"
-            if let shaAsset {
-                info += "\nSẽ xác minh mã SHA-256 từ \(shaAsset.name) sau khi tải."
-            }
-        }
-        if !clippedNotes.isEmpty {
-            info += "\n\nGhi chú phát hành:\n\(clippedNotes)"
-        }
-        alert.informativeText = info
+    public func downloadUpdate() {
+        guard !isBusy, canDownload, let release, let asset = Self.preferredMacAsset(from: release.assets) else { return }
+        fetchPackage(asset, release: release, install: false)
+    }
 
-        var actions: [() -> Void] = []
-        if let installAsset {
-            alert.addButton(withTitle: "Cập nhật & Khởi động lại")
-            actions.append { [self] in
-                downloadAndVerifyAsset(installAsset, shaAsset: shaAsset, releaseURL: release.htmlURL, autoInstall: true)
-            }
-        }
-        if let downloadAsset {
-            alert.addButton(withTitle: "Tải về Downloads")
-            actions.append { [self] in
-                downloadAndVerifyAsset(downloadAsset, shaAsset: shaAsset, releaseURL: release.htmlURL, autoInstall: false)
-            }
-        }
-        alert.addButton(withTitle: "Mở trang phát hành")
-        actions.append { [self] in
-            openURL(release.htmlURL)
-        }
-        alert.addButton(withTitle: "Để sau")
-
-        NSApp.activate(ignoringOtherApps: true)
-        let resp = alert.runModal()
-        let idx = resp.rawValue - NSApplication.ModalResponse.alertFirstButtonReturn.rawValue
-        if idx >= 0 && idx < actions.count {
-            actions[idx]()
+    public func retryUpdate() {
+        switch operation {
+        case .check: checkForUpdates(manual: true)
+        case .install: installUpdate()
+        case .download: downloadUpdate()
         }
     }
 
-    private func downloadAndVerifyAsset(
-        _ asset: GitHubReleaseAsset,
-        shaAsset: GitHubReleaseAsset?,
-        releaseURL: String,
-        autoInstall: Bool
-    ) {
-        guard let assetURL = URL(string: asset.downloadURL) else {
-            openURL(releaseURL)
+    public func openReleasePage() {
+        if let url = URL(string: release?.htmlURL ?? Self.releasesPageURL) {
+            NSWorkspace.shared.open(url)
+        }
+    }
+
+    public func revealDownload() {
+        if let downloadedURL { NSWorkspace.shared.activateFileViewerSelecting([downloadedURL]) }
+    }
+
+    public func reportRestartFailure(_ message: String) {
+        operation = .check
+        transition(.failed, message)
+        UpdatePanelController.show()
+    }
+
+    private func transition(_ phase: UpdatePhase, _ message: String) {
+        statusText = message
+        self.phase = phase
+    }
+
+    private func request(_ url: URL, timeout: TimeInterval, isAPI: Bool = false) -> URLRequest {
+        var request = URLRequest(url: url, timeoutInterval: timeout)
+        request.setValue("MSKeyMac/\(Self.currentAppVersion())", forHTTPHeaderField: "User-Agent")
+        if isAPI { request.setValue("application/vnd.github+json", forHTTPHeaderField: "Accept") }
+        return request
+    }
+
+    nonisolated fileprivate static func requireSuccess(_ response: URLResponse?) throws {
+        guard let response = response as? HTTPURLResponse else {
+            throw UpdateFailure("Máy chủ không trả về phản hồi hợp lệ.")
+        }
+        guard (200...299).contains(response.statusCode) else {
+            throw UpdateFailure("GitHub trả về lỗi HTTP \(response.statusCode).")
+        }
+    }
+
+    private func fetchPackage(_ asset: GitHubReleaseAsset, release: GitHubReleaseInfo, install: Bool) {
+        guard let checksums = Self.checksumAsset(from: release.assets),
+              let assetURL = URL(string: asset.downloadURL),
+              let checksumURL = URL(string: checksums.downloadURL),
+              assetURL.scheme == "https", checksumURL.scheme == "https",
+              let filename = Self.safeAssetName(asset.name) else {
+            transition(.failed, "Gói cập nhật hoặc tệp kiểm tra SHA-256 không hợp lệ.")
             return
         }
-        isDownloading = true
-        statusText = "Đang tải \(asset.name)..."
-        Task {
-            defer { self.isDownloading = false }
+        operation = install ? .install : .download
+        downloadedBytes = 0
+        totalBytes = asset.size > 0 ? Int64(exactly: asset.size) : nil
+        downloadedURL = nil
+        transition(.downloading, "Đang tải gói MS Key \(release.version)…")
+        let transfer = UUID()
+        transferID = transfer
+
+        Task { [self] in
+            let fm = FileManager.default
+            let archive = fm.temporaryDirectory.appendingPathComponent("mskey-download-\(transfer.uuidString)")
+            defer {
+                transferID = nil
+                try? fm.removeItem(at: archive)
+            }
             do {
-                let current = Self.currentAppVersion()
-                var req = URLRequest(url: assetURL, timeoutInterval: 180)
-                req.setValue("MSKeyMac/\(current)", forHTTPHeaderField: "User-Agent")
-                let (tempURL, resp) = try await URLSession.shared.download(for: req)
-                if let http = resp as? HTTPURLResponse, !(200...299).contains(http.statusCode) {
-                    try? FileManager.default.removeItem(at: tempURL)
-                    statusText = "Tải về thất bại (HTTP \(http.statusCode))"
-                    presentInfoAlert(
-                        title: "Tải gói cập nhật thất bại",
-                        message: "Máy chủ phản hồi mã HTTP \(http.statusCode)."
-                    )
+                let progress = PackageTransfer { [weak self] bytes, total in
+                    Task { @MainActor in
+                        guard let self, self.transferID == transfer, self.phase == .downloading else { return }
+                        self.downloadedBytes = max(self.downloadedBytes, bytes)
+                        if total > 0 { self.totalBytes = total }
+                    }
+                }
+                try await progress.download(request(assetURL, timeout: 180), to: archive)
+                transition(.verifying, "Đang kiểm tra tính toàn vẹn của gói tải về…")
+                let (data, response) = try await URLSession.shared.data(for: request(checksumURL, timeout: 30))
+                try Self.requireSuccess(response)
+                let verified = try await Task.detached(priority: .userInitiated) {
+                    let digest = try Self.sha256Hex(fileURL: archive)
+                    let sums = Self.parseSHA256Sums(String(decoding: data, as: UTF8.self))
+                    return Self.verifySHA256(sums: sums, filename: filename, actualHex: digest)
+                }.value
+                guard verified else { throw UpdateFailure("Mã SHA-256 của gói cập nhật không khớp.") }
+
+                if install {
+                    transition(.installing, "Đang chuẩn bị phiên bản mới…")
+                    let target = Bundle.main.bundleURL
+                    let prepared = try await Task.detached(priority: .userInitiated) {
+                        try UpdateHandoff.prepare(archiveURL: archive, target: target, version: release.version)
+                    }.value
+                    try await Self.startUpdateHelper(prepared)
+                    transition(.restarting, "Đang mở lại MS Key sau khi cập nhật…")
+                    NSApp.terminate(nil)
                     return
                 }
-                statusText = "Đang xác minh SHA-256..."
-                let actualDigest = try await Task.detached(priority: .userInitiated) {
-                    try UpdateChecker.sha256Hex(fileURL: tempURL)
-                }.value
 
-                var checksumVerifiedNote = "Không có tệp SHA256SUMS kèm bản phát hành."
-                if let shaAsset, let shaURL = URL(string: shaAsset.downloadURL) {
-                    var shaReq = URLRequest(url: shaURL, timeoutInterval: 30)
-                    shaReq.setValue("MSKeyMac/\(current)", forHTTPHeaderField: "User-Agent")
-                    let (shaData, shaResp) = try await URLSession.shared.data(for: shaReq)
-                    if let http = shaResp as? HTTPURLResponse, !(200...299).contains(http.statusCode) {
-                        try? FileManager.default.removeItem(at: tempURL)
-                        statusText = "Không tải được SHA256SUMS"
-                        presentInfoAlert(
-                            title: "Không tải được SHA256SUMS",
-                            message: "Không thể xác minh toàn vẹn gói tải về (HTTP \(http.statusCode))."
-                        )
-                        return
-                    }
-                    let sumText = String(data: shaData, encoding: .utf8) ?? ""
-                    let sums = Self.parseSHA256Sums(sumText)
-                    guard Self.verifySHA256(sums: sums, filename: asset.name, actualHex: actualDigest) else {
-                        try? FileManager.default.removeItem(at: tempURL)
-                        statusText = "Xác minh SHA-256 thất bại"
-                        presentInfoAlert(
-                            title: "Xác minh SHA-256 thất bại",
-                            message: "Mã SHA-256 của \(asset.name) không khớp với \(shaAsset.name). Tệp tải về đã bị hủy để đảm bảo an toàn."
-                        )
-                        return
-                    }
-                    checksumVerifiedNote = "Đã xác minh SHA-256 khớp với \(shaAsset.name):\n\(actualDigest)"
-                }
-
-                if autoInstall {
-                    do {
-                        statusText = "Đang cài đặt bản mới..."
-                        let bundleURL = Bundle.main.bundleURL
-                        try await Task.detached(priority: .userInitiated) {
-                            try Self.installDownloadedArchiveAndScheduleRelaunch(
-                                archiveURL: tempURL,
-                                assetName: asset.name,
-                                targetAppURL: bundleURL
-                            )
-                        }.value
-                        statusText = "Đang khởi động lại MS Key..."
-                        NSApp.terminate(nil)
-                        return
-                    } catch {
-                        try? FileManager.default.removeItem(at: tempURL)
-                        statusText = "Lỗi tự động cập nhật"
-                        presentInfoAlert(
-                            title: "Không thể tự động cập nhật",
-                            message: "\(error.localizedDescription)\n\nBạn có thể tải bản mới về Downloads hoặc mở GitHub."
-                        )
-                        return
-                    }
-                }
-
-                let downloadsDir = FileManager.default.urls(for: .downloadsDirectory, in: .userDomainMask).first
-                    ?? FileManager.default.temporaryDirectory
-                var destURL = downloadsDir.appendingPathComponent(asset.name)
-                if FileManager.default.fileExists(atPath: destURL.path) {
-                    let stem = destURL.deletingPathExtension().lastPathComponent
-                    let ext = destURL.pathExtension
-                    let stamp = Int(Date().timeIntervalSince1970)
-                    let uniqueName = ext.isEmpty ? "\(stem)-\(stamp)" : "\(stem)-\(stamp).\(ext)"
-                    destURL = downloadsDir.appendingPathComponent(uniqueName)
-                }
-                try FileManager.default.moveItem(at: tempURL, to: destURL)
-                statusText = "Đã lưu tại Downloads"
-                NSWorkspace.shared.activateFileViewerSelecting([destURL])
-                presentInfoAlert(
-                    title: "Tải về hoàn tất",
-                    message: "Đã lưu tại: \(destURL.path)\n\(checksumVerifiedNote)"
-                )
+                let downloads = try fm.url(for: .downloadsDirectory, in: .userDomainMask, appropriateFor: nil, create: true)
+                let chosen = downloads.appendingPathComponent(filename)
+                let destination = fm.fileExists(atPath: chosen.path)
+                    ? downloads.appendingPathComponent("\(UUID().uuidString.prefix(8))-\(filename)") : chosen
+                try fm.moveItem(at: archive, to: destination)
+                downloadedURL = destination
+                transition(.downloaded, "Đã xác minh và lưu gói cập nhật vào Downloads.")
             } catch {
-                statusText = "Lỗi tải cập nhật"
-                presentInfoAlert(
-                    title: "Lỗi tải cập nhật",
-                    message: error.localizedDescription
-                )
+                transition(.failed, error.localizedDescription)
             }
         }
     }
 
-    nonisolated private static func installDownloadedArchiveAndScheduleRelaunch(
-        archiveURL: URL,
-        assetName: String,
-        targetAppURL: URL
-    ) throws {
+    nonisolated static func safeAssetName(_ name: String) -> String? {
+        guard !name.isEmpty, name != ".", name != "..",
+              !name.contains("/"), !name.contains("\\"), !name.contains("\0") else { return nil }
+        return name
+    }
+
+    private static func startUpdateHelper(_ handoff: UpdateHandoff) async throws {
+        let process = Process()
+        process.executableURL = handoff.helper
+        process.arguments = ["--update-helper", handoff.manifest.path]
+        process.standardInput = FileHandle.nullDevice
+        process.standardOutput = FileHandle.nullDevice
+        process.standardError = FileHandle.nullDevice
+        do {
+            try process.run()
+            let started = await waitForUpdate(seconds: 7) {
+                FileManager.default.fileExists(atPath: handoff.started.path) || !process.isRunning
+            }
+            guard started, process.isRunning, FileManager.default.fileExists(atPath: handoff.started.path) else {
+                if process.isRunning { process.terminate() }
+                throw UpdateFailure("Không thể mở trình cập nhật trên máy này. MS Key hiện tại vẫn đang chạy.")
+            }
+        } catch {
+            handoff.cleanup()
+            throw error
+        }
+    }
+
+    public static func runUpdateHelper(manifestPath: String) {
+        Task { @MainActor in
+            let code = await UpdateHandoff.run(manifestPath: manifestPath)
+            exit(code)
+        }
+        RunLoop.main.run()
+    }
+}
+
+private struct UpdateFailure: LocalizedError {
+    let errorDescription: String?
+    init(_ message: String) { errorDescription = message }
+}
+
+private final class PackageTransfer: NSObject, URLSessionDownloadDelegate, @unchecked Sendable {
+    private let report: @Sendable (Int64, Int64) -> Void
+    private let lock = NSLock()
+    private var pending: (URL, CheckedContinuation<Void, Error>)?
+
+    init(_ report: @escaping @Sendable (Int64, Int64) -> Void) {
+        self.report = report
+    }
+
+    func download(_ request: URLRequest, to destination: URL) async throws {
+        try await withCheckedThrowingContinuation { continuation in
+            lock.withLock { pending = (destination, continuation) }
+            let session = URLSession(configuration: .ephemeral, delegate: self, delegateQueue: nil)
+            session.downloadTask(with: request).resume()
+        }
+    }
+
+    func urlSession(
+        _ session: URLSession, downloadTask: URLSessionDownloadTask, didFinishDownloadingTo location: URL
+    ) {
+        guard let (destination, continuation) = takePending() else { return }
+        do {
+            try UpdateChecker.requireSuccess(downloadTask.response)
+            try FileManager.default.moveItem(at: location, to: destination)
+            continuation.resume()
+        } catch {
+            continuation.resume(throwing: error)
+        }
+    }
+
+    func urlSession(_ session: URLSession, task: URLSessionTask, didCompleteWithError error: Error?) {
+        if let (_, continuation) = takePending() {
+            continuation.resume(throwing: error ?? UpdateFailure("Gói tải về không tồn tại."))
+        }
+        session.finishTasksAndInvalidate()
+    }
+
+    func urlSession(
+        _ session: URLSession, downloadTask: URLSessionDownloadTask,
+        didWriteData bytesWritten: Int64, totalBytesWritten: Int64, totalBytesExpectedToWrite: Int64
+    ) {
+        report(totalBytesWritten, totalBytesExpectedToWrite)
+    }
+
+    private func takePending() -> (URL, CheckedContinuation<Void, Error>)? {
+        lock.withLock {
+            defer { pending = nil }
+            return pending
+        }
+    }
+}
+
+@MainActor
+private func waitForUpdate(seconds: Int, until check: () -> Bool) async -> Bool {
+    let deadline = ContinuousClock.now.advanced(by: .seconds(seconds))
+    while !check() {
+        guard ContinuousClock.now < deadline else { return false }
+        try? await Task.sleep(for: .milliseconds(120))
+    }
+    return true
+}
+
+private struct UpdateHandoff: Codable, Sendable {
+    let work: URL
+    let target: URL
+    let previousPID: Int32
+    let version: String
+
+    var manifest: URL { work.appendingPathComponent("handoff.json") }
+    var helper: URL { work.appendingPathComponent("MSKeyUpdate") }
+    var started: URL { work.appendingPathComponent("helper-started") }
+    var ready: URL { work.appendingPathComponent("ready") }
+    var failure: URL { work.appendingPathComponent("failure") }
+    var stage: URL { target.deletingLastPathComponent().appendingPathComponent(".\(work.lastPathComponent)") }
+    var replacement: URL { stage.appendingPathComponent("MSKey.app") }
+    var backup: URL { stage.appendingPathComponent("Previous.app") }
+
+    func cleanup(keepBackup: Bool = false) {
+        if !keepBackup { try? FileManager.default.removeItem(at: stage) }
+        try? FileManager.default.removeItem(at: work)
+    }
+
+    static func prepare(archiveURL: URL, target: URL, version: String) throws -> UpdateHandoff {
         let fm = FileManager.default
-        let workDir = fm.temporaryDirectory.appendingPathComponent("mskey-selfupdate-\(ProcessInfo.processInfo.processIdentifier)")
-        try? fm.removeItem(at: workDir)
-        try fm.createDirectory(at: workDir, withIntermediateDirectories: true)
-
-        let stagedAppURL = workDir.appendingPathComponent("MSKey.app")
-        let lower = assetName.lowercased()
-        if lower.hasSuffix(".zip") {
-            let extractDir = workDir.appendingPathComponent("zip")
-            try fm.createDirectory(at: extractDir, withIntermediateDirectories: true)
-            let p = Process()
-            p.executableURL = URL(fileURLWithPath: "/usr/bin/ditto")
-            p.arguments = ["-xk", archiveURL.path, extractDir.path]
-            try p.run()
-            p.waitUntilExit()
-            guard p.terminationStatus == 0 else {
-                throw NSError(domain: "MSKeyUpdate", code: 1, userInfo: [NSLocalizedDescriptionKey: "Giải nén gói .zip thất bại."])
-            }
-            guard let foundApp = findDotApp(in: extractDir) else {
-                throw NSError(domain: "MSKeyUpdate", code: 2, userInfo: [NSLocalizedDescriptionKey: "Không tìm thấy MSKey.app trong gói cập nhật."])
-            }
-            try fm.moveItem(at: foundApp, to: stagedAppURL)
-        } else if lower.hasSuffix(".dmg") {
-            let mountDir = workDir.appendingPathComponent("mnt")
-            try fm.createDirectory(at: mountDir, withIntermediateDirectories: true)
-            let attach = Process()
-            attach.executableURL = URL(fileURLWithPath: "/usr/bin/hdiutil")
-            attach.arguments = ["attach", archiveURL.path, "-nobrowse", "-readonly", "-mountpoint", mountDir.path]
-            try attach.run()
-            attach.waitUntilExit()
-            guard attach.terminationStatus == 0 else {
-                throw NSError(domain: "MSKeyUpdate", code: 3, userInfo: [NSLocalizedDescriptionKey: "Không mount được file .dmg."])
-            }
-            defer {
-                let detach = Process()
-                detach.executableURL = URL(fileURLWithPath: "/usr/bin/hdiutil")
-                detach.arguments = ["detach", mountDir.path, "-force"]
-                try? detach.run()
-                detach.waitUntilExit()
-            }
-            guard let foundApp = findDotApp(in: mountDir) else {
-                throw NSError(domain: "MSKeyUpdate", code: 4, userInfo: [NSLocalizedDescriptionKey: "Không tìm thấy MSKey.app trong .dmg."])
-            }
-            let copyProc = Process()
-            copyProc.executableURL = URL(fileURLWithPath: "/usr/bin/ditto")
-            copyProc.arguments = [foundApp.path, stagedAppURL.path]
-            try copyProc.run()
-            copyProc.waitUntilExit()
-            guard copyProc.terminationStatus == 0 else {
-                throw NSError(domain: "MSKeyUpdate", code: 5, userInfo: [NSLocalizedDescriptionKey: "Không sao chép được MSKey.app từ .dmg."])
-            }
-        } else {
-            throw NSError(domain: "MSKeyUpdate", code: 6, userInfo: [NSLocalizedDescriptionKey: "Định dạng \(assetName) không hỗ trợ cập nhật trực tiếp trong app."])
+        let target = target.resolvingSymlinksInPath()
+        guard UpdateChecker.isWritableAppBundle(bundleURL: target) else {
+            throw UpdateFailure("MS Key cần nằm trong một thư mục Ứng dụng có quyền ghi để cập nhật.")
         }
-
-        try? fm.removeItem(at: archiveURL)
-        let script = buildSelfReplaceShellScript(
-            pid: ProcessInfo.processInfo.processIdentifier,
-            stagedAppPath: stagedAppURL.path,
-            targetAppPath: targetAppURL.path,
-            workDirPath: workDir.path
+        _ = try validateBundle(target)
+        let handoff = UpdateHandoff(
+            work: fm.temporaryDirectory.resolvingSymlinksInPath().appendingPathComponent("mskey-update-\(UUID().uuidString)"),
+            target: target,
+            previousPID: ProcessInfo.processInfo.processIdentifier,
+            version: version
         )
-        let proc = Process()
-        proc.executableURL = URL(fileURLWithPath: "/bin/sh")
-        proc.arguments = ["-c", script]
-        try proc.run()
+        try fm.createDirectory(at: handoff.work, withIntermediateDirectories: false, attributes: [.posixPermissions: 0o700])
+        do {
+            try fm.createDirectory(at: handoff.stage, withIntermediateDirectories: false, attributes: [.posixPermissions: 0o700])
+            try runTool("/usr/bin/ditto", ["-xk", archiveURL.path, handoff.stage.path], "Không giải nén được gói cập nhật.")
+            let stagedVersion = try validateBundle(handoff.replacement)
+            guard stagedVersion == version else {
+                throw UpdateFailure("Phiên bản trong gói cập nhật không khớp với bản phát hành.")
+            }
+            _ = try? runTool("/usr/bin/xattr", ["-dr", "com.apple.quarantine", handoff.replacement.path], "")
+            let signer = handoff.replacement.appendingPathComponent("Contents/Resources/macos-local-sign.sh")
+            guard fm.fileExists(atPath: signer.path) else { throw UpdateFailure("Gói cập nhật thiếu công cụ ký cục bộ.") }
+            try runTool("/bin/bash", [signer.path, handoff.replacement.path],
+                        "Không thể ký bản mới bằng chứng chỉ MS Key của máy này.")
+            _ = try validateBundle(handoff.replacement)
+            let currentBinary = target.appendingPathComponent("Contents/MacOS/MSKey")
+            try fm.copyItem(at: currentBinary, to: handoff.helper)
+            try JSONEncoder().encode(handoff).write(to: handoff.manifest, options: .atomic)
+            return handoff
+        } catch {
+            handoff.cleanup()
+            throw error
+        }
     }
 
-    nonisolated private static func findDotApp(in directory: URL) -> URL? {
-        guard let enumerator = FileManager.default.enumerator(
-            at: directory,
-            includingPropertiesForKeys: [.isDirectoryKey],
-            options: [.skipsHiddenFiles]
-        ) else {
-            return nil
+    private static func load(manifestPath: String) throws -> UpdateHandoff {
+        let fm = FileManager.default
+        let manifest = URL(fileURLWithPath: manifestPath).resolvingSymlinksInPath()
+        let work = manifest.deletingLastPathComponent()
+        let prefix = "mskey-update-"
+        let root = fm.temporaryDirectory.resolvingSymlinksInPath()
+        guard manifest.lastPathComponent == "handoff.json",
+              work.deletingLastPathComponent().path == root.path,
+              work.lastPathComponent.hasPrefix(prefix),
+              UUID(uuidString: String(work.lastPathComponent.dropFirst(prefix.count))) != nil else {
+            throw UpdateFailure("Đường dẫn bàn giao cập nhật không hợp lệ.")
         }
-        for case let url as URL in enumerator {
-            if url.pathExtension.lowercased() == "app" {
-                return url
+        let handoff = try JSONDecoder().decode(UpdateHandoff.self, from: Data(contentsOf: manifest))
+        guard handoff.work.path == work.path, handoff.previousPID > 0,
+              handoff.helper.path == URL(fileURLWithPath: CommandLine.arguments[0]).resolvingSymlinksInPath().path,
+              handoff.target.path == handoff.target.resolvingSymlinksInPath().path,
+              handoff.stage.path == handoff.stage.resolvingSymlinksInPath().path else {
+            throw UpdateFailure("Thông tin bàn giao cập nhật không hợp lệ.")
+        }
+        _ = try validateBundle(handoff.target)
+        guard try validateBundle(handoff.replacement) == handoff.version else {
+            throw UpdateFailure("Không nhận ra ứng dụng thay thế.")
+        }
+        return handoff
+    }
+
+    @MainActor
+    static func run(manifestPath: String) async -> Int32 {
+        guard let handoff = try? load(manifestPath: manifestPath) else { return 1 }
+        let fm = FileManager.default
+        do {
+            try Data().write(to: handoff.started, options: .atomic)
+        } catch {
+            return 1
+        }
+        let oldExited = await waitForUpdate(seconds: 25) {
+            kill(handoff.previousPID, 0) != 0 && errno == ESRCH
+        }
+        guard oldExited else {
+            handoff.cleanup()
+            showError("MS Key chưa thoát để hoàn tất cập nhật. Hãy đóng ứng dụng và thử lại.")
+            return 1
+        }
+
+        var previousMoved = false
+        var nextApp: NSRunningApplication?
+        do {
+            try fm.moveItem(at: handoff.target, to: handoff.backup)
+            previousMoved = true
+            try fm.moveItem(at: handoff.replacement, to: handoff.target)
+            guard try validateBundle(handoff.target) == handoff.version else {
+                throw UpdateFailure("Phiên bản đã cài không khớp với gói cập nhật.")
+            }
+            let launched = try await open(handoff.target, arguments: ["--show", "--update-ready-file", handoff.ready.path])
+            nextApp = launched
+            let ready = await waitForUpdate(seconds: 18) {
+                launched.isTerminated || handoff.readyPID() == launched.processIdentifier
+            }
+            if ready && !launched.isTerminated && handoff.readyPID() == launched.processIdentifier {
+                try? await Task.sleep(for: .milliseconds(500))
+                if !launched.isTerminated {
+                    handoff.cleanup()
+                    return 0
+                }
+            }
+            throw UpdateFailure("Bản \(handoff.version) đã cài nhưng chưa khởi động hoàn chỉnh.")
+        } catch {
+            let originalError = error.localizedDescription
+            do {
+                if let nextApp, !nextApp.isTerminated {
+                    _ = nextApp.terminate()
+                    let quit = await waitForUpdate(seconds: 3) { nextApp.isTerminated }
+                    if !quit {
+                        _ = nextApp.forceTerminate()
+                        guard await waitForUpdate(seconds: 3, until: { nextApp.isTerminated }) else {
+                            throw UpdateFailure("Không thể thoát bản cập nhật để khôi phục.")
+                        }
+                    }
+                }
+                if previousMoved {
+                    if fm.fileExists(atPath: handoff.target.path) {
+                        let rejected = handoff.stage.appendingPathComponent("Failed.app")
+                        try fm.moveItem(at: handoff.target, to: rejected)
+                    }
+                    try fm.moveItem(at: handoff.backup, to: handoff.target)
+                }
+                let message = "\(originalError) Đã khôi phục bản MS Key trước."
+                try message.write(to: handoff.failure, atomically: true, encoding: .utf8)
+                _ = try await open(handoff.target, arguments: ["--show", "--update-failure-file", handoff.failure.path])
+                try? fm.removeItem(at: handoff.stage)
+                if await waitForUpdate(seconds: 8, until: { !fm.fileExists(atPath: handoff.failure.path) }) {
+                    handoff.cleanup()
+                }
+                return 1
+            } catch {
+                handoff.cleanup(keepBackup: previousMoved)
+                let detail = fm.fileExists(atPath: handoff.backup.path) ? " Bản trước còn ở \(handoff.backup.path)." : ""
+                showError("\(originalError) \(error.localizedDescription)\(detail)")
+                return 1
             }
         }
-        return nil
     }
 
-    private func openURL(_ raw: String) {
-        let target = URL(string: raw) ?? URL(string: Self.releasesPageURL)
-        if let target {
-            NSWorkspace.shared.open(target)
-        }
+    private func readyPID() -> Int32? {
+        guard let text = try? String(contentsOf: ready, encoding: .utf8) else { return nil }
+        return Int32(text.trimmingCharacters(in: .whitespacesAndNewlines))
     }
 
-    private func presentInfoAlert(title: String, message: String) {
-        let alert = NSAlert()
-        alert.alertStyle = .informational
-        alert.messageText = title
-        alert.informativeText = message
-        alert.addButton(withTitle: "Đóng")
+    @MainActor
+    private static func open(_ url: URL, arguments: [String]) async throws -> NSRunningApplication {
+        let config = NSWorkspace.OpenConfiguration()
+        config.arguments = arguments
+        config.activates = true
+        config.createsNewApplicationInstance = true
+        config.allowsRunningApplicationSubstitution = false
+        config.addsToRecentItems = false
+        config.promptsUserIfNeeded = false
+        return try await NSWorkspace.shared.openApplication(at: url, configuration: config)
+    }
+
+    @MainActor
+    private static func showError(_ detail: String) {
+        NSApplication.shared.setActivationPolicy(.accessory)
         NSApp.activate(ignoringOtherApps: true)
+        let alert = NSAlert()
+        alert.alertStyle = .warning
+        alert.messageText = "Không thể hoàn tất cập nhật MS Key"
+        alert.informativeText = detail
+        alert.addButton(withTitle: "Đóng")
         alert.runModal()
+    }
+
+    private static func validateBundle(_ url: URL) throws -> String {
+        let fm = FileManager.default
+        let executable = url.appendingPathComponent("Contents/MacOS/MSKey")
+        let info = url.appendingPathComponent("Contents/Info.plist")
+        guard url.path == url.resolvingSymlinksInPath().path,
+              let data = try? Data(contentsOf: info),
+              let plist = try? PropertyListSerialization.propertyList(from: data, options: [], format: nil) as? [String: Any],
+              plist["CFBundleIdentifier"] as? String == "org.mskey.mac",
+              plist["CFBundlePackageType"] as? String == "APPL",
+              plist["CFBundleExecutable"] as? String == "MSKey",
+              let version = plist["CFBundleShortVersionString"] as? String,
+              fm.isExecutableFile(atPath: executable.path) else {
+            throw UpdateFailure("Gói tải về không chứa ứng dụng MS Key hợp lệ.")
+        }
+        try runTool("/usr/bin/codesign", ["--verify", "--deep", "--strict", url.path],
+                    "Chữ ký ứng dụng MS Key không hợp lệ.")
+        return version
+    }
+
+    private static func runTool(_ path: String, _ args: [String], _ message: String) throws {
+        let process = Process()
+        process.executableURL = URL(fileURLWithPath: path)
+        process.arguments = args
+        process.standardOutput = FileHandle.nullDevice
+        process.standardError = FileHandle.nullDevice
+        try process.run()
+        process.waitUntilExit()
+        guard process.terminationStatus == 0 else { throw UpdateFailure(message) }
     }
 }

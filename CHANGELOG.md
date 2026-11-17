@@ -2,6 +2,16 @@
 
 All notable changes to MS Key are documented here. The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and the project uses [Semantic Versioning](https://semver.org/).
 
+## [0.2.2] - 2026-11-17
+
+### Fixed
+
+- **macOS updates** keep a backup until the new app confirms startup, and restore the previous version if the replacement cannot open.
+
+### Changed
+
+- **macOS updates** use a dedicated window with release notes, live download progress, verification, and restart status.
+
 ## [0.2.1] - 2026-11-17
 
 ### Fixed

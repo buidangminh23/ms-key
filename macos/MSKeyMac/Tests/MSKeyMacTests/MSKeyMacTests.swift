@@ -443,15 +443,12 @@ final class MSKeyMacTests: XCTestCase {
             UpdateChecker.preferredMacAsset(from: mixedAssets, preferZipForSelfUpdate: false)?.name,
             "MSKey-0.2.0-macos-universal.dmg"
         )
-        let replaceScript = UpdateChecker.buildSelfReplaceShellScript(
-            pid: 999999,
-            stagedAppPath: "/tmp/work/MSKey.app",
-            targetAppPath: "/Applications/MSKey.app",
-            workDirPath: "/tmp/work"
-        )
-        XCTAssertTrue(replaceScript.contains("xattr -dr com.apple.quarantine"))
-        XCTAssertTrue(replaceScript.contains("Contents/Resources/macos-local-sign.sh"))
-        XCTAssertTrue(replaceScript.contains("open -n '/Applications/MSKey.app'"))
+        XCTAssertEqual(UpdateChecker.installArchive(from: mixedAssets)?.name, mixedAssets[2].name)
+        XCTAssertNil(UpdateChecker.installArchive(from: Array(mixedAssets.prefix(2))))
+        XCTAssertEqual(UpdateChecker.safeAssetName("MSKey-0.2.0-macos-universal.zip"), mixedAssets[2].name)
+        XCTAssertNil(UpdateChecker.safeAssetName("../MSKey.app"))
+        XCTAssertNil(UpdateChecker.safeAssetName("subfolder\\MSKey.app"))
+        XCTAssertNil(UpdateChecker.safeAssetName(".."))
     }
 
     func testTapHealthRestartsAfterPermissionReturnsAndStopsWhenRevoked() {

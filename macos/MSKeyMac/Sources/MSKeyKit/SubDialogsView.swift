@@ -544,3 +544,309 @@ public struct HotkeyCaptureView: View {
         }
     }
 }
+
+@MainActor
+enum UpdatePanelController {
+    private static var window: NSWindow?
+    private static var appearance: NSAppearance?
+
+    static func show() {
+        if window == nil {
+            let panel = NSWindow(
+                contentRect: NSRect(x: 0, y: 0, width: 560, height: 416),
+                styleMask: [.titled, .closable, .resizable],
+                backing: .buffered,
+                defer: false
+            )
+            panel.title = "Cập nhật MS Key"
+            panel.contentMinSize = NSSize(width: 448, height: 336)
+            panel.isReleasedWhenClosed = false
+            panel.appearance = appearance
+            panel.contentViewController = NSHostingController(rootView: UpdatePanelView(updater: .shared))
+            panel.center()
+            window = panel
+        }
+        NSApp.activate(ignoringOtherApps: true)
+        window?.makeKeyAndOrderFront(nil)
+    }
+
+    static func close() {
+        window?.close()
+    }
+
+    static func applyTheme(_ mode: ThemeModeKind) {
+        appearance = switch mode {
+        case .system: nil
+        case .light: NSAppearance(named: .aqua)
+        case .dark: NSAppearance(named: .darkAqua)
+        }
+        window?.appearance = appearance
+    }
+}
+
+struct UpdatePanelView: View {
+    @ObservedObject var updater: UpdateChecker
+
+    var body: some View {
+        VStack(spacing: 0) {
+            header
+                .padding(.horizontal, 24)
+                .padding(.vertical, 16)
+            Divider()
+            ScrollView {
+                VStack(alignment: .leading, spacing: 16) {
+                    status
+                    if let release = updater.release {
+                        let notes = release.body.trimmingCharacters(in: .whitespacesAndNewlines)
+                        if !notes.isEmpty {
+                            SettingsSection("Ghi chú phát hành") {
+                                UpdateReleaseNotes(notes: notes)
+                            }
+                        }
+                    }
+                }
+                .frame(maxWidth: .infinity, alignment: .leading)
+                .padding(24)
+            }
+            .frame(maxHeight: .infinity)
+            Divider()
+            footer
+                .padding(.horizontal, 24)
+                .padding(.vertical, 12)
+        }
+        .background(Color(nsColor: .windowBackgroundColor))
+    }
+
+    private var header: some View {
+        HStack(alignment: .center, spacing: 12) {
+            Image(nsImage: MSKeyBrand.mark)
+                .resizable()
+                .scaledToFit()
+                .frame(width: 40, height: 40)
+                .accessibilityHidden(true)
+            VStack(alignment: .leading, spacing: 4) {
+                Text("Cập nhật MS Key")
+                    .font(.title2.weight(.semibold))
+                    .accessibilityAddTraits(.isHeader)
+                let currentVersion = UpdateChecker.currentAppVersion()
+                HStack(alignment: .firstTextBaseline, spacing: 8) {
+                    Text("Bản đang dùng v\(currentVersion)")
+                        .foregroundStyle(.secondary)
+                    if let release = updater.release, release.version != currentVersion {
+                        Image(systemName: "arrow.right")
+                            .foregroundStyle(.secondary)
+                            .accessibilityHidden(true)
+                        Text("Bản mới v\(release.version)")
+                            .fontWeight(.semibold)
+                    }
+                }
+                .font(.subheadline.monospacedDigit())
+            }
+            Spacer(minLength: 8)
+        }
+        .frame(maxWidth: .infinity, alignment: .leading)
+    }
+
+    private var status: some View {
+        VStack(alignment: .leading, spacing: 12) {
+            HStack(alignment: .top, spacing: 12) {
+                Image(systemName: statusIcon)
+                    .font(.title3.weight(.medium))
+                    .foregroundStyle(statusColor)
+                    .frame(width: 24)
+                    .accessibilityHidden(true)
+                VStack(alignment: .leading, spacing: 4) {
+                    Text(statusTitle)
+                        .font(.headline)
+                        .accessibilityAddTraits(.isHeader)
+                    if !updater.statusText.isEmpty && updater.statusText != statusTitle {
+                        Text(updater.statusText)
+                            .foregroundStyle(.secondary)
+                            .fixedSize(horizontal: false, vertical: true)
+                            .textSelection(.enabled)
+                    }
+                }
+            }
+            if updater.phase == .downloading {
+                downloadIndicator
+            } else if updater.isBusy {
+                ProgressView()
+                    .accessibilityLabel(statusTitle)
+            }
+        }
+        .settingsCard()
+    }
+
+    private var downloadIndicator: some View {
+        VStack(alignment: .leading, spacing: 8) {
+            if let progress = updater.downloadProgress, progress.isFinite {
+                let fraction = min(1, max(0, progress))
+                ProgressView(value: fraction)
+                    .accessibilityLabel("Tiến độ tải xuống")
+                    .accessibilityValue("\(fraction.formatted(.percent.precision(.fractionLength(0)))), \(transferLabel)")
+                HStack(alignment: .firstTextBaseline, spacing: 8) {
+                    Text(transferLabel)
+                    Spacer(minLength: 8)
+                    Text(fraction, format: .percent.precision(.fractionLength(0)))
+                        .foregroundStyle(.primary)
+                }
+                .font(.caption.monospacedDigit())
+                .foregroundStyle(.secondary)
+                .accessibilityHidden(true)
+            } else {
+                ProgressView()
+                    .accessibilityLabel("Đang tải xuống")
+                Text(transferLabel)
+                    .font(.caption.monospacedDigit())
+                    .foregroundStyle(.secondary)
+            }
+        }
+    }
+
+    private var transferLabel: String {
+        let received = ByteCountFormatter.string(fromByteCount: updater.downloadedBytes, countStyle: .file)
+        if let total = updater.totalBytes, total > 0 {
+            return "\(received) / \(ByteCountFormatter.string(fromByteCount: total, countStyle: .file))"
+        }
+        return "Đã tải \(received)"
+    }
+
+    private var footer: some View {
+        ViewThatFits(in: .horizontal) {
+            HStack(spacing: 8) {
+                releaseActions
+                    .fixedSize()
+                Spacer(minLength: 16)
+                updateActions
+                    .fixedSize()
+            }
+            HStack(spacing: 8) {
+                Menu("Tùy chọn") {
+                    Button("Trang phát hành") { updater.openReleasePage() }
+                    if updater.phase == .available && updater.canInstall && updater.canDownload {
+                        Button("Tải gói cài") { updater.downloadUpdate() }
+                    }
+                }
+                .fixedSize()
+                Spacer(minLength: 16)
+                updateActions.fixedSize()
+            }
+        }
+        .controlSize(.large)
+    }
+
+    private var releaseActions: some View {
+        HStack(spacing: 8) {
+            Button {
+                updater.openReleasePage()
+            } label: {
+                Label("Trang phát hành", systemImage: "arrow.up.right")
+            }
+            .buttonStyle(.borderless)
+            .foregroundStyle(.tint)
+            .padding(.trailing, 4)
+            if updater.phase == .available && updater.canInstall && updater.canDownload {
+                Button("Tải gói cài") { updater.downloadUpdate() }
+            }
+        }
+    }
+
+    private var updateActions: some View {
+        HStack(spacing: 8) {
+            Button(updater.isBusy ? "Ẩn" : updater.phase == .available ? "Để sau" : "Đóng") {
+                UpdatePanelController.close()
+            }
+            .keyboardShortcut(.cancelAction)
+
+            switch updater.phase {
+            case .available:
+                if updater.canInstall {
+                    actionButton("Cập nhật và mở lại", action: updater.installUpdate)
+                } else if updater.canDownload {
+                    actionButton("Tải gói cài", action: updater.downloadUpdate)
+                }
+            case .downloaded:
+                if updater.downloadedURL != nil {
+                    actionButton("Mở trong Finder", action: updater.revealDownload)
+                }
+            case .failed:
+                actionButton("Thử lại", action: updater.retryUpdate)
+            case .idle, .upToDate:
+                actionButton("Kiểm tra cập nhật") { updater.checkForUpdates(manual: true) }
+            case .checking, .downloading, .verifying, .installing, .restarting:
+                EmptyView()
+            }
+        }
+    }
+
+    private func actionButton(_ title: LocalizedStringKey, action: @escaping () -> Void) -> some View {
+        Button(title, action: action)
+            .buttonStyle(.borderedProminent)
+    }
+
+    private var statusTitle: String {
+        switch updater.phase {
+        case .idle: "Kiểm tra bản mới"
+        case .checking: "Đang kiểm tra cập nhật"
+        case .available: "Có bản cập nhật"
+        case .upToDate: "Đang dùng bản mới nhất"
+        case .downloading: "Đang tải gói cập nhật"
+        case .verifying: "Đang xác minh gói cài"
+        case .installing: "Đang chuẩn bị cài đặt"
+        case .restarting: "Đang khởi động lại MS Key"
+        case .downloaded: "Đã tải gói cài"
+        case .failed: "Cập nhật chưa hoàn tất"
+        }
+    }
+
+    private var statusIcon: String {
+        switch updater.phase {
+        case .idle, .checking: "arrow.clockwise"
+        case .available, .downloading: "arrow.down.circle"
+        case .upToDate, .downloaded: "checkmark.circle"
+        case .verifying: "checkmark.shield"
+        case .installing: "shippingbox"
+        case .restarting: "arrow.clockwise.circle"
+        case .failed: "exclamationmark.triangle"
+        }
+    }
+
+    private var statusColor: Color {
+        switch updater.phase {
+        case .failed: Color(nsColor: .systemOrange)
+        case .upToDate, .downloaded: Color(nsColor: .systemGreen)
+        default: .accentColor
+        }
+    }
+}
+
+private struct UpdateReleaseNotes: View {
+    let notes: String
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 8) {
+            ForEach(Array(notes.components(separatedBy: .newlines).enumerated()), id: \.offset) { _, line in
+                let copy = line.trimmingCharacters(in: .whitespaces)
+                if copy.hasPrefix("#"), let index = copy.firstIndex(of: " ") {
+                    inline(String(copy[copy.index(after: index)...]))
+                        .font(.subheadline.weight(.semibold))
+                        .accessibilityAddTraits(.isHeader)
+                } else if copy.hasPrefix("- ") || copy.hasPrefix("* ") {
+                    HStack(alignment: .firstTextBaseline, spacing: 8) {
+                        Text("•").foregroundStyle(.secondary).accessibilityHidden(true)
+                        inline(String(copy.dropFirst(2)))
+                    }
+                } else if !copy.isEmpty {
+                    inline(copy)
+                }
+            }
+        }
+        .textSelection(.enabled)
+    }
+
+    private func inline(_ value: String) -> some View {
+        let options = AttributedString.MarkdownParsingOptions(interpretedSyntax: .inlineOnlyPreservingWhitespace)
+        let text = (try? AttributedString(markdown: value, options: options)) ?? AttributedString(value)
+        return Text(text).fixedSize(horizontal: false, vertical: true)
+    }
+}
