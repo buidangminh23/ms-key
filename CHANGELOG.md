@@ -2,6 +2,12 @@
 
 All notable changes to MS Key are documented here. The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and the project uses [Semantic Versioning](https://semver.org/).
 
+## [0.1.10] - 2026-11-17
+
+### Removed
+
+- **Remembering V/E per application** ("Tự động nhớ V/E theo ứng dụng"): MS Key no longer keeps a V or E choice for each app, on Windows, Linux or macOS. On macOS this memory switched the mode to English in the middle of typing: choosing V from the menu bar did not update the remembered value for the current app, so the next key press restored the old E for that app. The V/E mode now only changes when you switch it yourself or when an app matches a rule in "Danh sách ứng dụng" (Always English, Always Vietnamese, Ignore). The setting is gone from all three settings windows, the old `smart_app_switch` key in `config.json` is ignored and `app_state.json` is no longer read or written.
+
 ## [0.1.9] - 2026-11-16
 
 ### Fixed

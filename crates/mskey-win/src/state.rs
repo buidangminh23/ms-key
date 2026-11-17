@@ -1,4 +1,3 @@
-use std::collections::HashMap;
 use std::sync::{Mutex, OnceLock};
 
 use mskey_core::{AppBehavior, Config, Engine};
@@ -25,7 +24,6 @@ pub struct AppState {
     pub fg_hwnd: usize,
     pub last_typing_hwnd: usize,
     pub user_preferred_ve: bool,
-    pub app_ve_memory: HashMap<String, bool>,
     pub suspend_typing_for_hotkey: bool,
     pub pending_ctrl_shift: bool,
     pub ctrl_down: bool,
@@ -94,7 +92,6 @@ impl AppState {
             fg_hwnd: 0,
             last_typing_hwnd: 0,
             user_preferred_ve: pref,
-            app_ve_memory: HashMap::new(),
             suspend_typing_for_hotkey: false,
             pending_ctrl_shift: false,
             ctrl_down: false,
@@ -147,25 +144,6 @@ impl AppState {
     pub fn set_user_vietnamese(&mut self, enabled: bool) {
         self.user_preferred_ve = enabled;
         self.engine.set_vietnamese_enabled(enabled);
-        if self.engine.config().smart_app_switch
-            && !self.fg_process.is_empty()
-            && self.current_window_behavior() == AppBehavior::Default
-        {
-            self.app_ve_memory
-                .insert(self.fg_process.to_ascii_lowercase(), enabled);
-        }
-    }
-
-    fn save_current_app_ve(&mut self, prev_behavior: AppBehavior) {
-        if !self.fg_process.is_empty()
-            && self.engine.config().smart_app_switch
-            && prev_behavior == AppBehavior::Default
-        {
-            self.app_ve_memory.insert(
-                self.fg_process.to_ascii_lowercase(),
-                self.engine.config().vietnamese_enabled,
-            );
-        }
     }
 
     fn apply_window_behavior(&mut self) {
@@ -178,16 +156,7 @@ impl AppState {
             }
             AppBehavior::Blacklist => {}
             AppBehavior::Default => {
-                let target =
-                    if self.engine.config().smart_app_switch && !self.fg_process.is_empty() {
-                        self.app_ve_memory
-                            .get(&self.fg_process.to_ascii_lowercase())
-                            .copied()
-                            .unwrap_or(self.user_preferred_ve)
-                    } else {
-                        self.user_preferred_ve
-                    };
-                self.engine.set_vietnamese_enabled(target);
+                self.engine.set_vietnamese_enabled(self.user_preferred_ve);
             }
         }
     }
@@ -232,12 +201,10 @@ impl AppState {
         if same_app {
             self.fg_title = title;
             if self.current_window_behavior() != prev_behavior {
-                self.save_current_app_ve(prev_behavior);
                 self.apply_window_behavior();
             }
             return;
         }
-        self.save_current_app_ve(prev_behavior);
         self.fg_process = process;
         self.fg_title = title;
         self.apply_window_behavior();
@@ -258,7 +225,6 @@ impl AppState {
             self.fg_title = title;
             return false;
         }
-        self.save_current_app_ve(prev_behavior);
         self.fg_title = title;
         self.apply_window_behavior();
         prev_active != self.engine.is_vietnamese_active()

@@ -2,7 +2,7 @@ use std::ptr;
 use std::sync::Mutex;
 use std::time::Instant;
 
-use mskey_core::{AppBehavior, EngineAction, HoldEnglishKey, SwitchPreset};
+use mskey_core::{EngineAction, HoldEnglishKey, SwitchPreset};
 use windows_sys::Win32::Foundation::{HWND, LPARAM, LRESULT, WPARAM};
 use windows_sys::Win32::UI::Accessibility::{HWINEVENTHOOK, SetWinEventHook, UnhookWinEvent};
 use windows_sys::Win32::UI::Input::KeyboardAndMouse::{
@@ -387,9 +387,6 @@ fn update_modifier_flags(st: &mut AppState, hold_key: HoldEnglishKey, vk: u16, i
 fn trigger_ve_toggle(st: &mut AppState, next: bool, fx: &mut KeySideEffects) {
     let cfg = st.engine.config().clone();
     st.set_user_vietnamese(next);
-    if cfg.smart_app_switch && !st.fg_process.is_empty() {
-        crate::platform_extra::record_app_ve_memory(&st.fg_process, next);
-    }
     fx.notify_hwnd = st.main_window();
     fx.sync_ui = true;
     fx.should_beep = cfg.beep_on_switch;
@@ -737,34 +734,6 @@ fn handle_key_event(vk: u16, scan: u32, is_down: bool, is_up: bool) -> KeyDecisi
     let cached_fg = with_state(|st| st.fg_hwnd);
     if fg_now != 0 && fg_now != cached_fg {
         refresh_foreground();
-        let sync_hw = with_state(|st| {
-            let cfg = st.engine.config().clone();
-            if cfg.smart_app_switch
-                && !st.fg_process.is_empty()
-                && st.current_window_behavior() == AppBehavior::Default
-                && let Some(mem_ve) =
-                    crate::platform_extra::recalled_app_ve_memory(&st.fg_process)
-                && cfg.vietnamese_enabled != mem_ve
-            {
-                let mut next_cfg = cfg;
-                next_cfg.vietnamese_enabled = mem_ve;
-                st.engine.update_config(next_cfg);
-                return Some((
-                    st.main_window(),
-                    st.effective_vietnamese(),
-                    st.engine.config().show_caret_osd,
-                ));
-            }
-            None
-        });
-        if let Some((hw, is_vi, caret_on)) = sync_hw
-            && !hw.is_null()
-        {
-            unsafe {
-                PostMessageW(hw, WM_APP_SYNC_UI, 0, 0);
-            }
-            post_caret_osd_if_enabled(hw, is_vi, false, caret_on);
-        }
     }
 
     let mut fx = KeySideEffects::new();

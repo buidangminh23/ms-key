@@ -443,7 +443,6 @@ public struct MSKeyConfig: Codable, Equatable, Sendable {
     public var run_as_admin: Bool = false
     public var show_on_startup: Bool = false
     public var theme: ThemeModeKind = .system
-    public var smart_app_switch: Bool = true
     public var app_rules: [AppRuleItem] = []
     public var macros: [MacroItem] = []
     public var user_dict_words: [String] = []
@@ -499,7 +498,6 @@ public struct MSKeyConfig: Codable, Equatable, Sendable {
         case run_as_admin
         case show_on_startup
         case theme
-        case smart_app_switch
         case app_rules
         case macros
         case user_dict_words
@@ -558,7 +556,6 @@ public struct MSKeyConfig: Codable, Equatable, Sendable {
         run_as_admin = try c.decodeIfPresent(Bool.self, forKey: .run_as_admin) ?? d.run_as_admin
         show_on_startup = try c.decodeIfPresent(Bool.self, forKey: .show_on_startup) ?? d.show_on_startup
         theme = try c.decodeIfPresent(ThemeModeKind.self, forKey: .theme) ?? d.theme
-        smart_app_switch = try c.decodeIfPresent(Bool.self, forKey: .smart_app_switch) ?? d.smart_app_switch
         app_rules = try c.decodeIfPresent([AppRuleItem].self, forKey: .app_rules) ?? d.app_rules
         macros = try c.decodeIfPresent([MacroItem].self, forKey: .macros) ?? d.macros
         user_dict_words = try c.decodeIfPresent([String].self, forKey: .user_dict_words) ?? d.user_dict_words
@@ -638,10 +635,6 @@ public enum MacConfigStore {
 
     public static var configFile: URL {
         configDirectory.appendingPathComponent("config.json")
-    }
-
-    public static var appStateFile: URL {
-        configDirectory.appendingPathComponent("app_state.json")
     }
 
     public static func resolveSyncURL(from rawPath: String) -> URL? {
@@ -733,23 +726,6 @@ public enum MacConfigStore {
             }
         }
         return words
-    }
-
-    public static func loadAppState() -> [String: Bool] {
-        guard let data = try? Data(contentsOf: appStateFile),
-              let map = try? JSONDecoder().decode([String: Bool].self, from: data) else {
-            return [:]
-        }
-        return map
-    }
-
-    public static func saveAppState(_ state: [String: Bool]) {
-        try? FileManager.default.createDirectory(at: configDirectory, withIntermediateDirectories: true)
-        let enc = JSONEncoder()
-        enc.outputFormatting = [.prettyPrinted, .sortedKeys]
-        if let data = try? enc.encode(state) {
-            try? data.write(to: appStateFile, options: .atomic)
-        }
     }
 
     public static func exportJSON(to url: URL, config: MSKeyConfig) -> Bool {

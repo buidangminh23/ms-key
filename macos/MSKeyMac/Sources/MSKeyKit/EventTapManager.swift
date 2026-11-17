@@ -20,7 +20,7 @@ public final class EventTapManager: @unchecked Sendable {
     private var config: MSKeyConfig
     private var effectiveVE: Bool
     private var hotkeys = MacHotkeyTracker()
-    private var session: SmartAppSessionMemory
+    private var session: AppRuleSession
     private var eventTap: CFMachPort?
     private var runLoopSource: CFRunLoopSource?
     private var tapRunLoop: CFRunLoop?
@@ -39,9 +39,7 @@ public final class EventTapManager: @unchecked Sendable {
         self.rust = rust
         self.config = config
         self.effectiveVE = config.vietnamese_enabled
-        var mem = SmartAppSessionMemory(initialVE: config.vietnamese_enabled)
-        mem.loadMemory(MacConfigStore.loadAppState())
-        self.session = mem
+        self.session = AppRuleSession(initialVE: config.vietnamese_enabled)
     }
 
     public static func hasAccessibilityPermission(prompt: Bool) -> Bool {
@@ -211,13 +209,8 @@ public final class EventTapManager: @unchecked Sendable {
         bufferActive = false
         hotkeys.reset()
         session.invalidateActive()
-        session.setUserVE(cfg.vietnamese_enabled, smartSwitch: cfg.smart_app_switch)
-        let saveSmart = cfg.smart_app_switch
-        let state = session.exportMemory()
+        session.setUserVE(cfg.vietnamese_enabled)
         lock.unlock()
-        if saveSmart {
-            MacConfigStore.saveAppState(state)
-        }
     }
 
     public func setSandboxFocused(_ focused: Bool) {
@@ -247,8 +240,7 @@ public final class EventTapManager: @unchecked Sendable {
         if sameApp && behavior == session.activeBehavior {
             return nil
         }
-        let smart = config.smart_app_switch
-        let switched = session.switchApp(appName, behavior: behavior, smartSwitch: smart)
+        let switched = session.switchApp(appName, behavior: behavior)
         if let nextVE = switched {
             effectiveVE = nextVE
             rust.setEnabled(nextVE)
@@ -626,14 +618,11 @@ public final class EventTapManager: @unchecked Sendable {
         let next = !effectiveVE
         effectiveVE = next
         config.vietnamese_enabled = next
-        session.setUserVE(next, smartSwitch: config.smart_app_switch)
+        session.setUserVE(next)
         rust.setEnabled(next)
         rust.resetAll()
         rust.setTemporaryEnglish(false)
         bufferActive = false
-        if config.smart_app_switch {
-            MacConfigStore.saveAppState(session.exportMemory())
-        }
         return (next, session.activeApp, config.beep_on_switch)
     }
 

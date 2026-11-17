@@ -319,21 +319,16 @@ fn toggle_ve_and_refresh(hwnd: HWND) {
 }
 
 fn set_ve_and_refresh(hwnd: HWND, next: bool, announce: bool) {
-    let (beep, osd, fg_proc, smart, eff) = with_state(|st| {
+    let (beep, osd, eff) = with_state(|st| {
         let c = st.engine.config().clone();
         st.set_user_vietnamese(next);
         save_config(st.engine.config());
         (
             c.beep_on_switch && announce,
             c.show_switch_osd && announce,
-            st.fg_process.clone(),
-            c.smart_app_switch,
             st.effective_vietnamese(),
         )
     });
-    if smart && !fg_proc.is_empty() {
-        crate::platform_extra::record_app_ve_memory(&fg_proc, next);
-    }
     if beep {
         crate::platform::play_switch_beep();
     }

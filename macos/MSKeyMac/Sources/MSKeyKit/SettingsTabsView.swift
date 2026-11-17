@@ -241,9 +241,8 @@ public struct SettingsTabsView: View {
                     .padding(8)
                 }
 
-                GroupBox("Tự động chuyển V/E theo ứng dụng") {
+                GroupBox("Quy tắc V/E theo ứng dụng") {
                     VStack(alignment: .leading, spacing: 8) {
-                        Toggle("Tự động nhớ V/E theo ứng dụng", isOn: binding(\.smart_app_switch))
                         Text("Ứng dụng gần nhất: \(store.lastActiveApp.isEmpty ? "-" : store.lastActiveApp)")
                             .font(.caption)
                             .foregroundStyle(.secondary)

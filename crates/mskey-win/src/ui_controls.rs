@@ -79,7 +79,6 @@ pub const IDC_BTN_RELAUNCH_ADMIN: usize = 1303;
 pub const IDC_CHK_SHOW_START: usize = 1304;
 pub const IDC_LBL_THEME: usize = 1305;
 pub const IDC_THEME: usize = 1306;
-pub const IDC_CHK_SMART_APP: usize = 1307;
 pub const IDC_LBL_CUR_APP: usize = 1308;
 pub const IDC_BTN_APPS: usize = 1309;
 pub const IDC_BTN_ADD_CUR_EN: usize = 1310;
@@ -281,7 +280,6 @@ impl MainUiCtrls {
             IDC_CHK_SHOW_START => cfg.show_on_startup,
             IDC_CHK_CARET_OSD => cfg.show_caret_osd,
             IDC_CHK_CHECK_UPDATES => cfg.check_updates_on_start,
-            IDC_CHK_SMART_APP => cfg.smart_app_switch,
             _ => return None,
         })
     }
@@ -324,7 +322,6 @@ impl MainUiCtrls {
             IDC_CHK_SHOW_START => cfg.show_on_startup = !cfg.show_on_startup,
             IDC_CHK_CARET_OSD => cfg.show_caret_osd = !cfg.show_caret_osd,
             IDC_CHK_CHECK_UPDATES => cfg.check_updates_on_start = !cfg.check_updates_on_start,
-            IDC_CHK_SMART_APP => cfg.smart_app_switch = !cfg.smart_app_switch,
             IDC_RAD_CTRL_SHIFT => cfg.switch_preset = SwitchPreset::CtrlShift,
             IDC_RAD_ALT_Z => cfg.switch_preset = SwitchPreset::AltZ,
             IDC_RAD_CTRL_SPACE => cfg.switch_preset = SwitchPreset::CtrlSpace,
@@ -695,7 +692,7 @@ fn build_tab2(hwnd: HWND, font: HFONT, dpi: i32) -> Tab2Handles {
     );
     let edit_sync_path = make_edit(hwnd, "", 160, 334, 292, 28, IDC_EDIT_SYNC_PATH, false, font, dpi);
     set_cue_banner(edit_sync_path, "Đường dẫn JSON đồng bộ giữa các máy...");
-    let lbl_cur_app = make_child(hwnd, "STATIC", "App gần nhất: -", 0, 44, 428, 492, 24, IDC_LBL_CUR_APP, font, dpi);
+    let lbl_cur_app = make_child(hwnd, "STATIC", "App gần nhất: -", 0, 44, 404, 492, 24, IDC_LBL_CUR_APP, font, dpi);
     let admin_btn_txt = if is_elevated() { "Đang chạy Admin" } else { "Mở lại Admin" };
     let ctrls = vec![
         make_owner_button(hwnd, "Khởi động cùng Windows", 32, 202, 250, 24, IDC_CHK_AUTOSTART, font, dpi),
@@ -711,11 +708,10 @@ fn build_tab2(hwnd: HWND, font: HFONT, dpi: i32) -> Tab2Handles {
         make_child(hwnd, "STATIC", "File đồng bộ", 0, 32, 338, 124, 22, IDC_LBL_SYNC_PATH, font, dpi),
         edit_sync_path,
         make_owner_button(hwnd, "Chọn...", 460, 334, 88, 28, IDC_BTN_BROWSE_SYNC, font, dpi),
-        make_owner_button(hwnd, "Tự động nhớ V/E theo ứng dụng", 44, 396, 420, 24, IDC_CHK_SMART_APP, font, dpi),
         lbl_cur_app,
-        make_owner_button(hwnd, "Danh sách ứng dụng...", 44, 460, 236, 32, IDC_BTN_APPS, font, dpi),
-        make_owner_button(hwnd, "Thêm app vào Tiếng Anh", 296, 460, 240, 32, IDC_BTN_ADD_CUR_EN, font, dpi),
-        make_child(hwnd, "STATIC", "Hỗ trợ Luôn Tiếng Anh, Luôn Tiếng Việt & Blacklist", 0x0080, 44, 502, 492, 24, IDC_LBL_APP_HINT, font, dpi),
+        make_owner_button(hwnd, "Danh sách ứng dụng...", 44, 436, 236, 32, IDC_BTN_APPS, font, dpi),
+        make_owner_button(hwnd, "Thêm app vào Tiếng Anh", 296, 436, 240, 32, IDC_BTN_ADD_CUR_EN, font, dpi),
+        make_child(hwnd, "STATIC", "Hỗ trợ Luôn Tiếng Anh, Luôn Tiếng Việt & Blacklist", 0x0080, 44, 478, 492, 24, IDC_LBL_APP_HINT, font, dpi),
     ];
     Tab2Handles {
         ctrls,

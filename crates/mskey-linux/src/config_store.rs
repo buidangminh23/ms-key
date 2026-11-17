@@ -1,4 +1,3 @@
-use std::collections::HashMap;
 use std::env;
 use std::fs;
 use std::path::{Path, PathBuf};
@@ -123,23 +122,6 @@ pub fn load_last_esc_word() -> Option<String> {
         .ok()
         .map(|s| s.trim().to_string())
         .filter(|s| !s.is_empty())
-}
-
-pub fn app_state_file_path() -> PathBuf {
-    config_dir().join("app_state.json")
-}
-
-pub fn load_app_state() -> HashMap<String, bool> {
-    fs::read_to_string(app_state_file_path())
-        .ok()
-        .and_then(|raw| serde_json::from_str::<HashMap<String, bool>>(&raw).ok())
-        .unwrap_or_default()
-}
-
-pub fn save_app_state(map: &HashMap<String, bool>) {
-    if let Ok(json) = serde_json::to_string_pretty(map) {
-        let _ = write_atomic(&app_state_file_path(), &json);
-    }
 }
 
 pub fn export_config_json(path: &Path, cfg: &Config) -> Result<(), String> {

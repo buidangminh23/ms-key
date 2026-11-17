@@ -181,7 +181,6 @@ fn connect_main_signals(st: &UiState) {
         st.chk_autostart,
         st.chk_show_start,
         st.chk_check_updates,
-        st.chk_smart_app,
         st.rad_ctrl_shift,
         st.rad_alt_z,
         st.rad_ctrl_space,

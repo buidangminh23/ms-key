@@ -139,15 +139,17 @@ final class MSKeyMacTests: XCTestCase {
         XCTAssertEqual(MacKeycode.toPortableVK(UInt16(kVK_ANSI_LeftBracket)), 0xDB)
         XCTAssertEqual(MacKeycode.toPortableVK(UInt16(kVK_ANSI_Semicolon)), 0xBA)
 
-        var mem = SmartAppSessionMemory(initialVE: true)
-        mem.loadMemory(["Notes": false])
-        XCTAssertEqual(mem.switchApp("Terminal", behavior: .forceEnglish, smartSwitch: true), false)
-        XCTAssertEqual(mem.switchApp("Notes", behavior: .default, smartSwitch: true), false)
-        XCTAssertEqual(mem.exportMemory()["notes"], false)
-
-        XCTAssertNil(mem.switchApp("Notes", behavior: .default, smartSwitch: true))
-        XCTAssertEqual(mem.switchApp("Notes", behavior: .forceEnglish, smartSwitch: true), false)
-        XCTAssertEqual(mem.switchApp("Notes", behavior: .default, smartSwitch: true), false)
+        var session = AppRuleSession(initialVE: true)
+        XCTAssertEqual(session.switchApp("Terminal", behavior: .forceEnglish), false)
+        XCTAssertEqual(session.switchApp("Notes", behavior: .default), true)
+        XCTAssertNil(session.switchApp("Notes", behavior: .default))
+        session.setUserVE(false)
+        XCTAssertEqual(session.switchApp("Claude", behavior: .default), false)
+        session.setUserVE(true)
+        session.invalidateActive()
+        XCTAssertEqual(session.switchApp("Claude", behavior: .default), true)
+        XCTAssertEqual(session.switchApp("Claude", behavior: .forceEnglish), false)
+        XCTAssertEqual(session.switchApp("Claude", behavior: .default), true)
 
         let rightShiftFlags = UInt64(CGEventFlags.maskShift.rawValue) | 0x0004
         let leftShiftFlags = UInt64(CGEventFlags.maskShift.rawValue) | 0x0002

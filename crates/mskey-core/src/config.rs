@@ -234,7 +234,6 @@ pub struct Config {
     pub run_as_admin: bool,
     pub show_on_startup: bool,
     pub theme: ThemeMode,
-    pub smart_app_switch: bool,
     pub app_rules: Vec<AppRule>,
     pub macros: Vec<MacroEntry>,
     pub user_dict_words: Vec<String>,
@@ -300,7 +299,6 @@ impl Default for Config {
             run_as_admin: false,
             show_on_startup: false,
             theme: ThemeMode::System,
-            smart_app_switch: true,
             app_rules: Vec::new(),
             macros: Vec::new(),
             user_dict_words: Vec::new(),
@@ -734,7 +732,6 @@ fn apply_evkey_setting(config: &mut Config, key: &str, val: &str) {
                 _ => ThemeMode::System,
             };
         }
-        "EApp" => config.smart_app_switch = flag,
         "QTelex" | "FastTelex" => config.quick_telex = flag,
         "SStartConsonant" => config.quick_start_consonant = flag,
         "SEndConsonant" => config.quick_end_consonant = flag,

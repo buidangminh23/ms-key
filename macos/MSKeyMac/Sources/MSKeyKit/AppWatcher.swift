@@ -569,21 +569,17 @@ public struct MacHotkeyTracker: Sendable {
     }
 }
 
-public struct SmartAppSessionMemory: Sendable {
+public struct AppRuleSession: Sendable {
     public private(set) var userPreferredVE: Bool
     public private(set) var activeApp: String = ""
     public private(set) var activeBehavior: AppBehaviorKind = .default
-    private var memory: [String: Bool] = [:]
 
     public init(initialVE: Bool) {
         self.userPreferredVE = initialVE
     }
 
-    public mutating func setUserVE(_ enabled: Bool, smartSwitch: Bool) {
+    public mutating func setUserVE(_ enabled: Bool) {
         userPreferredVE = enabled
-        if smartSwitch && !activeApp.isEmpty {
-            memory[activeApp.lowercased()] = enabled
-        }
     }
 
     public mutating func invalidateActive() {
@@ -591,20 +587,7 @@ public struct SmartAppSessionMemory: Sendable {
         activeBehavior = .default
     }
 
-    public mutating func loadMemory(_ saved: [String: Bool]) {
-        for (k, v) in saved {
-            let norm = k.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
-            if !norm.isEmpty {
-                memory[norm] = v
-            }
-        }
-    }
-
-    public func exportMemory() -> [String: Bool] {
-        memory
-    }
-
-    public mutating func switchApp(_ appName: String, behavior: AppBehaviorKind, smartSwitch: Bool) -> Bool? {
+    public mutating func switchApp(_ appName: String, behavior: AppBehaviorKind) -> Bool? {
         let key = appName.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
         guard !key.isEmpty else { return nil }
         if key == activeApp && behavior == activeBehavior {
@@ -618,9 +601,6 @@ public struct SmartAppSessionMemory: Sendable {
         case .forceVietnamese:
             return true
         case .default:
-            if smartSwitch {
-                return memory[key] ?? userPreferredVE
-            }
             return userPreferredVE
         }
     }

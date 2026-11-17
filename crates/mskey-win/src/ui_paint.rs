@@ -150,8 +150,8 @@ pub fn paint_main_window(hwnd: HWND) {
             draw_group_box(hdc, &cg, "Phím tắt nhanh & Nhập EVKey", pal, bold_font);
         }
         _ => {
-            let ag = RECT { left: s(32), top: s(374), right: s(548), bottom: s(568) };
-            draw_group_box(hdc, &ag, "Tự động chuyển V/E theo ứng dụng", pal, bold_font);
+            let ag = RECT { left: s(32), top: s(374), right: s(548), bottom: s(516) };
+            draw_group_box(hdc, &ag, "Quy tắc V/E theo ứng dụng", pal, bold_font);
         }
     }
     unsafe { EndPaint(hwnd, &ps) };
