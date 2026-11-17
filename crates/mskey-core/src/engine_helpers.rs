@@ -79,6 +79,11 @@ pub(crate) fn should_auto_restore(
     if display_str == raw_str {
         return false;
     }
+    if display.iter().any(|&c| matches!(c, 'đ' | 'Đ'))
+        && crate::transform::is_consonant_abbreviation(display)
+    {
+        return false;
+    }
     if is_standalone_marked_letter(display) && raw_str.chars().count() <= 2 {
         return false;
     }

@@ -2,6 +2,15 @@
 
 All notable changes to MS Key are documented here. The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and the project uses [Semantic Versioning](https://semver.org/).
 
+## [Unreleased]
+
+### Fixed
+
+- **`đ` in short abbreviations**: typing `hdd` gave `hdd` instead of `hđ`, and `ddc` showed `đc` but went back to `ddc` on space. In a word with no vowel (`hđ`, `đc`, `đk`, `vđ`, `tđ`) `dd` now turns the last `d` into `đ`, and the word is kept when you press space or punctuation. Typing `d` once more gives the plain letters back (`hddd` → `hdd`).
+- **Tone typed right after `gi`**: `gifo` gave `gìo` instead of `giò`; the tone now moves onto the main vowel once it is typed.
+- **Windows: letters landing in the wrong place when typing fast**: in Compatible Hook mode MS Key sent the backspaces, waited 2 ms, then sent the new text, so a key pressed during that wait was inserted between them. Each replacement is now sent in one batch that other key presses cannot split.
+- **Windows: crash `RefCell already mutably borrowed` in `ui_paint.rs`**: redrawing the settings window while it was being updated no longer panics and restarts MS Key.
+
 ## [0.1.10] - 2026-11-17
 
 ### Removed

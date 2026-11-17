@@ -167,14 +167,45 @@ pub enum TransformOutcome {
     Ignored,
 }
 
+pub fn is_consonant_abbreviation(chars: &[char]) -> bool {
+    !chars.is_empty()
+        && chars.iter().all(|&c| {
+            matches!(c, 'đ' | 'Đ')
+                || (c.is_ascii_alphabetic()
+                    && !matches!(c.to_ascii_lowercase(), 'a' | 'e' | 'i' | 'o' | 'u' | 'y'))
+        })
+}
+
+fn try_apply_abbreviation_d_stroke(chars: &mut [char]) -> TransformOutcome {
+    if !is_consonant_abbreviation(chars) {
+        return TransformOutcome::Ignored;
+    }
+    let last = chars.len() - 1;
+    let upper = chars[last].is_uppercase();
+    match chars[last] {
+        'd' | 'D' => {
+            chars[last] = to_d_stroke(upper);
+            TransformOutcome::Applied
+        }
+        'đ' | 'Đ' => {
+            chars[last] = to_plain_d(upper);
+            TransformOutcome::Reverted
+        }
+        _ => TransformOutcome::Ignored,
+    }
+}
+
 pub fn try_apply_d_stroke(
     chars: &mut [char],
     free_tone: bool,
     spelling_check: bool,
     allow_fjwz: bool,
 ) -> TransformOutcome {
-    if chars.is_empty() || !is_d_or_d_stroke(chars[0]) {
+    if chars.is_empty() {
         return TransformOutcome::Ignored;
+    }
+    if !is_d_or_d_stroke(chars[0]) {
+        return try_apply_abbreviation_d_stroke(chars);
     }
     if !free_tone && chars.len() > 1 {
         return TransformOutcome::Ignored;
@@ -427,10 +458,23 @@ pub fn reanchor_tone(chars: &mut [char], config: &Config) {
     let Some(parsed) = parse_syllable(chars, config.allow_fjwz) else {
         return;
     };
-    if parsed.active_tone == Tone::None || parsed.vowels.is_empty() {
+    if parsed.vowels.is_empty() {
         return;
     }
-    let tone = parsed.active_tone;
+    let onset_tone = (0..parsed.vowel_start).find_map(|i| {
+        decode_vowel(chars[i])
+            .and_then(|(base, t, upper)| (t != Tone::None).then_some((i, base, t, upper)))
+    });
+    if let Some((i, base, _, upper)) = onset_tone {
+        chars[i] = encode_vowel(base, Tone::None, upper);
+    }
+    let tone = match (parsed.active_tone, onset_tone) {
+        (Tone::None, Some((_, _, t, _))) => t,
+        (t, _) => t,
+    };
+    if tone == Tone::None {
+        return;
+    }
     let Some(target_rel) = tone_target_index(&parsed, config.modern_tone) else {
         return;
     };
