@@ -100,7 +100,8 @@ public final class MenuBarController: NSObject {
         menu.addItem(makeItem("Công cụ chuyển mã...", action: #selector(onOpenConverter)))
         menu.addItem(makeItem("Bảng gõ tắt...", action: #selector(onOpenMacros)))
         menu.addItem(makeItem("Bảng từ điển cá nhân...", action: #selector(onOpenUserDict)))
-        menu.addItem(makeItem("Mở rộng & Gõ thử...", action: #selector(onOpenExtras)))
+        menu.addItem(makeItem("Gõ thử…", action: #selector(onOpenSandbox)))
+        menu.addItem(makeItem("Mở rộng & sao lưu…", action: #selector(onOpenExtras)))
         let osdItem = makeItem("Hiện OSD chuyển V/E", action: #selector(onToggleOsd))
         osdItem.state = store.config.show_switch_osd ? .on : .off
         menu.addItem(osdItem)
@@ -163,6 +164,7 @@ public final class MenuBarController: NSObject {
     @objc private func onOpenConverter() { store?.openSheet(.converter) }
     @objc private func onOpenMacros() { store?.openSheet(.macros) }
     @objc private func onOpenUserDict() { store?.openSheet(.userDict) }
+    @objc private func onOpenSandbox() { store?.openSheet(.sandbox) }
     @objc private func onOpenExtras() { store?.openSheet(.extras) }
     @objc private func onToggleOsd() { store?.updateConfig { $0.show_switch_osd.toggle() } }
     @objc private func onQuickConvertClipboard() { store?.quickConvertPasteboard() }

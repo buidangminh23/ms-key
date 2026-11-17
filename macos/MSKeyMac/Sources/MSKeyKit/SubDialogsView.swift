@@ -23,19 +23,33 @@ public struct MacroManagerView: View {
     }
 
     public var body: some View {
-        VStack(alignment: .leading, spacing: 12) {
-            Text("Bảng gõ tắt").font(.headline)
+        VStack(alignment: .leading, spacing: 16) {
+            SettingsSheetTitle(title: "Bảng gõ tắt")
             TextField("Tìm kiếm từ tắt hoặc nội dung...", text: $searchQuery)
             List {
                 ForEach(filteredMacros) { item in
                     HStack(spacing: 8) {
-                        Text(item.shortcut).fontWeight(.semibold).frame(width: 110, alignment: .leading)
-                        Text("→").foregroundStyle(.secondary)
-                        Text(item.expansion.replacingOccurrences(of: "\n", with: "\\n")).lineLimit(1)
-                        if !item.enabled {
-                            Text("[Tắt]").font(.caption).foregroundStyle(.secondary)
+                        Button {
+                            shortcut = item.shortcut
+                            expansion = item.expansion.replacingOccurrences(of: "\n", with: "\\n")
+                        } label: {
+                            HStack(spacing: 8) {
+                                Text(item.shortcut)
+                                    .font(.body.monospaced().weight(.medium))
+                                    .lineLimit(1)
+                                    .frame(width: 104, alignment: .leading)
+                                Text(item.expansion.replacingOccurrences(of: "\n", with: "\\n"))
+                                    .lineLimit(1)
+                                    .foregroundStyle(.secondary)
+                                if !item.enabled {
+                                    Text("Đã tắt").font(.caption).foregroundStyle(.secondary)
+                                }
+                                Spacer(minLength: 0)
+                            }
+                            .contentShape(Rectangle())
                         }
-                        Spacer()
+                        .buttonStyle(.borderless)
+                        .accessibilityHint("Mở để sửa từ gõ tắt")
                         Button(item.enabled ? "Tắt" : "Bật") {
                             store.updateConfig { cfg in
                                 if let idx = cfg.macros.firstIndex(where: { $0.shortcut == item.shortcut }) {
@@ -49,18 +63,18 @@ public struct MacroManagerView: View {
                         }
                         .frame(height: 24)
                     }
-                    .opacity(item.enabled ? 1.0 : 0.55)
-                    .contentShape(Rectangle())
-                    .onTapGesture {
-                        shortcut = item.shortcut
-                        expansion = item.expansion.replacingOccurrences(of: "\n", with: "\\n")
-                    }
                 }
             }
-            .frame(height: 190)
+            .frame(height: 200)
+            .overlay {
+                if filteredMacros.isEmpty {
+                    Text(store.config.macros.isEmpty ? "Chưa có từ gõ tắt" : "Không tìm thấy từ gõ tắt")
+                        .foregroundStyle(.secondary)
+                }
+            }
 
             HStack(spacing: 8) {
-                TextField("Từ tắt", text: $shortcut).frame(width: 110)
+                TextField("Từ tắt", text: $shortcut).frame(width: 104)
                 TextField("Nội dung (dùng \\n để xuống dòng)", text: $expansion)
                 Button("Thêm / Cập nhật") {
                     let s = shortcut.trimmingCharacters(in: .whitespaces)
@@ -77,9 +91,12 @@ public struct MacroManagerView: View {
                     shortcut = ""
                     expansion = ""
                 }
+                .buttonStyle(.borderedProminent)
+                .disabled(shortcut.trimmingCharacters(in: .whitespaces).isEmpty)
                 .frame(height: 28)
             }
 
+            Divider()
             HStack(spacing: 8) {
                 Button("Nhập .txt...") { importMacrosTxt() }.frame(height: 28)
                 Button("Xuất .txt...") { exportMacrosTxt() }.frame(height: 28)
@@ -90,8 +107,7 @@ public struct MacroManagerView: View {
                 Button("Đóng") { dismiss() }.frame(height: 32)
             }
         }
-        .padding(16)
-        .frame(width: 540)
+        .settingsSheet(width: 600)
     }
 
     private func importMacrosTxt() {
@@ -153,24 +169,35 @@ public struct AppRulesView: View {
     }
 
     public var body: some View {
-        VStack(alignment: .leading, spacing: 12) {
-            Text("Danh sách ứng dụng & cửa sổ").font(.headline)
-            Text("Hỗ trợ dấu * đại diện cho tên app và tiêu đề cửa sổ (vd: *GitHub*) • Nhấn dòng để sửa")
-                .font(.caption)
-                .foregroundStyle(.secondary)
+        VStack(alignment: .leading, spacing: 16) {
+            SettingsSheetTitle(
+                title: "Quy tắc theo ứng dụng",
+                detail: "Dùng dấu * để khớp một phần tên ứng dụng hoặc tiêu đề cửa sổ, ví dụ *GitHub*."
+            )
             List {
                 ForEach(store.config.app_rules) { rule in
                     HStack(spacing: 8) {
-                        VStack(alignment: .leading, spacing: 2) {
-                            Text(rule.process_name)
-                            if !rule.titlePattern.isEmpty {
-                                Text("Tiêu đề: \(rule.titlePattern)")
-                                    .font(.caption)
-                                    .foregroundStyle(.secondary)
+                        Button {
+                            processName = rule.process_name
+                            titlePattern = rule.titlePattern
+                            behavior = rule.behavior
+                        } label: {
+                            HStack(spacing: 8) {
+                                VStack(alignment: .leading, spacing: 4) {
+                                    Text(rule.process_name).fontWeight(.medium)
+                                    if !rule.titlePattern.isEmpty {
+                                        Text(rule.titlePattern)
+                                            .font(.caption)
+                                            .foregroundStyle(.secondary)
+                                    }
+                                }
+                                .frame(maxWidth: .infinity, alignment: .leading)
+                                Text(rule.behavior.label).foregroundStyle(.secondary)
                             }
+                            .contentShape(Rectangle())
                         }
-                        .frame(maxWidth: .infinity, alignment: .leading)
-                        Text(rule.behavior.label).foregroundStyle(.secondary)
+                        .buttonStyle(.borderless)
+                        .accessibilityHint("Mở để sửa quy tắc")
                         Button("Xoá") {
                             store.updateConfig { cfg in
                                 cfg.app_rules.removeAll { $0.id == rule.id }
@@ -178,20 +205,19 @@ public struct AppRulesView: View {
                         }
                         .frame(height: 24)
                     }
-                    .padding(.vertical, 2)
+                    .padding(.vertical, 4)
                     .background(
                         isSelectedRule(rule) ? Color.accentColor.opacity(0.12) : Color.clear,
                         in: RoundedRectangle(cornerRadius: 4)
                     )
-                    .contentShape(Rectangle())
-                    .onTapGesture {
-                        processName = rule.process_name
-                        titlePattern = rule.titlePattern
-                        behavior = rule.behavior
-                    }
                 }
             }
-            .frame(height: 190)
+            .frame(height: 200)
+            .overlay {
+                if store.config.app_rules.isEmpty {
+                    Text("Chưa có quy tắc ứng dụng").foregroundStyle(.secondary)
+                }
+            }
 
             HStack(spacing: 8) {
                 Menu("Chọn cửa sổ đang mở...") {
@@ -219,7 +245,7 @@ public struct AppRulesView: View {
             VStack(spacing: 8) {
                 HStack(spacing: 8) {
                     TextField("Tên app / binary (vd: Code, Chrome)", text: $processName)
-                    Picker("", selection: $behavior) {
+                    Picker("Chế độ gõ", selection: $behavior) {
                         ForEach(AppBehaviorKind.allCases) { b in
                             Text(b.label).tag(b)
                         }
@@ -246,6 +272,8 @@ public struct AppRulesView: View {
                         processName = ""
                         titlePattern = ""
                     }
+                    .buttonStyle(.borderedProminent)
+                    .disabled(processName.trimmingCharacters(in: .whitespaces).isEmpty)
                     .frame(height: 28)
                 }
             }
@@ -255,8 +283,7 @@ public struct AppRulesView: View {
                 Button("Đóng") { dismiss() }.frame(height: 32)
             }
         }
-        .padding(16)
-        .frame(width: 540)
+        .settingsSheet(width: 600)
         .onAppear {
             runningWindows = MacAppDetector.listRunningWindows()
         }
@@ -273,18 +300,20 @@ public struct CustomKeymapView: View {
     }
 
     public var body: some View {
-        VStack(alignment: .leading, spacing: 12) {
-            Text("Tự định nghĩa kiểu gõ").font(.headline)
+        VStack(alignment: .leading, spacing: 16) {
+            SettingsSheetTitle(title: "Tự định nghĩa kiểu gõ", detail: "Nhập một phím cho mỗi dấu hoặc ký tự.")
             Grid(alignment: .leading, horizontalSpacing: 12, verticalSpacing: 8) {
-                row("Sắc / Huyền", $map.acute, $map.grave)
-                row("Hỏi / Ngã", $map.hook, $map.tilde)
-                row("Nặng / Xoá dấu", $map.dot, $map.remove_tone)
-                row("Mũ â / ê", $map.circumflex_a, $map.circumflex_e)
-                row("Mũ ô / Móc ơ", $map.circumflex_o, $map.horn_o)
-                row("Móc ư / Trăng ă", $map.horn_u, $map.breve_a)
-                row("Chữ đ / w -> ư", $map.d_stroke, $map.quick_u_horn)
-                row("Móc nhanh [ ]", $map.quick_o_horn_key, $map.quick_u_horn_key)
+                row("Dấu sắc", $map.acute, "Dấu huyền", $map.grave)
+                row("Dấu hỏi", $map.hook, "Dấu ngã", $map.tilde)
+                row("Dấu nặng", $map.dot, "Xoá dấu", $map.remove_tone)
+                row("Mũ â", $map.circumflex_a, "Mũ ê", $map.circumflex_e)
+                row("Mũ ô", $map.circumflex_o, "Móc ơ", $map.horn_o)
+                row("Móc ư", $map.horn_u, "Trăng ă", $map.breve_a)
+                row("Chữ đ", $map.d_stroke, "Gõ nhanh ư", $map.quick_u_horn)
+                row("Móc nhanh ơ", $map.quick_o_horn_key, "Móc nhanh ư", $map.quick_u_horn_key)
             }
+            .settingsCard()
+            Divider()
             HStack(spacing: 8) {
                 Button("Mặc định Telex") { map = CustomKeyMapModel() }.frame(height: 32)
                 Spacer()
@@ -300,16 +329,16 @@ public struct CustomKeymapView: View {
                 .frame(height: 32)
             }
         }
-        .padding(16)
-        .frame(width: 440)
+        .settingsSheet(width: 464)
         .onAppear { map = store.config.custom_keymap }
     }
 
-    private func row(_ title: String, _ left: Binding<String>, _ right: Binding<String>) -> some View {
+    private func row(_ leftTitle: String, _ left: Binding<String>, _ rightTitle: String, _ right: Binding<String>) -> some View {
         GridRow {
-            Text(title).frame(width: 140, alignment: .leading)
-            TextField("", text: left).frame(width: 64)
-            TextField("", text: right).frame(width: 64)
+            Text(leftTitle)
+            TextField(leftTitle, text: left).labelsHidden().frame(width: 64)
+            Text(rightTitle)
+            TextField(rightTitle, text: right).labelsHidden().frame(width: 64)
         }
     }
 
@@ -352,36 +381,35 @@ public struct ConverterView: View {
     }
 
     public var body: some View {
-        VStack(alignment: .leading, spacing: 12) {
-            HStack {
-                Text("Chuyển mã Clipboard").font(.headline)
-                Spacer()
-                if !detectedNote.isEmpty {
-                    Text(detectedNote)
-                        .font(.caption)
-                        .foregroundStyle(.secondary)
-                }
-            }
-            HStack(spacing: 8) {
-                Picker("Nguồn", selection: $fromCharset) {
+        VStack(alignment: .leading, spacing: 16) {
+            SettingsSheetTitle(title: "Chuyển mã")
+            HStack(spacing: 12) {
+                Picker("Mã nguồn", selection: $fromCharset) {
                     ForEach(ConvertEncodingKind.allCases) { cs in Text(cs.label).tag(cs) }
                 }
-                Picker("Đích", selection: $toCharset) {
+                Picker("Mã đích", selection: $toCharset) {
                     ForEach(ConvertEncodingKind.targetCases) { cs in Text(cs.label).tag(cs) }
                 }
-                Picker("Chữ", selection: $caseTransform) {
+                Picker("Kiểu chữ", selection: $caseTransform) {
                     ForEach(CaseTransformKind.allCases) { kind in
                         Text(kind.label).tag(kind)
                     }
                 }
             }
-            TextEditor(text: $text)
-                .font(.body)
-                .frame(height: 180)
-                .overlay(RoundedRectangle(cornerRadius: 6).stroke(Color.secondary.opacity(0.3)))
+            .settingsCard()
+            SettingsSection("Văn bản") {
+                TextEditor(text: $text)
+                    .font(.body)
+                    .frame(height: 184)
+                    .accessibilityLabel("Văn bản cần chuyển mã")
+                if !detectedNote.isEmpty {
+                    Text(detectedNote).font(.caption).foregroundStyle(.secondary)
+                }
+            }
 
+            Divider()
             HStack(spacing: 8) {
-                Button("Lấy Clipboard") {
+                Button("Dán từ Clipboard") {
                     text = NSPasteboard.general.string(forType: .string) ?? ""
                     updateDetectedNote()
                 }
@@ -399,7 +427,7 @@ public struct ConverterView: View {
                 .buttonStyle(.borderedProminent)
                 .frame(height: 32)
 
-                Button("Chép Clipboard") {
+                Button("Chép kết quả") {
                     NSPasteboard.general.clearContents()
                     NSPasteboard.general.setString(text, forType: .string)
                 }
@@ -409,8 +437,7 @@ public struct ConverterView: View {
                 Button("Đóng") { dismiss() }.frame(height: 32)
             }
         }
-        .padding(16)
-        .frame(width: 560)
+        .settingsSheet(width: 656)
         .onAppear {
             text = NSPasteboard.general.string(forType: .string) ?? ""
             updateDetectedNote()
@@ -450,11 +477,11 @@ public struct HotkeyCaptureView: View {
     }
 
     public var body: some View {
-        VStack(alignment: .leading, spacing: 12) {
-            Text("Nhấn tổ hợp phím mới...").font(.headline)
-            Text("Hỗ trợ A-Z, 0-9, F1-F12, Space, Tab, Return, dấu câu")
-                .font(.caption)
-                .foregroundStyle(.secondary)
+        VStack(alignment: .leading, spacing: 16) {
+            SettingsSheetTitle(
+                title: "Đặt tổ hợp phím",
+                detail: "Nhấn tổ hợp phím mới. Hỗ trợ A–Z, 0–9, F1–F12, Space, Tab, Return và dấu câu."
+            )
             Text(captured.displayText)
                 .font(.title3.monospaced())
                 .padding(12)
@@ -484,8 +511,7 @@ public struct HotkeyCaptureView: View {
                 .frame(height: 32)
             }
         }
-        .padding(16)
-        .frame(width: 340)
+        .settingsSheet(width: 384)
         .onAppear {
             switch target {
             case .switchHotkey:

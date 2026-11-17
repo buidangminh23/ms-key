@@ -1,16 +1,22 @@
-use std::cell::RefCell;
+use std::cell::{Cell, RefCell};
 use std::ptr;
 
-use mskey_core::Config;
+use mskey_core::{Config, Engine, EngineAction, InputMethod};
 use windows_sys::Win32::Foundation::{HWND, LPARAM, LRESULT, RECT, WPARAM};
 use windows_sys::Win32::Graphics::Gdi::{
     BeginPaint, CreateSolidBrush, DeleteObject, EndPaint, HBRUSH, HFONT, InvalidateRect,
     PAINTSTRUCT,
 };
-use windows_sys::Win32::UI::Controls::{DRAWITEMSTRUCT, ODT_BUTTON};
+use windows_sys::Win32::UI::Controls::{DRAWITEMSTRUCT, EM_GETSEL, EM_REPLACESEL, EM_SETMARGINS, EM_SETSEL, EM_UNDO, ODT_BUTTON};
+use windows_sys::Win32::UI::Input::KeyboardAndMouse::{
+    GetKeyState, SetFocus, VK_CONTROL, VK_DELETE, VK_DOWN, VK_END, VK_ESCAPE, VK_HOME, VK_LEFT,
+    VK_NEXT, VK_PRIOR, VK_RIGHT, VK_UP,
+};
+use windows_sys::Win32::UI::Shell::{DefSubclassProc, SetWindowSubclass};
 use windows_sys::Win32::UI::WindowsAndMessaging::{
-    CB_SETCURSEL, DefWindowProcW, DestroyWindow, GetClientRect, LB_ADDSTRING, LB_GETCURSEL,
-    LB_RESETCONTENT, LBS_NOTIFY, SendMessageW, WM_CLOSE, WM_COMMAND, WM_CREATE, WM_CTLCOLOREDIT,
+    CB_SETCURSEL, DefWindowProcW, DestroyWindow, EC_LEFTMARGIN, EC_RIGHTMARGIN, GetClientRect, LB_ADDSTRING, LB_GETCURSEL,
+    LB_RESETCONTENT, LBS_NOTIFY, GetDlgItem, SendMessageW, WM_CHAR, WM_CLEAR, WM_CLOSE, WM_COMMAND,
+    WM_CREATE, WM_CTLCOLOREDIT, WM_CUT, WM_KEYDOWN, WM_KILLFOCUS, WM_LBUTTONDOWN, WM_PASTE, WM_UNDO,
     WM_CTLCOLORLISTBOX, WM_CTLCOLORSTATIC, WM_DESTROY, WM_DRAWITEM, WM_PAINT, WS_BORDER,
     WS_TABSTOP, WS_VSCROLL,
 };
@@ -18,11 +24,11 @@ use windows_sys::Win32::UI::WindowsAndMessaging::{
 use crate::dialog_helpers::{
     combo_index, create_modal_window, current_palette, handle_ctl_color, handle_draw_combo_or_btn,
     make_child, make_combo, make_edit, make_owner_button, read_window_text, register_tool_class,
-    run_modal_loop, scale_px, set_cue_banner, window_dpi, write_window_text,
+    run_modal_loop, run_modal_loop_with_focus, scale_px, set_cue_banner, window_dpi, write_window_text,
 };
 use crate::platform::{save_config, to_wide};
 use crate::state::with_state;
-use crate::theme::{create_ui_font, draw_checkbox, fill_solid};
+use crate::theme::{create_ui_font, draw_checkbox, draw_item_focus, fill_solid};
 use crate::ui_actions::{export_json_backup_dialog, import_json_backup_dialog};
 
 const ID_EXT_QTELEX: usize = 6601;
@@ -33,8 +39,6 @@ const ID_EXT_SHIFTINS: usize = 6605;
 const ID_EXT_DELAY: usize = 6606;
 const ID_EXT_EXP: usize = 6607;
 const ID_EXT_IMP: usize = 6608;
-const ID_EXT_CLEAR: usize = 6609;
-const ID_EXT_SANDBOX: usize = 6610;
 const ID_EXT_CLOSE: usize = 6611;
 const CBN_SELCHANGE_CODE: usize = 1;
 
@@ -43,10 +47,10 @@ const DELAY_OPTIONS: [u8; 5] = [0, 1, 2, 5, 10];
 #[derive(Clone, Copy)]
 struct ExtrasDlg {
     font: HFONT,
+    bold: HFONT,
     bg_br: HBRUSH,
     in_br: HBRUSH,
     delay_cb: HWND,
-    sandbox: HWND,
 }
 
 thread_local! {
@@ -55,17 +59,10 @@ thread_local! {
     static DICT_FILTER_IDX: RefCell<Vec<usize>> = const { RefCell::new(Vec::new()) };
 }
 
-pub fn show_extras_sandbox_dialog(parent: HWND) -> bool {
+pub fn show_extras_dialog(parent: HWND) {
     register_tool_class("MSKeyExtrasDlg", extras_wnd_proc);
-    let modal = create_modal_window(
-        parent,
-        "MSKeyExtrasDlg",
-        "Mở rộng & Gõ thử (MS Key)",
-        476,
-        486,
-    );
+    let modal = create_modal_window(parent, "MSKeyExtrasDlg", "Mở rộng và sao lưu", 496, 304);
     run_modal_loop(parent, modal);
-    true
 }
 
 fn delay_to_idx(ms: u8) -> usize {
@@ -95,7 +92,8 @@ fn toggle_extras_id(id: usize, cfg: &mut Config) -> bool {
     true
 }
 
-fn create_extras_controls(hwnd: HWND, font: HFONT, dpi: i32) -> (HWND, HWND) {
+fn create_extras_controls(hwnd: HWND, font: HFONT, bold: HFONT, dpi: i32) -> HWND {
+    make_child(hwnd, "STATIC", "Tùy chọn mở rộng", 0x0200, 20, 16, 456, 24, 0, bold, dpi);
     let items = [
         (ID_EXT_QTELEX, "Gõ nhanh phụ âm (Quick Telex: cc→ch, tt→th)"),
         (ID_EXT_QSTART, "Phụ âm đầu nhanh (f→ph, j→gi, w→qu)"),
@@ -103,31 +101,21 @@ fn create_extras_controls(hwnd: HWND, font: HFONT, dpi: i32) -> (HWND, HWND) {
         (ID_EXT_OSD, "Hiện khung nổi OSD khi chuyển V/E"),
         (ID_EXT_SHIFTINS, "Dán bằng Shift+Insert (khi dùng Clipboard)"),
     ];
-    for (idx, (id, lbl)) in items.iter().enumerate() {
-        make_owner_button(hwnd, lbl, 16, 16 + (idx as i32) * 30, 444, 24, *id, font, dpi);
+    for (idx, (id, label)) in items.iter().enumerate() {
+        make_owner_button(hwnd, label, 20, 212 + (idx as i32) * 24, 456, 24, *id, font, dpi);
     }
-    make_child(hwnd, "STATIC", "Độ trễ gửi phím:", 0, 16, 178, 136, 24, 0, font, dpi);
+    make_child(hwnd, "STATIC", "Độ trễ gửi phím", 0x0200, 20, 172, 132, 28, 0, font, dpi);
     let sel = with_state(|app| delay_to_idx(app.engine.config().send_delay_ms));
     let delay_cb = make_combo(
-        hwnd,
-        158,
-        174,
-        164,
-        28,
-        ID_EXT_DELAY,
+        hwnd, 160, 172, 180, 28, ID_EXT_DELAY,
         &["0 ms (Nhanh)", "1 ms", "2 ms", "5 ms", "10 ms"],
-        sel,
-        font,
-        dpi,
+        sel, font, dpi,
     );
-    make_child(hwnd, "STATIC", "Sao lưu JSON:", 0, 16, 218, 136, 24, 0, font, dpi);
-    make_owner_button(hwnd, "Xuất JSON...", 158, 214, 144, 30, ID_EXT_EXP, font, dpi);
-    make_owner_button(hwnd, "Nhập JSON...", 314, 214, 144, 30, ID_EXT_IMP, font, dpi);
-    make_child(hwnd, "STATIC", "Khung gõ thử trực tiếp:", 0, 16, 260, 260, 24, 0, font, dpi);
-    make_owner_button(hwnd, "Xóa chữ", 364, 256, 94, 26, ID_EXT_CLEAR, font, dpi);
-    let sandbox = make_edit(hwnd, "", 16, 290, 442, 140, ID_EXT_SANDBOX, true, font, dpi);
-    make_owner_button(hwnd, "Đóng", 364, 440, 94, 32, ID_EXT_CLOSE, font, dpi);
-    (delay_cb, sandbox)
+    make_child(hwnd, "STATIC", "Sao lưu JSON", 0x0200, 20, 208, 132, 28, 0, font, dpi);
+    make_owner_button(hwnd, "Xuất JSON…", 160, 208, 116, 28, ID_EXT_EXP, font, dpi);
+    make_owner_button(hwnd, "Nhập JSON…", 284, 208, 116, 28, ID_EXT_IMP, font, dpi);
+    make_owner_button(hwnd, "Đóng", 380, 264, 96, 28, ID_EXT_CLOSE, font, dpi);
+    delay_cb
 }
 
 fn handle_extras_cmd(hwnd: HWND, id: usize, code: usize, st: ExtrasDlg) {
@@ -159,10 +147,6 @@ fn handle_extras_cmd(hwnd: HWND, id: usize, code: usize, st: ExtrasDlg) {
                 InvalidateRect(hwnd, ptr::null(), 1);
             }
         }
-        ID_EXT_CLEAR => {
-            write_window_text(st.sandbox, "");
-            with_state(|app| app.engine.reset_all());
-        }
         ID_EXT_CLOSE => unsafe { DestroyWindow(hwnd); },
         _ => {}
     }
@@ -181,9 +165,10 @@ unsafe extern "system" fn extras_wnd_proc(
             let font = create_ui_font(scale_px(14, dpi), false);
             let bg_br = unsafe { CreateSolidBrush(pal.card_bg) };
             let in_br = unsafe { CreateSolidBrush(pal.input_bg) };
-            let (delay_cb, sandbox) = create_extras_controls(hwnd, font, dpi);
+            let bold = create_ui_font(scale_px(14, dpi), true);
+            let delay_cb = create_extras_controls(hwnd, font, bold, dpi);
             EXTRAS_STATE.with(|c| {
-                *c.borrow_mut() = Some(ExtrasDlg { font, bg_br, in_br, delay_cb, sandbox });
+                *c.borrow_mut() = Some(ExtrasDlg { font, bold, bg_br, in_br, delay_cb });
             });
             0
         }
@@ -193,6 +178,8 @@ unsafe extern "system" fn extras_wnd_proc(
             let mut rc: RECT = unsafe { std::mem::zeroed() };
             unsafe { GetClientRect(hwnd, &mut rc) };
             fill_solid(hdc, &rc, pal.card_bg);
+            let s = |v| scale_px(v, window_dpi(hwnd));
+            fill_solid(hdc, &RECT { left: s(20), top: s(252), right: s(476), bottom: s(252) + 1 }, pal.border);
             unsafe { EndPaint(hwnd, &ps) };
             0
         }
@@ -206,6 +193,7 @@ unsafe extern "system" fn extras_wnd_proc(
                     let dpi = window_dpi(hwnd);
                     fill_solid(dis.hDC, &dis.rcItem, pal.card_bg);
                     draw_checkbox(dis.hDC, &dis.rcItem, &txt, checked, pal, font, dpi);
+                    draw_item_focus(dis, dpi);
                     return 1;
                 }
             }
@@ -233,6 +221,7 @@ unsafe extern "system" fn extras_wnd_proc(
             if let Some(st) = EXTRAS_STATE.with(|c| c.borrow_mut().take()) {
                 unsafe {
                     DeleteObject(st.font);
+                    DeleteObject(st.bold);
                     DeleteObject(st.bg_br);
                     DeleteObject(st.in_br);
                 }
@@ -241,6 +230,228 @@ unsafe extern "system" fn extras_wnd_proc(
         }
         _ => unsafe { DefWindowProcW(hwnd, msg, wparam, lparam) },
     }
+}
+
+const ID_TRY_METHOD: usize = 6620;
+const ID_TRY_MODE: usize = 6621;
+const ID_TRY_SAMPLE: usize = 6622;
+const ID_TRY_TEXT: usize = 6623;
+const ID_TRY_CLEAR: usize = 6624;
+const ID_TRY_CLOSE: usize = 6625;
+
+const TRY_METHODS: [InputMethod; 5] = [
+    InputMethod::Telex, InputMethod::Vni, InputMethod::Viqr, InputMethod::SimpleTelex, InputMethod::Custom,
+];
+
+struct TypingPreview {
+    engine: Engine,
+    font: HFONT,
+    title_font: HFONT,
+    bg_br: HBRUSH,
+    in_br: HBRUSH,
+}
+
+thread_local! {
+    static PREVIEW_WINDOW: Cell<usize> = const { Cell::new(0) };
+    static PREVIEW_STATE: RefCell<Option<TypingPreview>> = const { RefCell::new(None) };
+}
+
+pub fn is_typing_preview(hwnd: usize) -> bool {
+    hwnd != 0 && PREVIEW_WINDOW.get() == hwnd
+}
+
+pub fn show_typing_preview(parent: HWND) {
+    register_tool_class("MSKeyTypingPreview", typing_preview_proc);
+    let modal = create_modal_window(parent, "MSKeyTypingPreview", "Gõ thử · MS Key", 536, 352);
+    if !modal.is_null() {
+        let edit = unsafe { GetDlgItem(modal, ID_TRY_TEXT as i32) };
+        run_modal_loop_with_focus(parent, modal, edit);
+    }
+}
+
+fn preview_sample(method: InputMethod) -> &'static str {
+    match method {
+        InputMethod::Telex | InputMethod::SimpleTelex => "Gõ Tieengs Vieetj để thử chữ “Tiếng Việt”.",
+        InputMethod::Vni => "Gõ Tie6ng1 Vie6t5 để thử chữ “Tiếng Việt”.",
+        InputMethod::Viqr => "Gõ Tie^ng' Vie^t. để thử chữ “Tiếng Việt”.",
+        InputMethod::Custom => "Gõ theo bảng phím tùy chỉnh đang dùng.",
+    }
+}
+
+fn preview_mode_label(vietnamese: bool) -> &'static str {
+    if vietnamese { "Tiếng Việt (V)" } else { "Tiếng Anh (E)" }
+}
+
+fn create_typing_preview(hwnd: HWND, pal: crate::theme::ThemePalette) {
+    let dpi = window_dpi(hwnd);
+    let font = create_ui_font(scale_px(14, dpi), false);
+    let title_font = create_ui_font(scale_px(22, dpi), true);
+    let cfg = with_state(|st| st.engine.config().clone());
+    let method = cfg.input_method;
+    let vietnamese = cfg.vietnamese_enabled;
+    let method_idx = TRY_METHODS.iter().position(|value| *value == method).unwrap_or_default();
+    let state = TypingPreview {
+        engine: Engine::new(cfg),
+        font,
+        title_font,
+        bg_br: unsafe { CreateSolidBrush(pal.card_bg) },
+        in_br: unsafe { CreateSolidBrush(pal.input_bg) },
+    };
+    PREVIEW_WINDOW.set(hwnd as usize);
+    PREVIEW_STATE.with(|slot| *slot.borrow_mut() = Some(state));
+    make_child(hwnd, "STATIC", "Gõ thử", 0x0200, 20, 16, 232, 28, 0, title_font, dpi);
+    make_child(hwnd, "STATIC", "Kiểu gõ thử", 0x0200, 20, 56, 96, 28, 0, font, dpi);
+    make_combo(
+        hwnd, 116, 56, 184, 28, ID_TRY_METHOD,
+        &["Telex", "VNI", "VIQR", "Simple Telex", "Tự định nghĩa"], method_idx, font, dpi,
+    );
+    make_owner_button(hwnd, preview_mode_label(vietnamese), 400, 56, 116, 28, ID_TRY_MODE, font, dpi);
+    make_child(hwnd, "STATIC", preview_sample(method), 0x0200, 20, 96, 496, 24, ID_TRY_SAMPLE, font, dpi);
+    let edit = make_edit(hwnd, "", 20, 128, 496, 144, ID_TRY_TEXT, true, font, dpi);
+    unsafe {
+        let margin = scale_px(8, dpi);
+        SendMessageW(
+            edit, EM_SETMARGINS, (EC_LEFTMARGIN | EC_RIGHTMARGIN) as WPARAM,
+            (margin | (margin << 16)) as LPARAM,
+        );
+        SetWindowSubclass(edit, Some(preview_edit_proc), 1, 0);
+    }
+    make_child(hwnd, "STATIC", "Các thay đổi chỉ áp dụng trong ô gõ thử.", 0x0200, 20, 296, 292, 32, 0, font, dpi);
+    make_owner_button(hwnd, "Xóa chữ", 328, 296, 88, 32, ID_TRY_CLEAR, font, dpi);
+    make_owner_button(hwnd, "Đóng", 424, 296, 92, 32, ID_TRY_CLOSE, font, dpi);
+}
+
+fn with_preview_engine<T>(f: impl FnOnce(&mut Engine) -> T) -> Option<T> {
+    PREVIEW_STATE.with(|slot| slot.try_borrow_mut().ok()?.as_mut().map(|state| f(&mut state.engine)))
+}
+
+fn handle_try_command(hwnd: HWND, id: usize, code: usize) {
+    let item = |id| unsafe { GetDlgItem(hwnd, id as i32) };
+    match id {
+        ID_TRY_METHOD if code == CBN_SELCHANGE_CODE => {
+            if let Some(&method) = TRY_METHODS.get(combo_index(item(ID_TRY_METHOD))) {
+                with_preview_engine(|engine| {
+                    let mut cfg = engine.config().clone();
+                    cfg.input_method = method;
+                    engine.update_config(cfg);
+                    engine.reset_all();
+                });
+                write_window_text(item(ID_TRY_SAMPLE), preview_sample(method));
+            }
+        }
+        ID_TRY_MODE => {
+            if let Some(vietnamese) = with_preview_engine(|engine| {
+                let next = !engine.config().vietnamese_enabled;
+                engine.set_vietnamese_enabled(next);
+                next
+            }) {
+                write_window_text(item(ID_TRY_MODE), preview_mode_label(vietnamese));
+                unsafe { InvalidateRect(item(ID_TRY_MODE), ptr::null(), 0) };
+            }
+        }
+        ID_TRY_CLEAR => {
+            write_window_text(item(ID_TRY_TEXT), "");
+            with_preview_engine(Engine::reset_all);
+            unsafe { SetFocus(item(ID_TRY_TEXT)) };
+        }
+        ID_TRY_CLOSE | 2 => { unsafe { DestroyWindow(hwnd) }; }
+        _ => {}
+    }
+}
+
+unsafe extern "system" fn typing_preview_proc(hwnd: HWND, msg: u32, wp: WPARAM, lp: LPARAM) -> LRESULT {
+    let pal = current_palette();
+    match msg {
+        WM_CREATE => { create_typing_preview(hwnd, pal); 0 }
+        WM_PAINT => {
+            let mut ps: PAINTSTRUCT = unsafe { std::mem::zeroed() };
+            let hdc = unsafe { BeginPaint(hwnd, &mut ps) };
+            let mut rc: RECT = unsafe { std::mem::zeroed() };
+            unsafe { GetClientRect(hwnd, &mut rc) };
+            fill_solid(hdc, &rc, pal.card_bg);
+            unsafe { EndPaint(hwnd, &ps) };
+            0
+        }
+        WM_DRAWITEM => {
+            let font = PREVIEW_STATE.with(|slot| slot.borrow().as_ref().map(|state| state.font));
+            font.and_then(|font| handle_draw_combo_or_btn(lp, &[], pal, font)).unwrap_or(0)
+        }
+        WM_CTLCOLORSTATIC | WM_CTLCOLOREDIT | WM_CTLCOLORLISTBOX => {
+            PREVIEW_STATE.with(|slot| slot.borrow().as_ref().map_or(0, |state| {
+                handle_ctl_color(msg, wp as _, pal, state.bg_br, state.in_br)
+            }))
+        }
+        WM_COMMAND => { handle_try_command(hwnd, wp & 0xFFFF, wp >> 16); 0 }
+        WM_CLOSE => { unsafe { DestroyWindow(hwnd) }; 0 }
+        WM_DESTROY => {
+            PREVIEW_WINDOW.set(0);
+            if let Some(state) = PREVIEW_STATE.with(|slot| slot.borrow_mut().take()) {
+                unsafe {
+                    DeleteObject(state.font);
+                    DeleteObject(state.title_font);
+                    DeleteObject(state.bg_br);
+                    DeleteObject(state.in_br);
+                }
+            }
+            0
+        }
+        _ => unsafe { DefWindowProcW(hwnd, msg, wp, lp) },
+    }
+}
+
+unsafe extern "system" fn preview_edit_proc(
+    hwnd: HWND, msg: u32, wp: WPARAM, lp: LPARAM, _: usize, _: usize,
+) -> LRESULT {
+    if msg == WM_CHAR || (msg == WM_KEYDOWN && wp == VK_ESCAPE as usize) {
+        if apply_preview_key(hwnd, wp) {
+            return 0;
+        }
+    } else if matches!(msg, WM_LBUTTONDOWN | WM_KILLFOCUS | WM_PASTE | WM_CUT | WM_CLEAR | WM_UNDO | EM_UNDO)
+        || (msg == WM_KEYDOWN && matches!(wp as u16, VK_LEFT | VK_RIGHT | VK_UP | VK_DOWN | VK_HOME | VK_END | VK_PRIOR | VK_NEXT | VK_DELETE))
+    {
+        with_preview_engine(Engine::reset_all);
+    }
+    unsafe { DefSubclassProc(hwnd, msg, wp, lp) }
+}
+
+fn apply_preview_key(hwnd: HWND, key: usize) -> bool {
+    let mut start = 0u32;
+    let mut end = 0u32;
+    unsafe { SendMessageW(hwnd, EM_GETSEL, &mut start as *mut u32 as WPARAM, &mut end as *mut u32 as LPARAM) };
+    if unsafe { GetKeyState(VK_CONTROL as i32) } < 0 || start != end {
+        with_preview_engine(Engine::reset_all);
+        return false;
+    }
+    let action = with_preview_engine(|engine| match key {
+        8 => engine.process_backspace(),
+        13 => engine.process_delimiter('\n'),
+        27 => engine.process_escape(),
+        key => match char::from_u32(key as u32) {
+            Some(ch) if !ch.is_control() => engine.process_key(ch),
+            _ => { engine.reset_all(); EngineAction::PassThrough }
+        },
+    });
+    let Some(EngineAction::Replace { backspaces, text }) = action else { return false };
+    let current = read_window_text(hwnd);
+    let before: Vec<u16> = current.encode_utf16().take(start as usize).collect();
+    let mut from = before.len();
+    for _ in 0..backspaces {
+        if from == 0 {
+            break;
+        }
+        from -= 1;
+        if from > 0 && (0xDC00..=0xDFFF).contains(&before[from])
+            && (0xD800..=0xDBFF).contains(&before[from - 1])
+        {
+            from -= 1;
+        }
+    }
+    let text = to_wide(&text.replace('\n', "\r\n"));
+    unsafe {
+        SendMessageW(hwnd, EM_SETSEL, from, end as LPARAM);
+        SendMessageW(hwnd, EM_REPLACESEL, 1, text.as_ptr() as LPARAM);
+    }
+    true
 }
 
 const ID_DICT_EDIT: usize = 6701;

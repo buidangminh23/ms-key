@@ -1,5 +1,7 @@
 use std::ffi::c_void;
 
+use mskey_core::InputMethod;
+
 use crate::gio_ffi::{cstr, from_cstr, g_free};
 use crate::gtk_ffi::{
     GTK_ORIENTATION_HORIZONTAL, GTK_ORIENTATION_VERTICAL, GTK_WIN_POS_CENTER, GTK_WINDOW_TOPLEVEL,
@@ -126,6 +128,27 @@ pub fn set_combo(cb: *mut GtkWidget, idx: usize) {
 
 pub fn get_combo(cb: *mut GtkWidget) -> usize {
     unsafe { gtk_combo_box_get_active(cb).max(0) as usize }
+}
+
+const INPUT_METHOD_CHOICES: [(InputMethod, &str); 5] = [
+    (InputMethod::Telex, "Telex"),
+    (InputMethod::Vni, "VNI"),
+    (InputMethod::Viqr, "VIQR"),
+    (InputMethod::SimpleTelex, "Simple Telex"),
+    (InputMethod::Custom, "Tự định nghĩa"),
+];
+
+pub fn make_input_method_combo() -> *mut GtkWidget {
+    make_combo(&INPUT_METHOD_CHOICES.map(|(_, label)| label))
+}
+
+pub fn set_input_method(combo: *mut GtkWidget, method: InputMethod) {
+    let index = INPUT_METHOD_CHOICES.iter().position(|(value, _)| *value == method).unwrap_or(0);
+    set_combo(combo, index);
+}
+
+pub fn get_input_method(combo: *mut GtkWidget) -> InputMethod {
+    INPUT_METHOD_CHOICES.get(get_combo(combo)).map_or(InputMethod::default(), |(value, _)| *value)
 }
 
 pub fn refill_combo(cb: *mut GtkWidget, items: &[String], active_idx: usize) {
@@ -259,6 +282,7 @@ pub fn create_modal_gtk(parent: *mut GtkWindow, title: &str, w: i32, h: i32) -> 
     let ct = cstr(title);
     unsafe {
         let win = gtk_window_new(GTK_WINDOW_TOPLEVEL);
+        add_css_class(win, "mskey-window");
         gtk_window_set_title(win, ct.as_ptr());
         gtk_window_set_default_size(win, w, h);
         gtk_window_set_position(win, GTK_WIN_POS_CENTER);

@@ -2,19 +2,19 @@ use std::path::Path;
 use std::ptr;
 
 use mskey_core::{Charset, Config, InputMethod};
-use windows_sys::Win32::Foundation::{HWND, LPARAM, LRESULT, RECT, WPARAM};
-use windows_sys::Win32::Graphics::Gdi::{CreateSolidBrush, DeleteObject};
+use windows_sys::Win32::Foundation::{HWND, LPARAM, LRESULT, POINT, RECT, WPARAM};
+use windows_sys::Win32::Graphics::Gdi::{CreateSolidBrush, DeleteObject, MapWindowPoints};
 use windows_sys::Win32::System::LibraryLoader::GetModuleHandleW;
 use windows_sys::Win32::UI::HiDpi::AdjustWindowRectExForDpi;
 use windows_sys::Win32::UI::WindowsAndMessaging::{
-    ChangeWindowMessageFilterEx, CreateWindowExW, DefWindowProcW, DestroyWindow, DispatchMessageW,
-    GetMessageW, GetSystemMetrics, ICON_BIG, ICON_SMALL, IsWindowVisible, KillTimer,
+    CB_SETITEMHEIGHT, ChangeWindowMessageFilterEx, CreateWindowExW, DefWindowProcW, DestroyWindow, DispatchMessageW,
+    GW_CHILD, GW_HWNDNEXT, GetDlgCtrlID, GetMessageW, GetSystemMetrics, GetWindow, GetWindowRect, ICON_BIG, ICON_SMALL, IsChild, IsDialogMessageW, IsWindowVisible, KillTimer,
     MSGFLT_ALLOW, MSG, PostQuitMessage, RegisterClassExW, SM_CXSCREEN, SM_CYSCREEN,
-    SPI_GETCLIENTAREAANIMATION, SW_HIDE, SW_RESTORE, SW_SHOW, SendMessageW, SetForegroundWindow,
+    SPI_GETCLIENTAREAANIMATION, SWP_NOACTIVATE, SWP_NOZORDER, SW_HIDE, SW_RESTORE, SW_SHOW, SendMessageW, SetForegroundWindow,
     SetTimer, SetWindowPos, ShowWindow, SystemParametersInfoW, TranslateMessage, WM_CLOSE,
     WM_COMMAND, WM_CREATE, WM_CTLCOLOREDIT, WM_CTLCOLORLISTBOX, WM_CTLCOLORSTATIC, WM_DESTROY,
     WM_DPICHANGED, WM_DRAWITEM, WM_LBUTTONDBLCLK, WM_LBUTTONUP, WM_MBUTTONUP, WM_PAINT,
-    WM_RBUTTONUP, WM_SETICON, WM_TIMER, WNDCLASSEXW, WS_CAPTION, WS_MINIMIZEBOX, WS_SYSMENU,
+    WM_RBUTTONUP, WM_SETFONT, WM_SETICON, WM_SETTINGCHANGE, WM_TIMER, WNDCLASSEXW, WS_CAPTION, WS_CLIPCHILDREN, WS_MINIMIZEBOX, WS_SYSMENU,
 };
 
 use crate::dialog_convert::{capture_hotkey_dialog, show_converter_dialog};
@@ -26,7 +26,7 @@ use crate::state::{
     WM_APP_CONVERT_SELECTION, WM_APP_OPEN_CONVERT, WM_APP_OPEN_MAIN, WM_APP_SYNC_UI,
     WM_APP_TOGGLE_VE, WM_APP_TRAY, WM_APP_UPDATE_CARET_OSD, WM_APP_UPDATE_RESULT, with_state,
 };
-use crate::theme::{apply_dwm_dark_titlebar, create_ui_font, palette_for};
+use crate::theme::{apply_dwm_dark_titlebar, create_ui_font, palette_for, resolve_is_dark};
 use crate::tray::{
     ID_TRAY_ADD_LAST_ESC, ID_TRAY_APPS, ID_TRAY_CHARSET_COMP, ID_TRAY_CHARSET_TCVN,
     ID_TRAY_CHARSET_UNI, ID_TRAY_CHARSET_VNI, ID_TRAY_CHECK_UPDATE, ID_TRAY_CONVERT,
@@ -44,8 +44,7 @@ use crate::ui_paint::{
     refresh_ui_and_tray, set_main_data, set_tab_redraw, take_main_data, with_main_data,
 };
 
-const MAIN_W: i32 = 580;
-const MAIN_H: i32 = 636;
+const MAIN_STYLE: u32 = WS_CAPTION | WS_SYSMENU | WS_MINIMIZEBOX | WS_CLIPCHILDREN;
 const CBN_SELCHANGE: usize = 1;
 const EN_KILLFOCUS: usize = 0x0200;
 
@@ -70,7 +69,7 @@ pub fn create_and_run_main(show_initially: bool, verify_smoke_path: Option<&str>
         RegisterClassExW(&wc);
     }
 
-    let style = WS_CAPTION | WS_SYSMENU | WS_MINIMIZEBOX;
+    let style = MAIN_STYLE;
     let mut rc = RECT { left: 0, top: 0, right: MAIN_W, bottom: MAIN_H };
     unsafe {
         AdjustWindowRectExForDpi(&mut rc, style, 0, 0, 96);
@@ -121,8 +120,10 @@ pub fn create_and_run_main(show_initially: bool, verify_smoke_path: Option<&str>
     unsafe {
         let mut msg: MSG = std::mem::zeroed();
         while GetMessageW(&mut msg, ptr::null_mut(), 0, 0) > 0 {
-            TranslateMessage(&msg);
-            DispatchMessageW(&msg);
+            if IsChild(hwnd, msg.hwnd) == 0 || IsDialogMessageW(hwnd, &msg) == 0 {
+                TranslateMessage(&msg);
+                DispatchMessageW(&msg);
+            }
         }
     }
 }
@@ -153,7 +154,7 @@ fn on_main_create(hwnd: HWND) {
     unsafe {
         AdjustWindowRectExForDpi(
             &mut rc,
-            WS_CAPTION | WS_SYSMENU | WS_MINIMIZEBOX,
+            MAIN_STYLE,
             0,
             0,
             dpi as u32,
@@ -162,13 +163,14 @@ fn on_main_create(hwnd: HWND) {
     }
     let font = create_ui_font(scale_px(14, dpi), false);
     let bold_font = create_ui_font(scale_px(14, dpi), true);
+    let title_font = create_ui_font(scale_px(28, dpi), true);
     let mode = with_state(|st| st.engine.config().theme);
     let pal = palette_for(mode);
     apply_dwm_dark_titlebar(hwnd, pal.dark);
     let bg_brush = unsafe { CreateSolidBrush(pal.window_bg) };
     let card_brush = unsafe { CreateSolidBrush(pal.card_bg) };
     let in_brush = unsafe { CreateSolidBrush(pal.input_bg) };
-    let mut ctrls = MainUiCtrls::build(hwnd, font, dpi);
+    let mut ctrls = MainUiCtrls::build(hwnd, font, bold_font, title_font, dpi);
     let mut tray = TrayController::new(hwnd);
     let (ve, show_caret) = with_state(|st| (st.effective_vietnamese(), st.engine.config().show_caret_osd));
     tray.update(ve);
@@ -180,6 +182,8 @@ fn on_main_create(hwnd: HWND) {
     set_main_data(Some(MainWinData {
         font,
         bold_font,
+        title_font,
+        dpi,
         bg_brush,
         card_brush,
         in_brush,
@@ -191,6 +195,70 @@ fn on_main_create(hwnd: HWND) {
     if show_caret {
         crate::ui_osd::update_caret_osd(ve);
     }
+}
+
+fn update_window_dpi(hwnd: HWND, dpi: i32, suggested: &RECT) {
+    let Some(previous_dpi) = with_main_data(|d| d.dpi) else {
+        return;
+    };
+    if dpi <= 0 || previous_dpi == dpi {
+        return;
+    }
+
+    let font = create_ui_font(scale_px(14, dpi), false);
+    let bold = create_ui_font(scale_px(14, dpi), true);
+    let title = create_ui_font(scale_px(28, dpi), true);
+    let old_fonts = crate::ui_paint::with_main_data_mut(|d| {
+        d.dpi = dpi;
+        [
+            std::mem::replace(&mut d.font, font),
+            std::mem::replace(&mut d.bold_font, bold),
+            std::mem::replace(&mut d.title_font, title),
+        ]
+    }).unwrap_or([ptr::null_mut(); 3]);
+
+    let scale = |v: i32| (v * dpi + previous_dpi / 2) / previous_dpi;
+    unsafe {
+        SetWindowPos(
+            hwnd, ptr::null_mut(), suggested.left, suggested.top,
+            suggested.right - suggested.left, suggested.bottom - suggested.top,
+            SWP_NOZORDER | SWP_NOACTIVATE,
+        );
+        let mut child = GetWindow(hwnd, GW_CHILD);
+        while !child.is_null() {
+            let mut rc: RECT = std::mem::zeroed();
+            GetWindowRect(child, &mut rc);
+            MapWindowPoints(ptr::null_mut(), hwnd, &mut rc as *mut RECT as *mut POINT, 2);
+            let id = GetDlgCtrlID(child) as usize;
+            let child_font = match id {
+                IDC_LBL_BRAND => title,
+                IDC_LBL_SECTION | IDC_VE_PILL => bold,
+                _ => font,
+            };
+            SendMessageW(child, WM_SETFONT, child_font as WPARAM, 0);
+            let combo_height = match id {
+                IDC_CHARSET | IDC_METHOD | IDC_MECHANISM | IDC_PROFILE_COMBO => Some(32),
+                IDC_HOLD_EN_COMBO | IDC_THEME => Some(28),
+                _ => None,
+            };
+            let height = if let Some(row_height) = combo_height {
+                SendMessageW(child, CB_SETITEMHEIGHT, usize::MAX, scale_px(row_height - 6, dpi) as LPARAM);
+                SendMessageW(child, CB_SETITEMHEIGHT, 0, scale_px(row_height, dpi) as LPARAM);
+                scale_px(220, dpi)
+            } else {
+                scale(rc.bottom - rc.top)
+            };
+            SetWindowPos(
+                child, ptr::null_mut(), scale(rc.left), scale(rc.top), scale(rc.right - rc.left),
+                height, SWP_NOZORDER | SWP_NOACTIVATE,
+            );
+            child = GetWindow(child, GW_HWNDNEXT);
+        }
+        for old_font in old_fonts {
+            DeleteObject(old_font);
+        }
+    }
+    refresh_ui_and_tray(hwnd);
 }
 
 unsafe extern "system" fn main_wnd_proc(
@@ -219,11 +287,11 @@ unsafe extern "system" fn main_wnd_proc(
                 unsafe { KillTimer(hwnd, 92) };
             }
             let dpi = window_dpi(hwnd);
-            let rc = RECT { left: scale_px(472, dpi), top: scale_px(88, dpi), right: scale_px(566, dpi), bottom: scale_px(146, dpi) };
+            let rc = RECT { left: scale_px(20, dpi), top: scale_px(12, dpi), right: scale_px(68, dpi), bottom: scale_px(64, dpi) };
             unsafe { windows_sys::Win32::Graphics::Gdi::InvalidateRect(hwnd, &rc, 0) };
             0
         }
-        WM_DRAWITEM => draw_main_item(hwnd, lparam).unwrap_or(0),
+        WM_DRAWITEM => draw_main_item(lparam).unwrap_or(0),
         WM_CTLCOLORSTATIC | WM_CTLCOLOREDIT | WM_CTLCOLORLISTBOX => ctl_color_main(msg, wparam, lparam).unwrap_or(0),
         WM_COMMAND => {
             handle_command(hwnd, wparam & 0xFFFF, (wparam >> 16) & 0xFFFF);
@@ -284,7 +352,18 @@ unsafe extern "system" fn main_wnd_proc(
             0
         }
         WM_DPICHANGED => {
-            refresh_ui_and_tray(hwnd);
+            if lparam != 0 {
+                let suggested = unsafe { &*(lparam as *const RECT) };
+                update_window_dpi(hwnd, (wparam & 0xFFFF) as i32, suggested);
+            }
+            0
+        }
+        WM_SETTINGCHANGE => {
+            let mode = with_state(|st| st.engine.config().theme);
+            if with_main_data(|d| d.pal.dark != resolve_is_dark(mode)).unwrap_or(false) {
+                rebuild_theme_resources(hwnd);
+                refresh_ui_and_tray(hwnd);
+            }
             0
         }
         WM_CLOSE => {
@@ -297,6 +376,7 @@ unsafe extern "system" fn main_wnd_proc(
                 unsafe {
                     DeleteObject(d.font);
                     DeleteObject(d.bold_font);
+                    DeleteObject(d.title_font);
                     DeleteObject(d.bg_brush);
                     DeleteObject(d.card_brush);
                     DeleteObject(d.in_brush);
@@ -391,11 +471,11 @@ fn handle_command(hwnd: HWND, id: usize, code: usize) {
             show_app_rules_dialog(hwnd);
             refresh_ui_and_tray(hwnd);
         }
+        IDC_BTN_TRY_TYPING | crate::tray::ID_TRAY_TRY_TYPING => crate::ui_extras::show_typing_preview(hwnd),
         IDC_BTN_EXTRAS | crate::tray::ID_TRAY_EXTRAS => {
-            if crate::ui_extras::show_extras_sandbox_dialog(hwnd) {
-                rebuild_theme_resources(hwnd);
-                refresh_ui_and_tray(hwnd);
-            }
+            crate::ui_extras::show_extras_dialog(hwnd);
+            rebuild_theme_resources(hwnd);
+            refresh_ui_and_tray(hwnd);
         }
         IDC_BTN_USER_DICT | crate::tray::ID_TRAY_USER_DICT => {
             crate::ui_extras::show_user_dict_dialog(hwnd);

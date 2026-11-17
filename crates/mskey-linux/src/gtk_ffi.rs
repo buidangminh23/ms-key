@@ -33,10 +33,13 @@ pub const GTK_WINDOW_POPUP: c_int = 1;
 pub const GTK_WIN_POS_CENTER: c_int = 1;
 pub const GTK_ORIENTATION_HORIZONTAL: c_int = 0;
 pub const GTK_ORIENTATION_VERTICAL: c_int = 1;
+pub const GTK_ALIGN_CENTER: c_int = 3;
 pub const GTK_POLICY_AUTOMATIC: c_int = 1;
 pub const GTK_POLICY_NEVER: c_int = 2;
 pub const GTK_SELECTION_SINGLE: c_int = 1;
 pub const GTK_WRAP_WORD_CHAR: c_int = 3;
+pub const PANGO_WRAP_WORD_CHAR: c_int = 2;
+pub const GDK_INTERP_BILINEAR: c_int = 2;
 pub const GTK_FILE_CHOOSER_ACTION_OPEN: c_int = 0;
 pub const GTK_FILE_CHOOSER_ACTION_SAVE: c_int = 1;
 pub const GTK_STYLE_PROVIDER_PRIORITY_APPLICATION: c_uint = 600;
@@ -75,12 +78,15 @@ unsafe extern "C" {
     pub fn gdk_pixbuf_loader_write(loader: *mut c_void, data: *const u8, size: usize, error: *mut *mut c_void) -> c_int;
     pub fn gdk_pixbuf_loader_close(loader: *mut c_void, error: *mut *mut c_void) -> c_int;
     pub fn gdk_pixbuf_loader_get_pixbuf(loader: *mut c_void) -> *mut c_void;
+    pub fn gdk_pixbuf_scale_simple(pixbuf: *mut c_void, width: c_int, height: c_int, interpolation: c_int) -> *mut c_void;
     pub fn g_object_unref(object: *mut c_void);
     pub fn g_object_get(object: *mut c_void, property: *const c_char, ...);
+    pub fn g_object_set(object: *mut c_void, property: *const c_char, ...);
     pub fn gtk_window_set_default_icon(icon: *mut c_void);
     pub fn gtk_window_get_default_icon_list() -> *mut GList;
     pub fn gtk_image_new_from_pixbuf(icon: *mut c_void) -> *mut GtkWidget;
     pub fn gtk_widget_get_settings(widget: *mut GtkWidget) -> *mut c_void;
+    pub fn gtk_settings_get_default() -> *mut c_void;
     pub fn gtk_widget_set_opacity(widget: *mut GtkWidget, opacity: f64);
     pub fn gtk_widget_add_tick_callback(widget: *mut GtkWidget, callback: Option<unsafe extern "C" fn(*mut GtkWidget, *mut c_void, *mut c_void) -> c_int>, data: *mut c_void, notify: Option<unsafe extern "C" fn(*mut c_void)>) -> c_uint;
     pub fn gtk_init_check(argc: *mut c_int, argv: *mut *mut *mut c_char) -> c_int;
@@ -135,6 +141,7 @@ unsafe extern "C" {
     );
 
     pub fn gtk_frame_new(label: *const c_char) -> *mut GtkWidget;
+    pub fn gtk_frame_get_label_widget(frame: *mut GtkWidget) -> *mut GtkWidget;
     pub fn gtk_container_add(container: *mut GtkContainer, widget: *mut GtkWidget);
     pub fn gtk_container_remove(container: *mut GtkContainer, widget: *mut GtkWidget);
     pub fn gtk_container_set_border_width(container: *mut GtkContainer, width: c_uint);
@@ -169,6 +176,9 @@ unsafe extern "C" {
     pub fn gtk_label_new(str_ptr: *const c_char) -> *mut GtkWidget;
     pub fn gtk_label_set_text(lbl: *mut GtkLabel, str_ptr: *const c_char);
     pub fn gtk_label_set_xalign(lbl: *mut GtkLabel, xalign: f32);
+    pub fn gtk_label_set_mnemonic_widget(lbl: *mut GtkLabel, widget: *mut GtkWidget);
+    pub fn gtk_label_set_line_wrap(lbl: *mut GtkLabel, wrap: c_int);
+    pub fn gtk_label_set_line_wrap_mode(lbl: *mut GtkLabel, mode: c_int);
 
     pub fn gtk_entry_new() -> *mut GtkWidget;
     pub fn gtk_entry_set_text(entry: *mut GtkEntry, text: *const c_char);
@@ -217,6 +227,7 @@ unsafe extern "C" {
 
     pub fn gtk_scrolled_window_new(hadj: *mut c_void, vadj: *mut c_void) -> *mut GtkWidget;
     pub fn gtk_scrolled_window_set_policy(sw: *mut c_void, hpol: c_int, vpol: c_int);
+    pub fn gtk_scrolled_window_set_overlay_scrolling(sw: *mut c_void, overlay: c_int);
     pub fn gtk_list_box_new() -> *mut GtkWidget;
     pub fn gtk_list_box_set_selection_mode(lb: *mut GtkListBox, mode: c_int);
     pub fn gtk_list_box_get_selected_row(lb: *mut GtkListBox) -> *mut GtkListBoxRow;
@@ -226,9 +237,12 @@ unsafe extern "C" {
     pub fn gtk_widget_show(w: *mut GtkWidget);
     pub fn gtk_widget_hide(w: *mut GtkWidget);
     pub fn gtk_widget_show_all(w: *mut GtkWidget);
+    pub fn gtk_widget_grab_focus(w: *mut GtkWidget);
+    pub fn gtk_widget_set_tooltip_text(w: *mut GtkWidget, text: *const c_char);
     pub fn gtk_widget_set_sensitive(w: *mut GtkWidget, sensitive: c_int);
     pub fn gtk_widget_set_size_request(w: *mut GtkWidget, width: c_int, height: c_int);
     pub fn gtk_widget_set_hexpand(w: *mut GtkWidget, expand: c_int);
+    pub fn gtk_widget_set_valign(w: *mut GtkWidget, valign: c_int);
     pub fn gtk_widget_set_vexpand(w: *mut GtkWidget, expand: c_int);
     pub fn gtk_widget_set_margin_top(w: *mut GtkWidget, margin: c_int);
     pub fn gtk_widget_set_margin_bottom(w: *mut GtkWidget, margin: c_int);

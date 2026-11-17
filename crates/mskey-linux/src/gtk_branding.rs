@@ -5,6 +5,7 @@ use std::time::Instant;
 use crate::gio_ffi::cstr;
 use crate::gtk_ffi::*;
 use crate::gtk_helpers::{make_hbox, make_label, make_vbox, pack};
+use crate::gtk_theme::add_css_class;
 
 pub fn initialize_brand_icon() {
     unsafe {
@@ -25,27 +26,31 @@ pub fn initialize_brand_icon() {
     }
 }
 
-pub fn make_brand_header(animate: bool) -> *mut GtkWidget {
+pub fn make_brand_header(animate: bool, tools: *mut GtkWidget) -> *mut GtkWidget {
     let row = make_hbox(12);
-    let image = unsafe { gtk_image_new_from_pixbuf(gtk_window_get_default_icon_list_first()) };
+    add_css_class(row, "brand-header");
+    let image = unsafe {
+        let icon = gtk_window_get_default_icon_list_first();
+        if icon.is_null() {
+            gtk_image_new_from_pixbuf(icon)
+        } else {
+            let display_icon = gdk_pixbuf_scale_simple(icon, 40, 40, GDK_INTERP_BILINEAR);
+            let image = gtk_image_new_from_pixbuf(display_icon);
+            if !display_icon.is_null() {
+                g_object_unref(display_icon);
+            }
+            image
+        }
+    };
     pack(row, image, false, false, 0);
-    let text = make_vbox(2);
-    pack(text, make_label("MS Key", false), false, false, 0);
-    pack(
-        text,
-        make_label("Gõ tiếng Việt theo cách của riêng bạn", true),
-        false,
-        false,
-        0,
-    );
+    let text = make_vbox(4);
+    let name = make_label("MS Key", false);
+    add_css_class(name, "brand-title");
+    pack(text, name, false, false, 0);
+    pack(text, make_label("Bộ gõ tiếng Việt", true), false, false, 0);
     pack(row, text, true, true, 0);
-    pack(
-        row,
-        make_label(&format!("v{}", env!("CARGO_PKG_VERSION")), true),
-        false,
-        false,
-        0,
-    );
+    unsafe { gtk_widget_set_valign(tools, GTK_ALIGN_CENTER) };
+    pack(row, tools, false, false, 0);
     unsafe {
         let mut enabled: i32 = 0;
         let settings = gtk_widget_get_settings(image);

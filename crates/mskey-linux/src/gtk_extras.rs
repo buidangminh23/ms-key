@@ -6,7 +6,7 @@ use std::os::raw::c_int;
 use std::path::Path;
 use std::ptr;
 
-use mskey_core::{Config, Engine, EngineAction};
+use mskey_core::{Config, Engine, EngineAction, InputMethod};
 
 use crate::config_store::{
     export_config_json, import_config_json, load_last_esc_word, save_last_esc_word,
@@ -15,36 +15,43 @@ use crate::gio_ffi::cstr;
 use crate::gtk_dialogs::pick_file_path;
 use crate::gtk_ffi::{
     GTK_POLICY_AUTOMATIC, GTK_POLICY_NEVER, GdkEventKey, GtkTextIter, GtkWidget, GtkWindow,
-    connect_signal, gtk_container_add, gtk_scrolled_window_new, gtk_scrolled_window_set_policy,
+    connect_signal, g_object_set, gtk_container_add, gtk_frame_get_label_widget,
+    gtk_label_set_mnemonic_widget, gtk_scrolled_window_new,
+    gtk_scrolled_window_set_policy,
     gtk_spin_button_get_value_as_int, gtk_spin_button_new_with_range, gtk_spin_button_set_value,
     gtk_text_buffer_delete, gtk_text_buffer_get_insert, gtk_text_buffer_get_iter_at_mark,
     gtk_text_buffer_get_iter_at_offset, gtk_text_buffer_insert_at_cursor, gtk_text_iter_get_offset,
-    gtk_text_view_get_buffer, gtk_text_view_new, gtk_widget_destroy, gtk_widget_set_hexpand,
-    gtk_widget_set_vexpand,
+    gtk_text_view_get_buffer, gtk_text_view_new, gtk_widget_destroy, gtk_widget_grab_focus,
+    gtk_widget_set_hexpand, gtk_widget_set_size_request, gtk_widget_set_vexpand,
 };
 use crate::gtk_helpers::{
-    create_modal_gtk, get_toggle, make_button, make_check, make_entry_placeholder, make_frame,
-    make_hbox, make_label, make_vbox, pack, read_entry, read_textview, run_modal_gtk,
-    set_label_text, set_toggle, write_textview,
+    create_modal_gtk, get_input_method, get_toggle, make_button, make_check, make_entry_placeholder,
+    make_frame, make_hbox, make_input_method_combo, make_label, make_vbox, pack, read_entry,
+    read_textview, run_modal_gtk, set_input_method, set_label_text, set_toggle, write_textview,
 };
 use crate::keyval::{
     IBUS_CONTROL_MASK, IBUS_MOD1_MASK, IBUS_MOD4_MASK, KEY_BACKSPACE, KEY_ESCAPE,
     is_modifier_keyval, is_navigation_keyval, keyval_to_char,
 };
+use crate::gtk_theme::{add_css_class, set_language_button};
 
 struct ExtrasWidgets {
     dlg: *mut GtkWidget,
     cfg: Config,
-    engine: Engine,
     chk_q_telex: *mut GtkWidget,
     chk_q_start: *mut GtkWidget,
     chk_q_end: *mut GtkWidget,
     chk_osd: *mut GtkWidget,
     chk_shift_ins: *mut GtkWidget,
     spin_delay: *mut GtkWidget,
-    tv: *mut GtkWidget,
-    syncing: bool,
     saved: bool,
+}
+
+struct SandboxWidgets {
+    engine: Engine,
+    editor: *mut GtkWidget,
+    mode_button: *mut GtkWidget,
+    preview_hint: *mut GtkWidget,
 }
 
 struct DictWidgets {
@@ -59,56 +66,142 @@ struct DictWidgets {
 
 thread_local! {
     static EXTRAS_DLG: RefCell<Option<ExtrasWidgets>> = const { RefCell::new(None) };
+    static SANDBOX_DLG: RefCell<Option<SandboxWidgets>> = const { RefCell::new(None) };
     static DICT_DLG: RefCell<Option<DictWidgets>> = const { RefCell::new(None) };
     static LAST_SANDBOX_ESC: RefCell<Option<String>> = const { RefCell::new(None) };
 }
 
-pub fn show_extras_sandbox_dialog(parent: *mut GtkWindow, cfg: &mut Config) -> bool {
-    let dlg = create_modal_gtk(parent, "Mở rộng, Sao lưu & Gõ thử", 520, 460);
-    let root = make_vbox(8);
+pub fn show_sandbox_dialog(parent: *mut GtkWindow, cfg: Config) {
+    let dialog = create_modal_gtk(parent, "Gõ thử · MS Key", 512, 376);
+    let root = make_vbox(16);
+    let controls = make_hbox(8);
+    let method_label = make_label("Kiểu gõ", false);
+    let method = make_input_method_combo();
+    let mode_button = make_button("Tiếng Việt (V)", false);
+    set_input_method(method, cfg.input_method);
+    add_css_class(mode_button, "language-toggle");
+    unsafe { gtk_label_set_mnemonic_widget(method_label, method) };
+    pack(controls, method_label, false, false, 0);
+    pack(controls, method, true, true, 0);
+    pack(controls, mode_button, false, false, 0);
+    pack(root, controls, false, false, 0);
+
+    let (editor_frame, editor_panel) = make_frame("Vùng gõ thử");
+    let sw = unsafe { gtk_scrolled_window_new(ptr::null_mut(), ptr::null_mut()) };
+    let editor = unsafe { gtk_text_view_new() };
+    let preview_hint = make_label("", true);
+    write_textview(editor, "");
+    unsafe {
+        let im_property = cstr("im-module");
+        let im_simple = cstr("gtk-im-context-simple");
+        g_object_set(editor, im_property.as_ptr(), im_simple.as_ptr(), ptr::null::<u8>());
+        gtk_label_set_mnemonic_widget(gtk_frame_get_label_widget(editor_frame), editor);
+        gtk_widget_set_hexpand(sw, 1);
+        gtk_widget_set_vexpand(sw, 1);
+        gtk_widget_set_size_request(sw, -1, 112);
+        gtk_scrolled_window_set_policy(sw, GTK_POLICY_NEVER, GTK_POLICY_AUTOMATIC);
+        gtk_container_add(sw, editor);
+    }
+    pack(editor_panel, preview_hint, false, false, 0);
+    pack(editor_panel, sw, true, true, 0);
+    pack(root, editor_frame, true, true, 0);
+
+    let footer = make_hbox(8);
+    let clear = make_button("Xóa nội dung", false);
+    let close = make_button("Đóng", true);
+    pack(footer, clear, false, false, 0);
+    pack(footer, make_label("", false), true, true, 0);
+    pack(footer, close, false, false, 0);
+    pack(root, footer, false, false, 0);
+    unsafe { gtk_container_add(dialog, root) };
+
+    let state = SandboxWidgets { engine: Engine::new(cfg), editor, mode_button, preview_hint };
+    sync_sandbox_controls(&state);
+    SANDBOX_DLG.with(|cell| *cell.borrow_mut() = Some(state));
+    connect_signal(method, "changed", on_sandbox_method as *const c_void, 0);
+    connect_signal(mode_button, "clicked", on_sandbox_mode as *const c_void, 0);
+    connect_signal(clear, "clicked", on_sandbox_clear as *const c_void, 0);
+    connect_signal(close, "clicked", on_sandbox_close as *const c_void, dialog as usize);
+    connect_signal(editor, "key-press-event", on_sandbox_key as *const c_void, 0);
+    connect_signal(editor, "button-press-event", on_sandbox_reset_word as *const c_void, 0);
+    connect_signal(editor, "focus-out-event", on_sandbox_reset_word as *const c_void, 0);
+    unsafe { gtk_widget_grab_focus(editor) };
+    run_modal_gtk(dialog);
+    SANDBOX_DLG.with(|cell| *cell.borrow_mut() = None);
+}
+
+fn sync_sandbox_controls(state: &SandboxWidgets) {
+    let cfg = state.engine.config();
+    let hint = if cfg.vietnamese_enabled {
+        match cfg.input_method {
+            InputMethod::Telex | InputMethod::SimpleTelex => "Thử gõ chaof → chào",
+            InputMethod::Vni => "Thử gõ chao2 → chào",
+            InputMethod::Viqr => "Thử gõ chao` → chào",
+            InputMethod::Custom => "Thử gõ với bộ phím tùy chỉnh.",
+        }
+    } else {
+        "Bật Tiếng Việt để thử đặt dấu."
+    };
+    set_language_button(state.mode_button, cfg.vietnamese_enabled);
+    set_label_text(state.preview_hint, hint);
+}
+
+unsafe extern "C" fn on_sandbox_method(combo: *mut GtkWidget, _: *mut c_void) {
+    SANDBOX_DLG.with(|cell| {
+        if let Some(state) = cell.borrow_mut().as_mut() {
+            let mut cfg = state.engine.config().clone();
+            cfg.input_method = get_input_method(combo);
+            state.engine.update_config(cfg);
+            state.engine.reset_all();
+            sync_sandbox_controls(state);
+        }
+    });
+}
+
+unsafe extern "C" fn on_sandbox_mode(_: *mut GtkWidget, _: *mut c_void) {
+    SANDBOX_DLG.with(|cell| {
+        if let Some(state) = cell.borrow_mut().as_mut() {
+            let next = !state.engine.config().vietnamese_enabled;
+            state.engine.set_vietnamese_enabled(next);
+            state.engine.reset_all();
+            sync_sandbox_controls(state);
+        }
+    });
+}
+
+pub fn show_extras_dialog(parent: *mut GtkWindow, cfg: &mut Config) -> bool {
+    let dlg = create_modal_gtk(parent, "Tùy chọn mở rộng", 520, 384);
+    let root = make_vbox(16);
     let (ef, eb) = make_frame("Tùy chọn mở rộng");
-    let chk_q_telex = make_check("Gõ tắt Telex (cc->ch, gg->gi, nn->ng, pp->ph, qq->qu, tt->th)");
-    let chk_q_start = make_check("Gõ tắt phụ âm đầu (f->ph, j->gi, w->qu)");
-    let chk_q_end = make_check("Gõ tắt phụ âm cuối (g->ng, h->nh, k->ch)");
+    let chk_q_telex = make_check("Gõ nhanh Telex (cc → ch, gg → gi, nn → ng, pp → ph, qq → qu, tt → th)");
+    let chk_q_start = make_check("Gõ nhanh phụ âm đầu (f → ph, j → gi, w → qu)");
+    let chk_q_end = make_check("Gõ nhanh phụ âm cuối (g → ng, h → nh, k → ch)");
     let chk_osd = make_check("Hiện OSD nổi khi chuyển V/E");
     let chk_shift_ins = make_check("Dùng Shift+Insert khi dán clipboard");
     let drow = make_hbox(8);
     let spin_delay = unsafe { gtk_spin_button_new_with_range(0.0, 25.0, 1.0) };
-    pack(drow, make_label("Độ trễ gửi phím (ms):", false), false, false, 0);
+    let delay_label = make_label("Độ trễ gửi phím (ms)", false);
+    unsafe { gtk_label_set_mnemonic_widget(delay_label, spin_delay) };
+    pack(drow, delay_label, false, false, 0);
     pack(drow, spin_delay, false, false, 0);
     for &w in &[chk_q_telex, chk_q_start, chk_q_end, chk_osd, chk_shift_ins, drow] {
         pack(eb, w, false, false, 0);
     }
     pack(root, ef, false, false, 0);
 
-    let jrow = make_hbox(8);
-    let b_exp = make_button("Xuất JSON...", false);
-    let b_imp = make_button("Nhập JSON...", false);
-    pack(jrow, b_exp, true, true, 0);
-    pack(jrow, b_imp, true, true, 0);
-    pack(root, jrow, false, false, 0);
-
-    let (sf, sb) = make_frame("Vùng gõ thử trực tiếp (không cần kích hoạt IBus)");
-    let sw = unsafe { gtk_scrolled_window_new(ptr::null_mut(), ptr::null_mut()) };
-    let tv = unsafe { gtk_text_view_new() };
-    write_textview(tv, "");
-    unsafe {
-        gtk_widget_set_hexpand(sw, 1);
-        gtk_widget_set_vexpand(sw, 1);
-        gtk_scrolled_window_set_policy(sw, GTK_POLICY_NEVER, GTK_POLICY_AUTOMATIC);
-        gtk_container_add(sw, tv);
-    }
-    pack(sb, sw, true, true, 0);
-    pack(root, sf, true, true, 0);
+    let backup = make_hbox(8);
+    let b_exp = make_button("Xuất bản sao JSON...", false);
+    let b_imp = make_button("Nhập bản sao JSON...", false);
+    pack(backup, b_exp, true, true, 0);
+    pack(backup, b_imp, true, true, 0);
+    pack(root, backup, false, false, 0);
 
     let bar = make_hbox(8);
-    let b_clr = make_button("Xóa ô thử", false);
     let b_save = make_button("Lưu", true);
     let b_cancel = make_button("Hủy", false);
-    pack(bar, b_clr, false, false, 0);
     pack(bar, make_label("", false), true, true, 0);
-    pack(bar, b_save, false, false, 0);
     pack(bar, b_cancel, false, false, 0);
+    pack(bar, b_save, false, false, 0);
     pack(root, bar, false, false, 0);
     unsafe { gtk_container_add(dlg, root) };
 
@@ -116,15 +209,12 @@ pub fn show_extras_sandbox_dialog(parent: *mut GtkWindow, cfg: &mut Config) -> b
         *c.borrow_mut() = Some(ExtrasWidgets {
             dlg,
             cfg: cfg.clone(),
-            engine: Engine::new(cfg.clone()),
             chk_q_telex,
             chk_q_start,
             chk_q_end,
             chk_osd,
             chk_shift_ins,
             spin_delay,
-            tv,
-            syncing: false,
             saved: false,
         });
     });
@@ -135,10 +225,8 @@ pub fn show_extras_sandbox_dialog(parent: *mut GtkWindow, cfg: &mut Config) -> b
     connect_signal(spin_delay, "value-changed", on_extras_changed as *const c_void, 0);
     connect_signal(b_exp, "clicked", on_extras_export as *const c_void, 0);
     connect_signal(b_imp, "clicked", on_extras_import as *const c_void, 0);
-    connect_signal(b_clr, "clicked", on_extras_clear as *const c_void, 0);
     connect_signal(b_save, "clicked", on_extras_save as *const c_void, 0);
     connect_signal(b_cancel, "clicked", on_extras_cancel as *const c_void, 0);
-    connect_signal(tv, "key-press-event", on_sandbox_key as *const c_void, 0);
     run_modal_gtk(dlg);
 
     if let Some(st) = EXTRAS_DLG.with(|c| c.borrow_mut().take())
@@ -151,26 +239,21 @@ pub fn show_extras_sandbox_dialog(parent: *mut GtkWindow, cfg: &mut Config) -> b
 
 fn sync_extras_widgets() {
     EXTRAS_DLG.with(|c| {
-        if let Some(st) = c.borrow_mut().as_mut() {
-            st.syncing = true;
+        if let Some(st) = c.borrow().as_ref() {
             set_toggle(st.chk_q_telex, st.cfg.quick_telex);
             set_toggle(st.chk_q_start, st.cfg.quick_start_consonant);
             set_toggle(st.chk_q_end, st.cfg.quick_end_consonant);
             set_toggle(st.chk_osd, st.cfg.show_switch_osd);
             set_toggle(st.chk_shift_ins, st.cfg.paste_via_shift_insert);
             unsafe { gtk_spin_button_set_value(st.spin_delay, st.cfg.send_delay_ms as f64) };
-            st.engine.update_config(st.cfg.clone());
-            st.syncing = false;
         }
     });
 }
 
 fn read_extras_widgets() {
     EXTRAS_DLG.with(|c| {
-        if let Some(st) = c.borrow_mut().as_mut() {
-            if st.syncing {
-                return;
-            }
+        if let Ok(mut state) = c.try_borrow_mut()
+            && let Some(st) = state.as_mut() {
             st.cfg.quick_telex = get_toggle(st.chk_q_telex);
             st.cfg.quick_start_consonant = get_toggle(st.chk_q_start);
             st.cfg.quick_end_consonant = get_toggle(st.chk_q_end);
@@ -178,7 +261,6 @@ fn read_extras_widgets() {
             st.cfg.paste_via_shift_insert = get_toggle(st.chk_shift_ins);
             let d = unsafe { gtk_spin_button_get_value_as_int(st.spin_delay) };
             st.cfg.send_delay_ms = d.clamp(0, 25) as u8;
-            st.engine.update_config(st.cfg.clone());
         }
     });
 }
@@ -209,13 +291,27 @@ unsafe extern "C" fn on_extras_import(_: *mut GtkWidget, _: *mut c_void) {
         }
 }
 
-unsafe extern "C" fn on_extras_clear(_: *mut GtkWidget, _: *mut c_void) {
-    EXTRAS_DLG.with(|c| {
-        if let Some(st) = c.borrow_mut().as_mut() {
+unsafe extern "C" fn on_sandbox_clear(_: *mut GtkWidget, _: *mut c_void) {
+    SANDBOX_DLG.with(|cell| {
+        if let Some(st) = cell.borrow_mut().as_mut() {
             st.engine.reset_all();
-            write_textview(st.tv, "");
+            write_textview(st.editor, "");
+            unsafe { gtk_widget_grab_focus(st.editor) };
         }
     });
+}
+
+unsafe extern "C" fn on_sandbox_close(_: *mut GtkWidget, dialog: *mut c_void) {
+    unsafe { gtk_widget_destroy(dialog) };
+}
+
+unsafe extern "C" fn on_sandbox_reset_word(_: *mut GtkWidget, _: *mut c_void, _: *mut c_void) -> c_int {
+    SANDBOX_DLG.with(|cell| {
+        if let Some(st) = cell.borrow_mut().as_mut() {
+            st.engine.reset_word();
+        }
+    });
+    0
 }
 
 unsafe extern "C" fn on_extras_save(_: *mut GtkWidget, _: *mut c_void) {
@@ -248,14 +344,14 @@ unsafe extern "C" fn on_sandbox_key(
         return 0;
     }
     if (e.state & (IBUS_CONTROL_MASK | IBUS_MOD1_MASK | IBUS_MOD4_MASK)) != 0 {
-        EXTRAS_DLG.with(|c| {
+        SANDBOX_DLG.with(|c| {
             if let Some(st) = c.borrow_mut().as_mut() {
                 st.engine.reset_word();
             }
         });
         return 0;
     }
-    let action = EXTRAS_DLG.with(|c| {
+    let action = SANDBOX_DLG.with(|c| {
         let mut b = c.borrow_mut();
         let st = b.as_mut()?;
         if e.keyval == KEY_ESCAPE {

@@ -2,6 +2,17 @@
 
 All notable changes to MS Key are documented here. The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and the project uses [Semantic Versioning](https://semver.org/).
 
+## [0.2.0] - 2026-11-17
+
+### Added
+
+- **Gõ thử** opens a dedicated typing workspace from the main window. Try the built-in input methods or your custom key map, switch between Vietnamese and English for the test, and clear the text without changing your saved settings. Telex, VNI and VIQR show example keystrokes.
+
+### Changed
+
+- **Windows, macOS and Linux settings** have a redesigned main window with a visible Vietnamese/English switch, quick access to conversion and typing practice, and related options grouped under Cơ bản, Phím tắt and Hệ thống. Mở rộng keeps advanced options and JSON backup together.
+- **Windows** shows keyboard focus on custom controls and updates the settings window when it moves between monitors with different display scaling.
+
 ## [0.1.11] - 2026-11-17
 
 ### Fixed

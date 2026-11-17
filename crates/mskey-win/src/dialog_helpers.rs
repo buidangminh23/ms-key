@@ -10,12 +10,12 @@ use windows_sys::Win32::UI::Controls::{
     DRAWITEMSTRUCT, ODS_SELECTED, ODT_BUTTON, ODT_COMBOBOX,
 };
 use windows_sys::Win32::UI::HiDpi::{AdjustWindowRectExForDpi, GetDpiForWindow};
-use windows_sys::Win32::UI::Input::KeyboardAndMouse::EnableWindow;
+use windows_sys::Win32::UI::Input::KeyboardAndMouse::{EnableWindow, SetFocus};
 use windows_sys::Win32::UI::WindowsAndMessaging::{
     BS_OWNERDRAW, CBS_DROPDOWNLIST, CBS_HASSTRINGS, CBS_OWNERDRAWFIXED, CB_ADDSTRING, CB_GETCURSEL,
-    CB_GETLBTEXT, CB_RESETCONTENT, CB_SETCURSEL, CB_SETITEMHEIGHT, CreateWindowExW,
+    CB_GETLBTEXT, CB_GETLBTEXTLEN, CB_RESETCONTENT, CB_SETCURSEL, CB_SETITEMHEIGHT, CreateWindowExW,
     DispatchMessageW, ES_AUTOHSCROLL, ES_MULTILINE, ES_WANTRETURN, GetMessageW, GetSystemMetrics,
-    GetWindowTextLengthW, GetWindowTextW, HMENU, IsWindow, MSG, RegisterClassExW, SM_CXSCREEN,
+    GetWindowTextLengthW, GetWindowTextW, HMENU, IsChild, IsDialogMessageW, IsWindow, MSG, RegisterClassExW, SM_CXSCREEN,
     SM_CYSCREEN, SW_SHOW, SendMessageW, SetWindowTextW, ShowWindow, TranslateMessage,
     WM_CTLCOLOREDIT, WM_CTLCOLORLISTBOX, WM_CTLCOLORSTATIC, WM_SETFONT, WNDCLASSEXW, WS_BORDER,
     WS_CAPTION, WS_CHILD, WS_EX_DLGMODALFRAME, WS_POPUP, WS_SYSMENU, WS_TABSTOP, WS_VISIBLE,
@@ -25,8 +25,8 @@ use windows_sys::Win32::UI::WindowsAndMessaging::{
 use crate::platform::to_wide;
 use crate::state::with_state;
 use crate::theme::{
-    ThemePalette, apply_combo_theme, apply_dwm_dark_titlebar, draw_owner_button, fill_solid,
-    palette_for, rgb,
+    ThemePalette, apply_combo_theme, apply_dwm_dark_titlebar, accent_ink, draw_item_focus, draw_owner_button, fill_solid,
+    palette_for,
 };
 
 pub fn scale_px(px: i32, dpi: i32) -> i32 {
@@ -111,6 +111,13 @@ pub fn create_modal_window(
 }
 
 pub fn run_modal_loop(parent: HWND, modal: HWND) {
+    run_modal_loop_with_focus(parent, modal, ptr::null_mut());
+}
+
+pub fn run_modal_loop_with_focus(parent: HWND, modal: HWND, initial_focus: HWND) {
+    if modal.is_null() {
+        return;
+    }
     if !parent.is_null() {
         unsafe {
             EnableWindow(parent, 0);
@@ -118,10 +125,15 @@ pub fn run_modal_loop(parent: HWND, modal: HWND) {
     }
     unsafe {
         ShowWindow(modal, SW_SHOW);
+        if !initial_focus.is_null() {
+            SetFocus(initial_focus);
+        }
         let mut msg: MSG = std::mem::zeroed();
         while IsWindow(modal) != 0 && GetMessageW(&mut msg, ptr::null_mut(), 0, 0) > 0 {
-            TranslateMessage(&msg);
-            DispatchMessageW(&msg);
+            if IsChild(modal, msg.hwnd) == 0 || IsDialogMessageW(modal, &msg) == 0 {
+                TranslateMessage(&msg);
+                DispatchMessageW(&msg);
+            }
         }
         if !parent.is_null() {
             EnableWindow(parent, 1);
@@ -340,17 +352,21 @@ pub fn handle_draw_combo_or_btn(
     if dis.CtlType == ODT_BUTTON {
         let txt = read_window_text(dis.hwndItem);
         let primary = primary_ids.contains(&dis.CtlID);
-        draw_owner_button(dis.hDC, &dis.rcItem, &txt, primary, pal, font);
+        draw_owner_button(dis, &txt, primary, pal, font, window_dpi(dis.hwndItem));
         return Some(1);
     }
     if dis.CtlType == ODT_COMBOBOX {
         let in_edit = (dis.itemState & 0x1000) != 0;
         let selected = !in_edit && (dis.itemState & ODS_SELECTED) != 0;
         let fill = if selected { pal.accent } else { pal.input_bg };
-        let fg = if selected { rgb(255, 255, 255) } else { pal.text };
+        let fg = if selected { accent_ink(pal) } else { pal.text };
         fill_solid(dis.hDC, &dis.rcItem, fill);
         if dis.itemID != u32::MAX {
-            let mut buf = [0u16; 128];
+            let len = unsafe { SendMessageW(dis.hwndItem, CB_GETLBTEXTLEN, dis.itemID as usize, 0) };
+            if len < 0 {
+                return Some(1);
+            }
+            let mut buf = vec![0u16; len as usize + 1];
             let len = unsafe {
                 SendMessageW(
                     dis.hwndItem,
@@ -362,8 +378,9 @@ pub fn handle_draw_combo_or_btn(
             if len > 0 {
                 let s = String::from_utf16_lossy(&buf[..len as usize]);
                 let mut tx = dis.rcItem;
-                tx.left += 8;
-                tx.right -= 4;
+                let dpi = window_dpi(dis.hwndItem);
+                tx.left += scale_px(8, dpi);
+                tx.right -= scale_px(4, dpi);
                 unsafe {
                     let old_font = windows_sys::Win32::Graphics::Gdi::SelectObject(dis.hDC, font);
                     SetBkMode(dis.hDC, TRANSPARENT as i32);
@@ -374,12 +391,13 @@ pub fn handle_draw_combo_or_btn(
                         w.as_mut_ptr(),
                         -1,
                         &mut tx,
-                        0x0824,
+                        0x8824,
                     );
                     windows_sys::Win32::Graphics::Gdi::SelectObject(dis.hDC, old_font);
                 }
             }
         }
+        draw_item_focus(dis, window_dpi(dis.hwndItem));
         return Some(1);
     }
     None

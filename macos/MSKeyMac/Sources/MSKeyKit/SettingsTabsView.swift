@@ -13,330 +13,275 @@ public struct SettingsTabsView: View {
     }
 
     public var body: some View {
-        switch selectedTab {
-        case 0: basicTab
-        case 1: hotkeyTab
-        default: systemTab
+        ScrollView {
+            VStack(alignment: .leading, spacing: 16) {
+                switch selectedTab {
+                case 0: basicTab
+                case 1: hotkeyTab
+                default: systemTab
+                }
+            }
+            .padding(.horizontal, 24)
+            .padding(.vertical, 16)
         }
+        .id(selectedTab)
     }
 
     private var basicTab: some View {
-        ScrollView {
-            VStack(alignment: .leading, spacing: 12) {
+        Group {
+            SettingsSection("Dấu & chính tả") {
                 HStack(alignment: .top, spacing: 16) {
                     VStack(alignment: .leading, spacing: 8) {
-                        Toggle("Đặt dấu kiểu mới (oà, uý)", isOn: binding(\.modern_tone))
-                        Toggle("Đặt dấu tự do", isOn: binding(\.free_tone))
-                        Toggle("Cho phép f, j, w, z", isOn: binding(\.allow_fjwz))
-                        Toggle("Viết hoa đầu câu", isOn: binding(\.auto_capitalize_sentence))
-                        Toggle("Dùng clipboard gửi phím", isOn: binding(\.use_clipboard_send))
-                        Toggle("Sử dụng SendKey chuẩn", isOn: binding(\.standard_key_send))
+                        option("Đặt dấu kiểu mới (oà, uý)", \.modern_tone)
+                        option("Đặt dấu tự do", \.free_tone)
+                        option("Cho phép f, j, w, z", \.allow_fjwz)
+                        option("Viết hoa đầu câu", \.auto_capitalize_sentence)
                     }
                     .frame(maxWidth: .infinity, alignment: .leading)
 
                     VStack(alignment: .leading, spacing: 8) {
-                        Toggle("Kiểm tra chính tả", isOn: binding(\.spelling_check))
-                        Toggle("Khôi phục phím từ sai", isOn: binding(\.auto_restore_wrong_word))
-                        Toggle("Bỏ qua thông minh khi gõ code", isOn: binding(\.smartCodeBypass))
-                        Toggle("Sửa tiếp từ trước con trỏ", isOn: binding(\.reeditSurroundingWord))
-                        Toggle("Tắt khi không phải phím US", isOn: binding(\.disable_on_non_us_layout))
-                        Toggle("Sửa lỗi dấu của Gợi ý 1", isOn: binding(\.fix_browser_suggest_1))
-                        Toggle("Sửa lỗi dấu của Gợi ý 2", isOn: binding(\.fix_browser_suggest_2))
+                        option("Kiểm tra chính tả", \.spelling_check)
+                        option("Khôi phục phím từ sai", \.auto_restore_wrong_word)
+                        option("Bỏ qua từ kỹ thuật / code", \.smartCodeBypass)
+                        option("Sửa tiếp từ trước con trỏ", \.reeditSurroundingWord)
                     }
                     .frame(maxWidth: .infinity, alignment: .leading)
                 }
-
-                GroupBox("Gõ tắt & phím tắt nhanh") {
-                    VStack(alignment: .leading, spacing: 8) {
-                        HStack(spacing: 8) {
-                            Toggle("Cho phép gõ tắt", isOn: binding(\.macro_enabled))
-                            Spacer()
-                            Button("Bảng gõ tắt...") {
-                                store.openSheet(.macros)
-                            }
-                            .frame(height: 28)
-                        }
-                        Toggle("Vẫn gõ tắt khi tắt Tiếng Việt", isOn: binding(\.macro_when_english))
-                        Toggle("Chỉ bung gõ tắt bằng phím Tab", isOn: binding(\.macroTriggerTabOnly))
-                        HStack(spacing: 16) {
-                            Toggle("Gõ w thành ư", isOn: binding(\.quick_w_to_u_horn))
-                            Toggle("Gõ [ thành ơ, ] thành ư", isOn: binding(\.quick_brackets))
-                        }
-                    }
-                    .padding(8)
-                }
-                Spacer(minLength: 0)
             }
-            .padding(12)
+
+            SettingsSection("Tương thích ứng dụng") {
+                HStack(alignment: .top, spacing: 16) {
+                    VStack(alignment: .leading, spacing: 8) {
+                        option("Dùng clipboard gửi phím", \.use_clipboard_send)
+                        option("Sử dụng SendKey chuẩn", \.standard_key_send)
+                        option("Tắt khi không phải phím US", \.disable_on_non_us_layout)
+                    }
+                    .frame(maxWidth: .infinity, alignment: .leading)
+
+                    VStack(alignment: .leading, spacing: 8) {
+                        option("Sửa lỗi dấu của Gợi ý 1", \.fix_browser_suggest_1)
+                        option("Sửa lỗi dấu của Gợi ý 2", \.fix_browser_suggest_2)
+                    }
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                }
+            }
+
+            SettingsSection("Gõ tắt & phím nhanh") {
+                HStack(spacing: 8) {
+                    option("Cho phép gõ tắt", \.macro_enabled)
+                    Spacer(minLength: 8)
+                    Button("Bảng gõ tắt…") { store.openSheet(.macros) }
+                    Button("Mở rộng & sao lưu…") { store.openSheet(.extras) }
+                }
+                option("Vẫn gõ tắt khi tắt Tiếng Việt", \.macro_when_english)
+                option("Chỉ kích hoạt gõ tắt bằng Tab", \.macroTriggerTabOnly)
+                Divider()
+                HStack(spacing: 16) {
+                    option("Gõ w thành ư", \.quick_w_to_u_horn)
+                        .frame(maxWidth: .infinity, alignment: .leading)
+                    option("Gõ [ thành ơ, ] thành ư", \.quick_brackets)
+                        .frame(maxWidth: .infinity, alignment: .leading)
+                }
+            }
+
         }
     }
 
     private var hotkeyTab: some View {
-        ScrollView {
-            VStack(alignment: .leading, spacing: 12) {
-                GroupBox("Phím chuyển V/E") {
-                    VStack(alignment: .leading, spacing: 8) {
-                        Grid(alignment: .leading, horizontalSpacing: 16, verticalSpacing: 6) {
-                            GridRow {
-                                presetOption("Ctrl + Shift", .ctrlShift)
-                                presetOption("Alt / Option + Z", .altZ)
-                                presetOption("Ctrl + Space", .ctrlSpace)
-                            }
-                            GridRow {
-                                presetOption("Shift + Shift", .shiftShift)
-                                presetOption("Phím tùy chọn", .custom)
-                                Color.clear.frame(width: 1, height: 1)
-                            }
-                        }
-
-                        HStack(spacing: 8) {
-                            Text("Tổ hợp tùy chọn: \(store.config.custom_switch_hotkey.displayText)")
-                                .font(.subheadline)
-                                .foregroundStyle(.secondary)
-                            Spacer()
-                            Button("Đặt phím tùy chọn") {
-                                store.openSheet(.captureSwitchHotkey)
-                            }
-                            .frame(height: 28)
-                        }
-
-                        HStack(spacing: 8) {
-                            Text("Giữ để gõ Tiếng Anh:")
-                            Picker("", selection: binding(\.holdEnglishKey)) {
-                                ForEach(HoldEnglishKey.allCases) { item in
-                                    Text(item.label).tag(item)
-                                }
-                            }
-                            .labelsHidden()
-                            .frame(width: 170)
-                            Spacer()
-                        }
-
-                        Toggle("Bấm Caps Lock chuyển nhanh V/E", isOn: binding(\.quickCapslockSwitch))
-                    }
-                    .padding(8)
-                }
-
-                Toggle("Phím Esc khôi phục từ gốc", isOn: binding(\.esc_restore))
-                Toggle("Âm thanh báo khi chuyển V/E", isOn: binding(\.beep_on_switch))
+        Group {
+            SettingsSection("Chuyển Tiếng Việt / Tiếng Anh") {
                 HStack(spacing: 16) {
-                    Toggle("Hiện OSD nổi khi chuyển V/E", isOn: binding(\.show_switch_osd))
-                    Toggle("OSD gọn cạnh con trỏ", isOn: binding(\.showCaretOsd))
+                    Picker("Phím chuyển V/E", selection: binding(\.switch_preset)) {
+                        Text("Ctrl + Shift").tag(SwitchPresetKind.ctrlShift)
+                        Text("Alt / Option + Z").tag(SwitchPresetKind.altZ)
+                        Text("Ctrl + Space").tag(SwitchPresetKind.ctrlSpace)
+                        Text("Shift + Shift").tag(SwitchPresetKind.shiftShift)
+                        Text("Phím tùy chọn").tag(SwitchPresetKind.custom)
+                    }
+                    Picker("Giữ để gõ Tiếng Anh", selection: binding(\.holdEnglishKey)) {
+                        ForEach(HoldEnglishKey.allCases) { key in
+                            Text(key.label).tag(key)
+                        }
+                    }
+                }
+                hotkeyRow("Tổ hợp tùy chọn", combo: store.config.custom_switch_hotkey, sheet: .captureSwitchHotkey)
+                Divider()
+                option("Bấm nhanh Caps Lock để chuyển V/E", \.quickCapslockSwitch)
+                option("Phát âm thanh khi chuyển V/E", \.beep_on_switch)
+                HStack(spacing: 16) {
+                    option("Hiện chỉ báo nổi khi chuyển V/E", \.show_switch_osd)
+                    option("Thu gọn chỉ báo cạnh con trỏ", \.showCaretOsd)
                         .disabled(!store.config.show_switch_osd)
                 }
-
-                GroupBox("Phím tắt chức năng & Nhập EVKey") {
-                    VStack(alignment: .leading, spacing: 8) {
-                        HStack(spacing: 8) {
-                            Text("Hoàn tác từ vừa gõ: \(store.config.undoLastWordHotkey.displayText)")
-                                .font(.subheadline)
-                            Spacer()
-                            Button("Đổi phím") {
-                                store.openSheet(.captureUndoHotkey)
-                            }
-                            .frame(height: 26)
-                        }
-                        HStack(spacing: 8) {
-                            Text("Chuyển đổi vùng chọn: \(store.config.convertSelectionHotkey.displayText)")
-                                .font(.subheadline)
-                            Spacer()
-                            Button("Đổi phím") {
-                                store.openSheet(.captureConvertSelectionHotkey)
-                            }
-                            .frame(height: 26)
-                        }
-                        HStack(spacing: 8) {
-                            Text("Chuyển mã Clipboard: \(store.config.clipboard_convert_hotkey.displayText)")
-                                .font(.subheadline)
-                            Spacer()
-                            Button("Đổi phím chuyển mã") {
-                                store.openSheet(.captureConvertHotkey)
-                            }
-                            .frame(height: 26)
-                        }
-                        HStack(spacing: 8) {
-                            Button("Nhập EVKey setting.tree...") {
-                                store.importEVKeyTreePanel()
-                            }
-                            .frame(height: 28)
-                            Button("Mở thư mục cấu hình") {
-                                NSWorkspace.shared.open(MacConfigStore.configDirectory)
-                            }
-                            .frame(height: 28)
-                            Spacer()
-                        }
-                    }
-                    .padding(8)
-                }
-                Spacer(minLength: 0)
             }
-            .padding(12)
+
+            SettingsSection("Phím tắt công cụ") {
+                hotkeyRow("Chuyển mã clipboard", combo: store.config.clipboard_convert_hotkey, sheet: .captureConvertHotkey)
+                Divider()
+                hotkeyRow("Chuyển đổi vùng chọn", combo: store.config.convertSelectionHotkey, sheet: .captureConvertSelectionHotkey)
+                Divider()
+                hotkeyRow("Hoàn tác từ vừa gõ", combo: store.config.undoLastWordHotkey, sheet: .captureUndoHotkey)
+                Divider()
+                option("Phím Esc khôi phục từ gốc", \.esc_restore)
+            }
+
+            SettingsSection("Cấu hình EVKey") {
+                HStack(spacing: 8) {
+                    Button("Nhập EVKey setting.tree…") { store.importEVKeyTreePanel() }
+                    Button("Mở thư mục cấu hình") { NSWorkspace.shared.open(MacConfigStore.configDirectory) }
+                }
+            }
         }
     }
 
     private var systemTab: some View {
-        ScrollView {
-            VStack(alignment: .leading, spacing: 12) {
-                if !store.accessibilityGranted {
-                    HStack(spacing: 8) {
-                        Image(systemName: "exclamationmark.triangle.fill")
-                            .foregroundStyle(.orange)
-                        Text("Cần cấp quyền Trợ năng (Accessibility) để gõ Tiếng Việt. Sau khi cập nhật MS Key, macOS có thể không nhận quyền cũ: nếu MS Key đã có trong danh sách mà vẫn không gõ được, xoá nó (–) rồi cấp lại.")
-                            .font(.caption)
-                            .fixedSize(horizontal: false, vertical: true)
-                        Spacer()
-                        Button("Cấp quyền") {
-                            store.requestAccessibility()
-                        }
-                        .frame(height: 24)
+        Group {
+            if !store.accessibilityGranted {
+                accessibilityNotice
+            }
+
+            SettingsSection("Khởi động & giao diện") {
+                option("Khởi động cùng macOS", \.auto_start)
+                option("Hiện bảng điều khiển khi mở", \.show_on_startup)
+                Divider()
+                Picker("Giao diện", selection: binding(\.theme)) {
+                    ForEach(ThemeModeKind.allCases) { theme in
+                        Text(theme.label).tag(theme)
                     }
-                    .padding(8)
-                    .background(Color.orange.opacity(0.12), in: RoundedRectangle(cornerRadius: 8))
                 }
+                .frame(maxWidth: 240)
+            }
 
-                Toggle("Khởi động cùng macOS", isOn: binding(\.auto_start))
-                Toggle("Hiện bảng điều khiển khi mở", isOn: binding(\.show_on_startup))
-
+            SettingsSection("Hồ sơ cấu hình") {
                 HStack(spacing: 8) {
-                    Text("Giao diện")
-                        .frame(width: 80, alignment: .leading)
-                    Picker("", selection: binding(\.theme)) {
-                        ForEach(ThemeModeKind.allCases) { t in
-                            Text(t.label).tag(t)
-                        }
-                    }
-                    .labelsHidden()
-                    .frame(maxWidth: .infinity)
-                }
-
-                GroupBox("Hồ sơ cấu hình (Profiles)") {
-                    VStack(alignment: .leading, spacing: 8) {
-                        HStack(spacing: 8) {
-                            Picker("Đang dùng", selection: Binding(
-                                get: { store.config.activeProfile },
-                                set: { _ = store.applyProfile($0) }
-                            )) {
-                                ForEach(store.config.allProfileNames(), id: \.self) { name in
-                                    Text(name).tag(name)
-                                }
-                            }
-                            Button("Xoá") {
-                                store.deleteCustomProfile(named: store.config.activeProfile)
-                            }
-                            .disabled(MSKeyConfig.builtinProfileNames.contains(store.config.activeProfile))
-                            .frame(height: 26)
-                        }
-                        HStack(spacing: 8) {
-                            TextField("Tên hồ sơ mới hoặc cập nhật...", text: $profileNameInput)
-                            Button("Lưu hồ sơ") {
-                                let name = profileNameInput.trimmingCharacters(in: .whitespacesAndNewlines)
-                                guard !name.isEmpty else { return }
-                                store.saveCurrentAsProfile(named: name)
-                                profileNameInput = ""
-                            }
-                            .disabled(profileNameInput.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
-                            .frame(height: 26)
-                        }
-                    }
-                    .padding(8)
-                }
-
-                GroupBox("Quy tắc V/E theo ứng dụng") {
-                    VStack(alignment: .leading, spacing: 8) {
-                        Text("Ứng dụng gần nhất: \(store.lastActiveApp.isEmpty ? "-" : store.lastActiveApp)")
-                            .font(.caption)
+                    VStack(alignment: .leading, spacing: 4) {
+                        Text("Đang dùng")
                             .foregroundStyle(.secondary)
-                        HStack(spacing: 8) {
-                            Button("Danh sách ứng dụng...") {
-                                store.openSheet(.appRules)
-                            }
-                            .frame(height: 28)
-                            Button("Thêm app hiện tại vào Tiếng Anh") {
-                                store.addLastAppForceEnglish()
-                            }
-                            .disabled(store.lastActiveApp.isEmpty)
-                            .frame(height: 28)
-                        }
+                        Text(store.config.activeProfile)
+                            .fontWeight(.medium)
+                            .lineLimit(1)
+                            .help(store.config.activeProfile)
                     }
-                    .padding(8)
+                    Spacer(minLength: 8)
+                    Button("Xoá hồ sơ") { store.deleteCustomProfile(named: store.config.activeProfile) }
+                        .disabled(MSKeyConfig.builtinProfileNames.contains(store.config.activeProfile))
                 }
-
-                GroupBox("Đồng bộ & Cập nhật") {
-                    VStack(alignment: .leading, spacing: 8) {
-                        HStack(spacing: 8) {
-                            Text("Đồng bộ:")
-                            Text(store.config.syncConfigPath.isEmpty ? "Chưa thiết lập" : store.config.syncConfigPath)
-                                .font(.caption)
-                                .foregroundStyle(.secondary)
-                                .lineLimit(1)
-                                .truncationMode(.middle)
-                            Spacer()
-                            Button("Chọn...") {
-                                store.chooseSyncConfigPath()
-                            }
-                            .frame(height: 26)
-                            Button("Tắt") {
-                                store.clearSyncConfigPath()
-                            }
-                            .disabled(store.config.syncConfigPath.isEmpty)
-                            .frame(height: 26)
-                        }
-                        HStack(spacing: 8) {
-                            Toggle("Tự kiểm tra cập nhật khi mở", isOn: binding(\.checkUpdatesOnStart))
-                            Spacer()
-                            Button(updater.isDownloading ? "Đang tải..." : (updater.isChecking ? "Đang kiểm tra..." : "Kiểm tra cập nhật...")) {
-                                store.checkForUpdates(manual: true)
-                            }
-                            .disabled(updater.isChecking || updater.isDownloading)
-                            .frame(height: 28)
-                        }
-                        if !updater.statusText.isEmpty {
-                            Text(updater.statusText)
-                                .font(.caption)
-                                .foregroundStyle(.secondary)
-                        }
-                    }
-                    .padding(8)
-                }
-
+                Divider()
                 HStack(spacing: 8) {
-                    Button("Mở rộng & Gõ thử...") {
-                        store.openSheet(.extras)
-                    }
-                    .frame(height: 28)
-                    Button("Từ điển cá nhân...") {
-                        store.openSheet(.userDict)
-                    }
-                    .frame(height: 28)
-                    Spacer()
+                    TextField("Tên hồ sơ mới hoặc cập nhật", text: $profileNameInput)
+                    Button("Lưu hồ sơ") { saveProfile() }
+                        .disabled(profileName.isEmpty)
                 }
-                Spacer(minLength: 0)
             }
-            .padding(12)
+
+            SettingsSection("Quy tắc V/E theo ứng dụng") {
+                let activeApp = store.lastActiveApp.isEmpty ? "Chưa xác định" : store.lastActiveApp
+                Text("Ứng dụng gần nhất: \(activeApp)")
+                    .foregroundStyle(.secondary)
+                    .lineLimit(1)
+                    .help(activeApp)
+                HStack(spacing: 8) {
+                    Button("Danh sách ứng dụng…") { store.openSheet(.appRules) }
+                    Button("Thêm ứng dụng vào Tiếng Anh") { store.addLastAppForceEnglish() }
+                        .disabled(store.lastActiveApp.isEmpty)
+                }
+            }
+
+            SettingsSection("Đồng bộ & cập nhật") {
+                HStack(spacing: 8) {
+                    Text("Tệp đồng bộ")
+                    let path = store.config.syncConfigPath
+                    Text(path.isEmpty ? "Chưa thiết lập" : path)
+                        .foregroundStyle(.secondary)
+                        .lineLimit(1)
+                        .truncationMode(.middle)
+                        .help(path)
+                    Spacer(minLength: 8)
+                    Button("Chọn…") { store.chooseSyncConfigPath() }
+                    Button("Tắt đồng bộ") { store.clearSyncConfigPath() }
+                        .disabled(path.isEmpty)
+                }
+                Divider()
+                HStack(spacing: 8) {
+                    option("Tự kiểm tra cập nhật khi mở", \.checkUpdatesOnStart)
+                    Spacer(minLength: 8)
+                    if updater.isChecking || updater.isDownloading {
+                        ProgressView().controlSize(.small)
+                    }
+                    Button(updateButtonTitle) { store.checkForUpdates(manual: true) }
+                        .disabled(updater.isChecking || updater.isDownloading)
+                }
+                if !updater.statusText.isEmpty {
+                    Text(updater.statusText)
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                }
+            }
+
+            SettingsSection("Từ điển") {
+                Button("Từ điển cá nhân…") { store.openSheet(.userDict) }
+            }
         }
     }
 
-    private func presetOption(_ title: String, _ preset: SwitchPresetKind) -> some View {
-        Button {
-            store.updateConfig { $0.switch_preset = preset }
-        } label: {
-            HStack(spacing: 6) {
-                Image(systemName: store.config.switch_preset == preset ? "largecircle.fill.circle" : "circle")
-                    .foregroundStyle(store.config.switch_preset == preset ? Color.accentColor : Color.secondary)
-                Text(title)
-                    .foregroundStyle(.primary)
+    private var accessibilityNotice: some View {
+        HStack(alignment: .top, spacing: 12) {
+            Image(systemName: "exclamationmark.triangle.fill")
+                .foregroundStyle(.orange)
+                .accessibilityHidden(true)
+            VStack(alignment: .leading, spacing: 4) {
+                Text("MS Key cần quyền Trợ năng")
+                    .fontWeight(.semibold)
+                Text("Cấp quyền để gõ tiếng Việt trong các ứng dụng. Nếu MS Key đã có trong danh sách mà vẫn gõ không được, hãy xoá mục đó rồi cấp lại.")
+                    .foregroundStyle(.secondary)
+                    .fixedSize(horizontal: false, vertical: true)
             }
-            .contentShape(Rectangle())
+            Spacer(minLength: 8)
+            Button("Cấp quyền") { store.requestAccessibility() }
         }
-        .buttonStyle(.plain)
+        .padding(12)
+        .background(.orange.opacity(0.12), in: RoundedRectangle(cornerRadius: 12))
     }
 
-    private func binding<T>(_ keyPath: WritableKeyPath<MSKeyConfig, T>) -> Binding<T> {
+    private var updateButtonTitle: String {
+        if updater.isDownloading { return "Đang tải…" }
+        if updater.isChecking { return "Đang kiểm tra…" }
+        return "Kiểm tra cập nhật…"
+    }
+
+    private var profileName: String { profileNameInput.trimmingCharacters(in: .whitespacesAndNewlines) }
+
+    private func saveProfile() {
+        let name = profileName
+        guard !name.isEmpty else { return }
+        store.saveCurrentAsProfile(named: name)
+        profileNameInput = ""
+    }
+
+    private func hotkeyRow(_ title: String, combo: HotkeyComboModel, sheet: ActiveSheetKind) -> some View {
+        HStack(spacing: 8) {
+            Text(title)
+            Spacer(minLength: 8)
+            Text(combo.displayText)
+                .font(.caption.monospaced())
+                .padding(.horizontal, 8)
+                .padding(.vertical, 4)
+                .background(.secondary.opacity(0.12), in: RoundedRectangle(cornerRadius: 4))
+            Button("Đổi phím") { store.openSheet(sheet) }
+                .accessibilityLabel("Đổi phím: \(title)")
+        }
+        .frame(minHeight: 24)
+    }
+
+    private func option(_ title: String, _ keyPath: WritableKeyPath<MSKeyConfig, Bool>) -> some View {
+        Toggle(title, isOn: binding(keyPath))
+            .toggleStyle(.checkbox)
+    }
+
+    private func binding<Value>(_ keyPath: WritableKeyPath<MSKeyConfig, Value>) -> Binding<Value> {
         Binding(
             get: { store.config[keyPath: keyPath] },
-            set: { newVal in
-                store.updateConfig { $0[keyPath: keyPath] = newVal }
-            }
+            set: { value in store.updateConfig { $0[keyPath: keyPath] = value } }
         )
     }
 }

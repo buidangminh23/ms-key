@@ -4,12 +4,12 @@ use mskey_core::ThemeMode;
 use windows_sys::Win32::Foundation::{COLORREF, HWND, RECT};
 use windows_sys::Win32::Graphics::Dwm::DwmSetWindowAttribute;
 use windows_sys::Win32::Graphics::Gdi::{
-    CreateFontW, CreatePen, CreateSolidBrush, DT_CALCRECT, DT_CENTER, DT_LEFT, DT_NOPREFIX,
-    DT_SINGLELINE, DT_VCENTER, DeleteObject, DrawTextW, Ellipse, FillRect, HDC, HFONT, LineTo,
+    CreateFontW, CreatePen, CreateSolidBrush, DT_CENTER, DT_END_ELLIPSIS, DT_LEFT, DT_NOPREFIX,
+    DT_SINGLELINE, DT_VCENTER, DeleteObject, DrawFocusRect, DrawTextW, Ellipse, FillRect, HDC, HFONT, LineTo,
     MoveToEx, PS_SOLID, RoundRect, SelectObject, SetBkMode, SetTextColor, TRANSPARENT,
 };
 use windows_sys::Win32::System::Registry::{HKEY, HKEY_CURRENT_USER, KEY_READ, RegCloseKey, RegOpenKeyExW, RegQueryValueExW};
-use windows_sys::Win32::UI::Controls::SetWindowTheme;
+use windows_sys::Win32::UI::Controls::{DRAWITEMSTRUCT, ODS_FOCUS, ODS_NOFOCUSRECT, ODS_SELECTED, SetWindowTheme};
 
 use crate::platform::to_wide;
 
@@ -74,34 +74,38 @@ pub fn palette_for(mode: ThemeMode) -> ThemePalette {
     if resolve_is_dark(mode) {
         ThemePalette {
             dark: true,
-            window_bg: rgb(31, 31, 31),
-            card_bg: rgb(43, 43, 43),
-            input_bg: rgb(53, 53, 53),
-            border: rgb(66, 66, 66),
-            text: rgb(242, 242, 242),
-            subtle_text: rgb(168, 168, 168),
-            accent: rgb(54, 158, 255),
-            button_bg: rgb(54, 54, 54),
-            button_border: rgb(82, 82, 82),
-            tab_inactive_bg: rgb(36, 36, 36),
-            danger_badge: rgb(209, 52, 56),
+            window_bg: rgb(17, 21, 29),
+            card_bg: rgb(26, 32, 43),
+            input_bg: rgb(33, 42, 57),
+            border: rgb(52, 63, 81),
+            text: rgb(237, 242, 250),
+            subtle_text: rgb(163, 178, 200),
+            accent: rgb(105, 176, 255),
+            button_bg: rgb(33, 42, 57),
+            button_border: rgb(97, 116, 144),
+            tab_inactive_bg: rgb(23, 28, 38),
+            danger_badge: rgb(185, 43, 58),
         }
     } else {
         ThemePalette {
             dark: false,
-            window_bg: rgb(243, 243, 243),
+            window_bg: rgb(241, 245, 251),
             card_bg: rgb(255, 255, 255),
             input_bg: rgb(255, 255, 255),
-            border: rgb(214, 214, 214),
-            text: rgb(26, 26, 26),
-            subtle_text: rgb(90, 90, 90),
-            accent: rgb(0, 120, 212),
+            border: rgb(213, 223, 237),
+            text: rgb(22, 33, 51),
+            subtle_text: rgb(79, 96, 120),
+            accent: rgb(0, 91, 171),
             button_bg: rgb(255, 255, 255),
-            button_border: rgb(204, 204, 204),
-            tab_inactive_bg: rgb(232, 232, 232),
-            danger_badge: rgb(209, 52, 56),
+            button_border: rgb(138, 157, 184),
+            tab_inactive_bg: rgb(230, 237, 247),
+            danger_badge: rgb(185, 43, 58),
         }
     }
+}
+
+pub fn accent_ink(pal: ThemePalette) -> COLORREF {
+    if pal.dark { rgb(13, 26, 44) } else { rgb(255, 255, 255) }
 }
 
 pub fn apply_dwm_dark_titlebar(hwnd: HWND, dark: bool) {
@@ -173,46 +177,6 @@ pub fn draw_round_box(
     }
 }
 
-pub fn draw_group_box(hdc: HDC, rc: &RECT, title: &str, pal: ThemePalette, font: HFONT) {
-    draw_round_box(hdc, rc, 8, pal.card_bg, pal.border);
-    unsafe {
-        let old_font = SelectObject(hdc, font);
-        let pad = 12;
-        let mut w = to_wide(title);
-        let mut calc = RECT { left: 0, top: 0, right: 0, bottom: 0 };
-        DrawTextW(
-            hdc,
-            w.as_mut_ptr(),
-            -1,
-            &mut calc,
-            DT_CALCRECT | DT_SINGLELINE | DT_NOPREFIX,
-        );
-        let bg_rect = RECT {
-            left: rc.left + pad,
-            top: rc.top - 9,
-            right: rc.left + pad + (calc.right - calc.left) + 12,
-            bottom: rc.top + 10,
-        };
-        fill_solid(hdc, &bg_rect, pal.card_bg);
-        SetBkMode(hdc, TRANSPARENT as i32);
-        SetTextColor(hdc, pal.accent);
-        let mut tx = RECT {
-            left: bg_rect.left + 6,
-            top: bg_rect.top,
-            right: bg_rect.right + 4,
-            bottom: bg_rect.bottom,
-        };
-        DrawTextW(
-            hdc,
-            w.as_mut_ptr(),
-            -1,
-            &mut tx,
-            DT_LEFT | DT_VCENTER | DT_SINGLELINE | DT_NOPREFIX,
-        );
-        SelectObject(hdc, old_font);
-    }
-}
-
 pub fn draw_checkbox(
     hdc: HDC,
     rc: &RECT,
@@ -235,7 +199,7 @@ pub fn draw_checkbox(
     draw_round_box(hdc, &bx, 4, fill, border);
     if checked {
         unsafe {
-            let pen = CreatePen(PS_SOLID, 2, rgb(255, 255, 255));
+            let pen = CreatePen(PS_SOLID, (2 * dpi / 96).max(1), accent_ink(pal));
             let old = SelectObject(hdc, pen);
             let x1 = bx.left + box_sz / 4;
             let y1 = cy;
@@ -334,32 +298,50 @@ pub fn draw_radio(
 }
 
 pub fn draw_owner_button(
-    hdc: HDC,
-    rc: &RECT,
+    item: &DRAWITEMSTRUCT,
     text: &str,
     primary: bool,
     pal: ThemePalette,
     font: HFONT,
+    dpi: i32,
 ) {
+    let pressed = (item.itemState & ODS_SELECTED) != 0;
     let (fill, border, fg) = if primary {
-        (pal.accent, pal.accent, rgb(255, 255, 255))
+        let fill = if pressed { pal.text } else { pal.accent };
+        (fill, fill, accent_ink(pal))
     } else {
-        (pal.button_bg, pal.button_border, pal.text)
+        let fill = if pressed { pal.tab_inactive_bg } else { pal.button_bg };
+        (fill, pal.button_border, pal.text)
     };
-    draw_round_box(hdc, rc, 6, fill, border);
+    draw_round_box(item.hDC, &item.rcItem, 8 * dpi / 96, fill, border);
     unsafe {
-        let old_font = SelectObject(hdc, font);
-        SetBkMode(hdc, TRANSPARENT as i32);
-        SetTextColor(hdc, fg);
+        let old_font = SelectObject(item.hDC, font);
+        SetBkMode(item.hDC, TRANSPARENT as i32);
+        SetTextColor(item.hDC, fg);
         let mut w = to_wide(text);
-        let mut tx = *rc;
+        let padding = (4 * dpi / 96).max(2);
+        let mut tx = RECT { left: item.rcItem.left + padding, right: item.rcItem.right - padding, ..item.rcItem };
         DrawTextW(
-            hdc,
+            item.hDC,
             w.as_mut_ptr(),
             -1,
             &mut tx,
-            DT_CENTER | DT_VCENTER | DT_SINGLELINE | DT_NOPREFIX,
+            DT_CENTER | DT_VCENTER | DT_SINGLELINE | DT_NOPREFIX | DT_END_ELLIPSIS,
         );
-        SelectObject(hdc, old_font);
+        SelectObject(item.hDC, old_font);
+    }
+    draw_item_focus(item, dpi);
+}
+
+pub fn draw_item_focus(item: &DRAWITEMSTRUCT, dpi: i32) {
+    if item.itemState & (ODS_FOCUS | ODS_NOFOCUSRECT) == ODS_FOCUS {
+        let inset = (2 * dpi / 96).max(2);
+        let rc = RECT {
+            left: item.rcItem.left + inset,
+            top: item.rcItem.top + inset,
+            right: item.rcItem.right - inset,
+            bottom: item.rcItem.bottom - inset,
+        };
+        unsafe { DrawFocusRect(item.hDC, &rc) };
     }
 }

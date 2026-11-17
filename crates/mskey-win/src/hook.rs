@@ -741,6 +741,15 @@ fn handle_key_event(vk: u16, scan: u32, is_down: bool, is_up: bool) -> KeyDecisi
     let decision = with_state(|st| {
         let hold_key = st.engine.config().hold_english_key;
         update_modifier_flags(st, hold_key, vk, is_down);
+        if crate::ui_extras::is_typing_preview(fg_now) {
+            if vk == VK_CAPITAL {
+                if is_down && !st.caps_key_down {
+                    st.caps_lock_on = !st.caps_lock_on;
+                }
+                st.caps_key_down = is_down;
+            }
+            return KeyDecision::Pass;
+        }
         if is_down
             && (matches!(vk, VK_TAB | VK_RETURN | VK_F6)
                 || ((st.ctrl_down || st.alt_down) && !is_modifier_vk(vk)))

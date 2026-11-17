@@ -14,11 +14,12 @@ use crate::gtk_dialogs::{
     capture_hotkey_dialog, pick_and_import_evkey_tree, pick_sync_file_path, show_converter_dialog,
 };
 use crate::gtk_dialogs_edit::{show_app_rules_dialog, show_custom_keymap_dialog, show_macro_dialog};
-use crate::gtk_extras::{show_extras_sandbox_dialog, show_user_dict_dialog};
+use crate::gtk_extras::{show_extras_dialog, show_sandbox_dialog, show_user_dict_dialog};
 use crate::gtk_ffi::{
-    GTK_WIN_POS_CENTER, GTK_WINDOW_TOPLEVEL, GtkAllocation, GtkWidget, connect_signal,
-    gtk_container_add, gtk_container_set_border_width, gtk_init_check, gtk_main, gtk_main_quit,
-    gtk_notebook_append_page, gtk_notebook_new, gtk_widget_destroy, gtk_widget_get_allocation,
+    GTK_POLICY_AUTOMATIC, GTK_POLICY_NEVER, GTK_WIN_POS_CENTER, GTK_WINDOW_TOPLEVEL, GtkAllocation,
+    GtkWidget, connect_signal, gtk_container_add, gtk_container_set_border_width, gtk_init_check,
+    gtk_main, gtk_main_quit, gtk_notebook_append_page, gtk_notebook_new, gtk_scrolled_window_new,
+    gtk_scrolled_window_set_overlay_scrolling, gtk_scrolled_window_set_policy, gtk_widget_destroy, gtk_widget_get_allocation,
     gtk_widget_set_sensitive, gtk_widget_show_all, gtk_window_new, gtk_window_set_default_size,
     gtk_window_set_position, gtk_window_set_resizable, gtk_window_set_title,
 };
@@ -26,8 +27,11 @@ use crate::gtk_helpers::{
     create_modal_gtk, get_combo, make_button, make_hbox, make_label, make_vbox, pack, read_entry,
     run_modal_gtk, set_label_text, show_info_modal, write_entry,
 };
-use crate::gtk_theme::apply_gtk_theme;
-use crate::gtk_ui_tabs::{UiState, build_header_box, build_tab_basic, build_tab_hotkey, build_tab_system};
+use crate::gtk_theme::{add_css_class, apply_gtk_theme};
+use crate::gtk_ui_tabs::{
+    UiState, build_header_tools, build_input_settings, build_tab_basic, build_tab_hotkey,
+    build_tab_system,
+};
 use crate::linux_extra::{
     LinuxInstallOutcome, acquire_setup_lock, apply_linux_staged_update, check_latest_release,
     detect_active_app, download_and_verify_linux_update, format_update_check_message,
@@ -76,7 +80,7 @@ pub fn run_setup_ui(smoke_out: Option<&str>) -> i32 {
     };
     if !ensure_gtk_init() {
         if let Some(p) = smoke_out {
-            let _ = fs::write(p, "client=560x568\nheadless=no_display\n");
+            let _ = fs::write(p, "headless=no_display\n");
         }
         eprintln!("mskey-linux: no GTK display available");
         return if smoke_out.is_some() { 0 } else { 1 };
@@ -114,40 +118,55 @@ pub fn run_setup_ui(smoke_out: Option<&str>) -> i32 {
 }
 
 fn build_main_window(cfg: Config, animate: bool) -> UiState {
-    let title = cstr(&format!("MS Key {}", env!("CARGO_PKG_VERSION")));
+    let title = cstr("MS Key");
     let win = unsafe {
         let w = gtk_window_new(GTK_WINDOW_TOPLEVEL);
         gtk_window_set_title(w, title.as_ptr());
-        gtk_window_set_default_size(w, 600, 690);
+        gtk_window_set_default_size(w, 704, 736);
         gtk_window_set_resizable(w, 1);
         gtk_window_set_position(w, GTK_WIN_POS_CENTER);
-        gtk_container_set_border_width(w, 12);
+        gtk_container_set_border_width(w, 16);
         w
     };
     let mut st = UiState::empty(win, cfg);
-    let root = make_vbox(8);
-    pack(root, crate::gtk_branding::make_brand_header(animate), false, false, 0);
-    pack(root, build_header_box(&mut st), false, false, 0);
+    add_css_class(win, "mskey-window");
+    let root = make_vbox(16);
+    let tools = build_header_tools(&mut st);
+    pack(
+        root,
+        crate::gtk_branding::make_brand_header(animate, tools),
+        false,
+        false,
+        0,
+    );
+    pack(root, build_input_settings(&mut st), false, false, 0);
 
     let nb = unsafe { gtk_notebook_new() };
-    let p0 = build_tab_basic(&mut st);
-    let p1 = build_tab_hotkey(&mut st);
-    let p2 = build_tab_system(&mut st);
-    unsafe {
-        gtk_notebook_append_page(nb, p0, make_label("Cơ bản", false));
-        gtk_notebook_append_page(nb, p1, make_label("Phím tắt", false));
-        gtk_notebook_append_page(nb, p2, make_label("Hệ thống", false));
+    add_css_class(nb, "settings-tabs");
+    for (name, page) in [
+        ("Cơ bản", build_tab_basic(&mut st)),
+        ("Phím tắt", build_tab_hotkey(&mut st)),
+        ("Hệ thống", build_tab_system(&mut st)),
+    ] {
+        unsafe {
+            let scroller = gtk_scrolled_window_new(ptr::null_mut(), ptr::null_mut());
+            gtk_scrolled_window_set_policy(scroller, GTK_POLICY_NEVER, GTK_POLICY_AUTOMATIC);
+            gtk_scrolled_window_set_overlay_scrolling(scroller, 0);
+            gtk_container_add(scroller, page);
+            gtk_notebook_append_page(nb, scroller, make_label(name, false));
+        }
     }
     pack(root, nb, true, true, 0);
 
     let footer = make_hbox(8);
-    st.btn_default = make_button("Th.Lập mặc định", false);
+    st.btn_close = make_button("Đóng", false);
+    st.btn_default = make_button("Khôi phục mặc định", false);
     st.btn_save = make_button("Lưu", true);
-    let lbl_ver = make_label("MS Key • Tiếng Việt Unicode (IBus)", true);
+    let lbl_ver = make_label(concat!("v", env!("CARGO_PKG_VERSION"), " · Linux"), true);
+    pack(footer, lbl_ver, true, true, 0);
     pack(footer, st.btn_default, false, false, 0);
+    pack(footer, st.btn_close, false, false, 0);
     pack(footer, st.btn_save, false, false, 0);
-    pack(footer, make_label("", false), true, true, 0);
-    pack(footer, lbl_ver, false, false, 0);
     pack(root, footer, false, false, 0);
     unsafe { gtk_container_add(win, root) };
     connect_main_signals(&st);
@@ -211,12 +230,12 @@ fn connect_main_signals(st: &UiState) {
     connect_signal(st.btn_check_update, "clicked", on_check_update as *const c_void, 0);
     connect_signal(st.btn_apps, "clicked", on_open_apps as *const c_void, 0);
     connect_signal(st.btn_add_app, "clicked", on_add_cur_app as *const c_void, 0);
+    connect_signal(st.btn_sandbox, "clicked", on_open_sandbox as *const c_void, 0);
     connect_signal(st.btn_extras, "clicked", on_open_extras as *const c_void, 0);
     connect_signal(st.btn_user_dict, "clicked", on_open_user_dict as *const c_void, 0);
     connect_signal(st.btn_default, "clicked", on_reset_default as *const c_void, 0);
     connect_signal(st.btn_save, "clicked", on_save_cfg as *const c_void, 0);
     connect_signal(st.btn_close, "clicked", on_close_win as *const c_void, 0);
-    connect_signal(st.btn_exit, "clicked", on_close_win as *const c_void, 0);
 }
 
 fn sync_widgets_from_config() {
@@ -272,10 +291,17 @@ unsafe extern "C" fn on_toggle_ve(_: *mut GtkWidget, _: *mut c_void) {
     }
 }
 
+unsafe extern "C" fn on_open_sandbox(_: *mut GtkWidget, _: *mut c_void) {
+    let pair = UI.with(|c| c.borrow().as_ref().map(|s| (s.win, s.cfg.clone())));
+    if let Some((win, cfg)) = pair {
+        show_sandbox_dialog(win, cfg);
+    }
+}
+
 unsafe extern "C" fn on_open_extras(_: *mut GtkWidget, _: *mut c_void) {
     let pair = UI.with(|c| c.borrow().as_ref().map(|s| (s.win, s.cfg.clone())));
     if let Some((win, mut cfg)) = pair
-        && show_extras_sandbox_dialog(win, &mut cfg) {
+        && show_extras_dialog(win, &mut cfg) {
             save_config(&cfg);
             apply_gtk_theme(cfg.theme);
             UI.with(|c| {

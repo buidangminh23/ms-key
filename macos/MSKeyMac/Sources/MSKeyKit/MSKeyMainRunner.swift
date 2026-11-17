@@ -7,6 +7,7 @@ public enum ActiveSheetKind: String, Identifiable, Sendable {
     case customKeymap
     case appRules
     case converter
+    case sandbox
     case extras
     case userDict
     case captureSwitchHotkey
@@ -318,7 +319,9 @@ public final class MSKeyStore: ObservableObject {
         let host = NSHostingController(rootView: SettingsView(store: self))
         let win = NSWindow(contentViewController: host)
         win.title = "MS Key \(MSKeyBrand.version)"
-        win.styleMask = [.titled, .closable, .miniaturizable]
+        win.styleMask = [.titled, .closable, .miniaturizable, .resizable]
+        win.contentMinSize = SettingsView.minimumSize
+        win.setContentSize(SettingsView.defaultSize)
         win.isReleasedWhenClosed = false
         win.center()
         mainWindow = win
@@ -397,7 +400,7 @@ public enum MSKeyMainRunner {
                 exit(1)
             }
             let host = NSHostingView(rootView: SettingsView(store: MSKeyStore()))
-            host.frame = NSRect(x: 0, y: 0, width: 560, height: 624)
+            host.frame = NSRect(origin: .zero, size: SettingsView.defaultSize)
             host.layoutSubtreeIfNeeded()
             let report = "ffi_typed=\(typed)\npanel=\(Int(host.bounds.width))x\(Int(host.bounds.height))\nbranding=loaded\n"
             try? report.write(toFile: outPath, atomically: true, encoding: .utf8)

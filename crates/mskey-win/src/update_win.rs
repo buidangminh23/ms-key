@@ -99,8 +99,10 @@ fn set_update_ui_state(owner: HWND, busy: bool, button_label: &str, footer_suffi
     }
     let lbl = unsafe { GetDlgItem(owner, IDC_LBL_FOOTER_VER as i32) };
     if !lbl.is_null() {
-        let suffix = footer_suffix.unwrap_or("Tiếng Việt Unicode");
-        let text = format!("MS Key v{} • {}", env!("CARGO_PKG_VERSION"), suffix);
+        let text = footer_suffix.map_or_else(
+            || concat!("Phiên bản ", env!("CARGO_PKG_VERSION")).to_string(),
+            str::to_string,
+        );
         write_window_text(lbl, &text);
     }
     unsafe {

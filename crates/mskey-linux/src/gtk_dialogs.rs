@@ -15,11 +15,12 @@ use crate::gtk_ffi::{
     GTK_POLICY_NEVER, GdkEventKey, GtkWidget, GtkWindow, connect_signal, gtk_container_add,
     gtk_file_chooser_get_filename, gtk_file_chooser_set_current_name,
     gtk_file_chooser_set_do_overwrite_confirmation, gtk_file_chooser_widget_new, gtk_grid_attach,
-    gtk_scrolled_window_new, gtk_scrolled_window_set_policy, gtk_text_view_new, gtk_widget_destroy,
-    gtk_widget_set_hexpand, gtk_widget_set_vexpand,
+    gtk_label_set_mnemonic_widget, gtk_scrolled_window_new, gtk_scrolled_window_set_policy,
+    gtk_text_view_new, gtk_widget_destroy, gtk_widget_grab_focus, gtk_widget_set_hexpand,
+    gtk_widget_set_vexpand,
 };
 use crate::gtk_helpers::{
-    create_modal_gtk, get_combo, make_button, make_combo, make_grid, make_hbox, make_label,
+    create_modal_gtk, get_combo, make_button, make_combo, make_frame, make_grid, make_hbox, make_label,
     make_vbox, pack, read_clipboard_gtk, read_textview, run_modal_gtk, write_clipboard_gtk,
     write_textview,
 };
@@ -50,9 +51,10 @@ thread_local! {
 }
 
 pub fn show_converter_dialog(parent: *mut GtkWindow) {
-    let dlg = create_modal_gtk(parent, "Chuyển mã Clipboard & Văn bản", 464, 340);
-    let root = make_vbox(8);
-    let grid = make_grid(8, 8);
+    let dlg = create_modal_gtk(parent, "Chuyển mã văn bản", 520, 456);
+    let root = make_vbox(16);
+    let (encoding_frame, encoding_panel) = make_frame("Thiết lập chuyển mã");
+    let grid = make_grid(8, 16);
     let src_cs = &["Tự động (Auto)", "Unicode", "TCVN3 (ABC)", "VNI Windows", "Unicode tổ hợp", "VIQR"];
     let dst_cs = &["Unicode", "TCVN3 (ABC)", "VNI Windows", "Unicode tổ hợp", "VIQR"];
     let cases = &[
@@ -68,16 +70,22 @@ pub fn show_converter_dialog(parent: *mut GtkWindow) {
     let from_cb = make_combo(src_cs);
     let to_cb = make_combo(dst_cs);
     let case_cb = make_combo(cases);
-    unsafe {
-        gtk_grid_attach(grid, make_label("Bảng mã nguồn", false), 0, 0, 1, 1);
-        gtk_grid_attach(grid, from_cb, 1, 0, 1, 1);
-        gtk_grid_attach(grid, make_label("Bảng mã đích", false), 0, 1, 1, 1);
-        gtk_grid_attach(grid, to_cb, 1, 1, 1, 1);
-        gtk_grid_attach(grid, make_label("Chuyển hoa/thường", false), 0, 2, 1, 1);
-        gtk_grid_attach(grid, case_cb, 1, 2, 1, 1);
+    for (index, (title, combo)) in [
+        ("Bảng mã nguồn", from_cb),
+        ("Bảng mã đích", to_cb),
+        ("Định dạng chữ", case_cb),
+    ].into_iter().enumerate() {
+        let label = make_label(title, false);
+        unsafe {
+            gtk_label_set_mnemonic_widget(label, combo);
+            gtk_grid_attach(grid, label, 0, index as i32, 1, 1);
+            gtk_grid_attach(grid, combo, 1, index as i32, 1, 1);
+        }
     }
-    pack(root, grid, false, false, 0);
+    pack(encoding_panel, grid, false, false, 0);
+    pack(root, encoding_frame, false, false, 0);
 
+    let (text_frame, text_panel) = make_frame("Văn bản");
     let sw = unsafe { gtk_scrolled_window_new(ptr::null_mut(), ptr::null_mut()) };
     let tv = unsafe { gtk_text_view_new() };
     write_textview(tv, &read_clipboard_gtk());
@@ -87,16 +95,17 @@ pub fn show_converter_dialog(parent: *mut GtkWindow) {
         gtk_scrolled_window_set_policy(sw, GTK_POLICY_NEVER, GTK_POLICY_AUTOMATIC);
         gtk_container_add(sw, tv);
     }
-    pack(root, sw, true, true, 0);
+    pack(text_panel, sw, true, true, 0);
+    pack(root, text_frame, true, true, 0);
 
     let row = make_hbox(8);
-    let b_read = make_button("Đọc Clipboard", false);
-    let b_run = make_button("Chuyển & Chép", true);
+    let b_read = make_button("Đọc clipboard", false);
+    let b_run = make_button("Chuyển mã và sao chép", true);
     let b_close = make_button("Đóng", false);
     pack(row, b_read, false, false, 0);
-    pack(row, b_run, false, false, 0);
     pack(row, make_label("", false), true, true, 0);
     pack(row, b_close, false, false, 0);
+    pack(row, b_run, false, false, 0);
     pack(root, row, false, false, 0);
     unsafe { gtk_container_add(dlg, root) };
 
@@ -106,6 +115,7 @@ pub fn show_converter_dialog(parent: *mut GtkWindow) {
     connect_signal(b_read, "clicked", on_conv_read as *const c_void, 0);
     connect_signal(b_run, "clicked", on_conv_run as *const c_void, 0);
     connect_signal(b_close, "clicked", on_conv_close as *const c_void, 0);
+    unsafe { gtk_widget_grab_focus(tv) };
     run_modal_gtk(dlg);
     CONV_DLG.with(|c| {
         *c.borrow_mut() = None;

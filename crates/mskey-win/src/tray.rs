@@ -50,6 +50,7 @@ pub const ID_TRAY_SHOW_OSD: usize = 4036;
 pub const ID_TRAY_CONVERT_SELECTION: usize = 4037;
 pub const ID_TRAY_ADD_LAST_ESC: usize = 4038;
 pub const ID_TRAY_CHECK_UPDATE: usize = 4039;
+pub const ID_TRAY_TRY_TYPING: usize = 4040;
 pub const ID_TRAY_EXIT: usize = 4099;
 pub const ID_TRAY_PROFILE_BASE: usize = 4100;
 pub const ID_TRAY_PROFILE_MAX: usize = 4199;
@@ -210,7 +211,8 @@ pub fn show_tray_menu(hwnd: HWND, vietnamese: bool, charset: Charset, method: In
         append_item(menu, ID_TRAY_CONVERT, "Chuyển mã Clipboard...", false);
         append_item(menu, ID_TRAY_APPS, "Danh sách ứng dụng...", false);
         append_item(menu, ID_TRAY_USER_DICT, "Từ điển cá nhân...", false);
-        append_item(menu, ID_TRAY_EXTRAS, "Mở rộng & Gõ thử...", false);
+        append_item(menu, ID_TRAY_TRY_TYPING, "Gõ thử…", false);
+        append_item(menu, ID_TRAY_EXTRAS, "Mở rộng và sao lưu…", false);
         AppendMenuW(menu, MF_SEPARATOR, 0, ptr::null());
         append_item(menu, ID_TRAY_QUICK_TELEX, "Gõ nhanh (Quick Telex)", qt);
         append_item(menu, ID_TRAY_SHOW_OSD, "Hiện OSD khi chuyển V/E", osd);

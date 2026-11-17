@@ -20,6 +20,11 @@ pub const IDC_BTN_CUSTOM_KEY: usize = 1004;
 pub const IDC_VE_PILL: usize = 1005;
 pub const IDC_BTN_CONVERT: usize = 1006;
 pub const IDC_LBL_ACTIVE_APP: usize = 1007;
+pub const IDC_LBL_BRAND: usize = 1008;
+pub const IDC_LBL_SECTION: usize = 1009;
+pub const IDC_BTN_TRY_TYPING: usize = 1012;
+pub const MAIN_W: i32 = 640;
+pub const MAIN_H: i32 = 620;
 
 pub const IDC_BTN_CLOSE: usize = 1010;
 pub const IDC_BTN_EXIT: usize = 1011;
@@ -143,11 +148,11 @@ struct Tab2Handles {
 }
 
 impl MainUiCtrls {
-    pub fn build(hwnd: HWND, font: HFONT, dpi: i32) -> Self {
-        let hdr = build_header(hwnd, font, dpi);
-        let tab0 = build_tab0(hwnd, font, dpi);
-        let t1 = build_tab1(hwnd, font, dpi);
-        let t2 = build_tab2(hwnd, font, dpi);
+    pub fn build(hwnd: HWND, font: HFONT, bold: HFONT, title: HFONT, dpi: i32) -> Self {
+        let hdr = build_header(hwnd, font, bold, title, dpi);
+        let tab0 = build_tab0(hwnd, font, bold, dpi);
+        let t1 = build_tab1(hwnd, font, bold, dpi);
+        let t2 = build_tab2(hwnd, font, bold, dpi);
         build_footer(hwnd, font, dpi);
 
         let mut ctrls = Self {
@@ -479,9 +484,9 @@ pub fn sync_controls_from_config(
         t.ve_pill,
         if effective_vi { "Tiếng Việt (V)" } else { "Tiếng Anh (E)" },
     );
-    let app_short = if fg_proc.is_empty() { "-" } else { fg_proc };
-    write_window_text(t.lbl_active_app, &format!("App: {app_short}"));
-    write_window_text(t.lbl_cur_app, &format!("App gần nhất: {app_short}"));
+    let app_short = if fg_proc.is_empty() { "—" } else { fg_proc };
+    write_window_text(t.lbl_active_app, &format!("Ứng dụng: {app_short}"));
+    write_window_text(t.lbl_cur_app, &format!("Gần nhất: {app_short}"));
     write_window_text(
         t.lbl_switch_custom,
         &format!("Tổ hợp tùy chọn: {}", format_hotkey(cfg.custom_switch_hotkey)),
@@ -503,226 +508,157 @@ pub fn sync_controls_from_config(
     }
 }
 
-fn build_header(hwnd: HWND, font: HFONT, dpi: i32) -> HeaderHandles {
-    make_child(hwnd, "STATIC", "Bảng mã", 0, 28, 40, 88, 24, 0, font, dpi);
-    let cb_charset = make_combo(
-        hwnd,
-        120,
-        36,
-        196,
-        28,
-        IDC_CHARSET,
-        &["Unicode", "TCVN3 (ABC)", "VNI Windows", "Unicode tổ hợp"],
-        0,
-        font,
-        dpi,
+fn build_header(hwnd: HWND, font: HFONT, bold: HFONT, title: HFONT, dpi: i32) -> HeaderHandles {
+    make_child(hwnd, "STATIC", "MS Key", 0x0200, 76, 12, 224, 32, IDC_LBL_BRAND, title, dpi);
+    let lbl_active_app = make_child(
+        hwnd, "STATIC", "Ứng dụng: —", 0x4200, 76, 44, 224, 20, IDC_LBL_ACTIVE_APP, font, dpi,
     );
-    let ve_pill = make_owner_button(hwnd, "Tiếng Việt (V)", 324, 36, 124, 28, IDC_VE_PILL, font, dpi);
+    make_owner_button(hwnd, "Gõ thử", 316, 20, 88, 36, IDC_BTN_TRY_TYPING, font, dpi);
+    make_owner_button(hwnd, "Chuyển mã", 412, 20, 96, 36, IDC_BTN_CONVERT, font, dpi);
+    let ve_pill = make_owner_button(hwnd, "Tiếng Việt (V)", 516, 20, 104, 36, IDC_VE_PILL, bold, dpi);
 
-    make_child(hwnd, "STATIC", "Kiểu gõ", 0, 28, 72, 88, 24, 0, font, dpi);
-    let cb_method = make_combo(
-        hwnd,
-        120,
-        68,
-        156,
-        28,
-        IDC_METHOD,
-        &["Telex", "VNI", "VIQR", "Simple Telex", "Tự định nghĩa"],
-        0,
-        font,
-        dpi,
-    );
-    make_owner_button(hwnd, "...", 284, 68, 32, 28, IDC_BTN_CUSTOM_KEY, font, dpi);
-    make_owner_button(hwnd, "Chuyển mã...", 324, 68, 124, 28, IDC_BTN_CONVERT, font, dpi);
-
-    make_child(hwnd, "STATIC", "Cơ chế", 0, 28, 104, 88, 24, 0, font, dpi);
-    let cb_mech = make_combo(
-        hwnd,
-        120,
-        100,
-        196,
-        28,
-        IDC_MECHANISM,
-        &["Hook bàn phím", "Tương thích cao"],
-        0,
-        font,
-        dpi,
-    );
-    let lbl_active_app =
-        make_child(hwnd, "STATIC", "App: -", 0, 324, 104, 124, 24, IDC_LBL_ACTIVE_APP, font, dpi);
-
-    make_owner_button(hwnd, "Đóng", 476, 18, 88, 30, IDC_BTN_CLOSE, font, dpi);
-    make_owner_button(hwnd, "Thoát", 476, 54, 88, 30, IDC_BTN_EXIT, font, dpi);
-
-    make_owner_button(hwnd, "Cơ bản", 16, 152, 98, 30, IDC_TAB_BASIC, font, dpi);
-    make_owner_button(hwnd, "Phím tắt", 120, 152, 98, 30, IDC_TAB_HOTKEY, font, dpi);
-    make_owner_button(hwnd, "Hệ thống", 224, 152, 98, 30, IDC_TAB_SYSTEM, font, dpi);
-    make_child(hwnd, "STATIC", "Hồ sơ", 0, 330, 158, 44, 22, IDC_LBL_PROFILE, font, dpi);
-    let cb_profile = make_combo(
-        hwnd,
-        376,
-        154,
-        132,
-        28,
-        IDC_PROFILE_COMBO,
-        &["Mặc định"],
-        0,
-        font,
-        dpi,
-    );
-    make_owner_button(hwnd, "Lưu", 514, 154, 50, 28, IDC_BTN_SAVE_PROFILE, font, dpi);
-    HeaderHandles {
-        cb_charset,
-        cb_method,
-        cb_mech,
-        cb_profile,
-        ve_pill,
-        lbl_active_app,
+    for (label, x) in [("Bảng mã", 36), ("Kiểu gõ", 228), ("Cơ chế gửi phím", 432)] {
+        make_child(hwnd, "STATIC", label, 0x0200, x, 96, 180, 20, IDC_LBL_SECTION, bold, dpi);
     }
+    let cb_charset = make_combo(
+        hwnd, 36, 120, 180, 32, IDC_CHARSET,
+        &["Unicode", "TCVN3 (ABC)", "VNI Windows", "Unicode tổ hợp"], 0, font, dpi,
+    );
+    let cb_method = make_combo(
+        hwnd, 228, 120, 116, 32, IDC_METHOD,
+        &["Telex", "VNI", "VIQR", "Simple Telex", "Tự định nghĩa"], 0, font, dpi,
+    );
+    make_owner_button(hwnd, "Sửa phím", 352, 120, 68, 32, IDC_BTN_CUSTOM_KEY, font, dpi);
+    let cb_mech = make_combo(
+        hwnd, 432, 120, 172, 32, IDC_MECHANISM,
+        &["Hook bàn phím", "Tương thích cao"], 0, font, dpi,
+    );
+
+    make_owner_button(hwnd, "Cơ bản", 24, 180, 84, 32, IDC_TAB_BASIC, font, dpi);
+    make_owner_button(hwnd, "Phím tắt", 116, 180, 84, 32, IDC_TAB_HOTKEY, font, dpi);
+    make_owner_button(hwnd, "Hệ thống", 208, 180, 84, 32, IDC_TAB_SYSTEM, font, dpi);
+    make_child(hwnd, "STATIC", "Hồ sơ", 0x0200, 344, 180, 48, 32, IDC_LBL_PROFILE, font, dpi);
+    let cb_profile = make_combo(hwnd, 392, 180, 136, 32, IDC_PROFILE_COMBO, &["Mặc định"], 0, font, dpi);
+    make_owner_button(hwnd, "Lưu hồ sơ", 536, 180, 84, 32, IDC_BTN_SAVE_PROFILE, font, dpi);
+    HeaderHandles { cb_charset, cb_method, cb_mech, cb_profile, ve_pill, lbl_active_app }
 }
 
-fn build_tab0(hwnd: HWND, font: HFONT, dpi: i32) -> Vec<HWND> {
+fn build_tab0(hwnd: HWND, font: HFONT, bold: HFONT, dpi: i32) -> Vec<HWND> {
+    let button = |text, x, y, w, h, id| make_owner_button(hwnd, text, x, y, w, h, id, font, dpi);
     vec![
-        make_owner_button(hwnd, "Đặt dấu kiểu mới (oà, uý)", 32, 204, 244, 24, IDC_CHK_MODERN, font, dpi),
-        make_owner_button(hwnd, "Đặt dấu tự do", 32, 232, 244, 24, IDC_CHK_FREE_TONE, font, dpi),
-        make_owner_button(hwnd, "Cho phép f, j, w, z", 32, 260, 244, 24, IDC_CHK_FJWZ, font, dpi),
-        make_owner_button(hwnd, "Viết hoa đầu câu", 32, 288, 244, 24, IDC_CHK_AUTOCAP, font, dpi),
-        make_owner_button(hwnd, "Dùng clipboard gửi phím", 32, 316, 244, 24, IDC_CHK_CLIP_SEND, font, dpi),
-        make_owner_button(hwnd, "Sử dụng SendKey chuẩn", 32, 344, 244, 24, IDC_CHK_STD_SEND, font, dpi),
-        make_owner_button(hwnd, "Kiểm tra chính tả", 292, 204, 256, 24, IDC_CHK_SPELL, font, dpi),
-        make_owner_button(hwnd, "Khôi phục phím từ sai", 292, 232, 256, 24, IDC_CHK_RESTORE, font, dpi),
-        make_owner_button(hwnd, "Tắt khi không phải phím US", 292, 260, 256, 24, IDC_CHK_NON_US, font, dpi),
-        make_owner_button(hwnd, "Sửa lỗi dấu của Gợi ý 1", 292, 288, 256, 24, IDC_CHK_SUGGEST1, font, dpi),
-        make_owner_button(hwnd, "Sửa lỗi dấu của Gợi ý 2", 292, 316, 256, 24, IDC_CHK_SUGGEST2, font, dpi),
-        make_owner_button(hwnd, "Bỏ qua từ kỹ thuật / code", 292, 344, 256, 24, IDC_CHK_SMART_CODE, font, dpi),
-        make_child(
-            hwnd,
-            "STATIC",
-            "Tối ưu Chrome/Edge/Terminal & tự nhận diện code",
-            0,
-            32,
-            372,
-            516,
-            22,
-            IDC_LBL_SUGGEST_TIP,
-            font,
-            dpi,
-        ),
-        make_owner_button(hwnd, "Cho phép gõ tắt", 44, 428, 236, 24, IDC_CHK_MACRO, font, dpi),
-        make_owner_button(hwnd, "Bảng gõ tắt...", 364, 424, 172, 28, IDC_BTN_MACRO, font, dpi),
-        make_owner_button(hwnd, "Vẫn gõ tắt khi tắt Tiếng Việt", 44, 460, 292, 24, IDC_CHK_MACRO_EN, font, dpi),
-        make_owner_button(hwnd, "Mở rộng & Gõ thử...", 364, 456, 172, 28, IDC_BTN_EXTRAS, font, dpi),
-        make_owner_button(hwnd, "Chỉ kích hoạt gõ tắt bằng Tab", 44, 492, 292, 24, IDC_CHK_MACRO_TAB, font, dpi),
-        make_owner_button(hwnd, "Gõ w thành ư", 44, 528, 210, 24, IDC_CHK_QUICK_W, font, dpi),
-        make_owner_button(hwnd, "Gõ [ thành ơ, ] thành ư", 276, 528, 256, 24, IDC_CHK_QUICK_BRK, font, dpi),
+        make_heading(hwnd, "Quy tắc gõ", 36, 228, bold, dpi),
+        button("Đặt dấu kiểu mới (oà, uý)", 36, 256, 260, 24, IDC_CHK_MODERN),
+        button("Đặt dấu tự do", 36, 280, 260, 24, IDC_CHK_FREE_TONE),
+        button("Cho phép f, j, w, z", 36, 304, 260, 24, IDC_CHK_FJWZ),
+        button("Viết hoa đầu câu", 36, 328, 260, 24, IDC_CHK_AUTOCAP),
+        button("Dùng clipboard gửi phím", 36, 352, 260, 24, IDC_CHK_CLIP_SEND),
+        button("Sử dụng SendKey chuẩn", 36, 376, 260, 24, IDC_CHK_STD_SEND),
+        make_heading(hwnd, "Chính tả và tương thích", 344, 228, bold, dpi),
+        button("Kiểm tra chính tả", 344, 256, 260, 24, IDC_CHK_SPELL),
+        button("Khôi phục phím từ sai", 344, 280, 260, 24, IDC_CHK_RESTORE),
+        button("Tắt khi không phải phím US", 344, 304, 260, 24, IDC_CHK_NON_US),
+        button("Sửa lỗi dấu của Gợi ý 1", 344, 328, 260, 24, IDC_CHK_SUGGEST1),
+        button("Sửa lỗi dấu của Gợi ý 2", 344, 352, 260, 24, IDC_CHK_SUGGEST2),
+        button("Bỏ qua từ kỹ thuật / code", 344, 376, 260, 24, IDC_CHK_SMART_CODE),
+        make_child(hwnd, "STATIC", "Sửa gợi ý trong Chrome, Edge và Terminal", 0x0200, 344, 400, 260, 24, IDC_LBL_SUGGEST_TIP, font, dpi),
+        make_heading(hwnd, "Gõ tắt", 36, 448, bold, dpi),
+        button("Bảng gõ tắt…", 344, 448, 120, 28, IDC_BTN_MACRO),
+        button("Mở rộng…", 472, 448, 132, 28, IDC_BTN_EXTRAS),
+        button("Cho phép gõ tắt", 36, 480, 284, 24, IDC_CHK_MACRO),
+        button("Gõ w thành ư", 344, 480, 260, 24, IDC_CHK_QUICK_W),
+        button("Vẫn gõ tắt khi tắt Tiếng Việt", 36, 504, 284, 24, IDC_CHK_MACRO_EN),
+        button("Gõ [ thành ơ, ] thành ư", 344, 504, 260, 24, IDC_CHK_QUICK_BRK),
+        button("Chỉ kích hoạt gõ tắt bằng Tab", 36, 528, 284, 24, IDC_CHK_MACRO_TAB),
     ]
 }
 
-fn build_tab1(hwnd: HWND, font: HFONT, dpi: i32) -> Tab1Handles {
-    let lbl_switch_custom = make_child(hwnd, "STATIC", "Tổ hợp: -", 0, 44, 274, 304, 22, IDC_LBL_SWITCH_CUSTOM, font, dpi);
-    let cb_hold_en = make_combo(
-        hwnd,
-        284,
-        368,
-        252,
-        28,
-        IDC_HOLD_EN_COMBO,
-        &["Không dùng", "Right Shift", "Left Shift", "Right Alt", "Right Ctrl", "CapsLock"],
-        0,
-        font,
-        dpi,
-    );
-    let lbl_conv_hotkey = make_child(hwnd, "STATIC", "Chuyển mã: Ctrl + Shift + F6", 0, 44, 428, 312, 22, IDC_LBL_CONV_HOTKEY, font, dpi);
-    let lbl_undo_hotkey = make_child(hwnd, "STATIC", "Hoàn tác từ vừa gõ: Không", 0, 44, 460, 312, 22, IDC_LBL_UNDO_HOTKEY, font, dpi);
-    let lbl_conv_sel_hotkey = make_child(hwnd, "STATIC", "Chuyển đổi vùng chọn: Không", 0, 44, 492, 312, 22, IDC_LBL_CONV_SEL_HOTKEY, font, dpi);
-    let ctrls = vec![
-        make_owner_button(hwnd, "Ctrl + Shift", 44, 222, 128, 22, IDC_RAD_CTRL_SHIFT, font, dpi),
-        make_owner_button(hwnd, "Alt + Z", 184, 222, 100, 22, IDC_RAD_ALT_Z, font, dpi),
-        make_owner_button(hwnd, "Ctrl + Space", 296, 222, 132, 22, IDC_RAD_CTRL_SPACE, font, dpi),
-        make_owner_button(hwnd, "Shift + Shift", 44, 248, 128, 22, IDC_RAD_SHIFT_SHIFT, font, dpi),
-        make_owner_button(hwnd, "Phím tùy chọn", 184, 248, 152, 22, IDC_RAD_CUSTOM_KEY, font, dpi),
-        lbl_switch_custom,
-        make_owner_button(hwnd, "Đặt phím tùy chọn", 364, 270, 172, 26, IDC_BTN_CAP_SWITCH, font, dpi),
-        make_owner_button(hwnd, "Phím Esc khôi phục từ gốc", 32, 312, 256, 24, IDC_CHK_ESC_RESTORE, font, dpi),
-        make_owner_button(hwnd, "Âm thanh báo khi chuyển V/E", 300, 312, 248, 24, IDC_CHK_BEEP, font, dpi),
-        make_owner_button(
-            hwnd,
-            "Nhấn nhanh CapsLock chuyển V/E (giữ >250ms đổi Hoa)",
-            32,
-            340,
-            516,
-            24,
-            IDC_CHK_QUICK_CAPS,
-            font,
-            dpi,
-        ),
-        make_child(hwnd, "STATIC", "Giữ phím tạm chuyển Tiếng Anh", 0, 32, 372, 244, 22, IDC_LBL_HOLD_EN, font, dpi),
-        cb_hold_en,
-        lbl_conv_hotkey,
-        make_owner_button(hwnd, "Đổi phím chuyển mã", 364, 424, 172, 26, IDC_BTN_CAP_CONV, font, dpi),
-        lbl_undo_hotkey,
-        make_owner_button(hwnd, "Đổi phím hoàn tác", 364, 456, 172, 26, IDC_BTN_CAP_UNDO, font, dpi),
-        lbl_conv_sel_hotkey,
-        make_owner_button(hwnd, "Đổi phím vùng chọn", 364, 488, 172, 26, IDC_BTN_CAP_CONV_SEL, font, dpi),
-        make_owner_button(hwnd, "Nhập EVKey setting.tree...", 44, 526, 236, 30, IDC_BTN_IMPORT_TREE, font, dpi),
-        make_owner_button(hwnd, "Mở thư mục cấu hình", 296, 526, 240, 30, IDC_BTN_OPEN_CFG_DIR, font, dpi),
+fn build_tab1(hwnd: HWND, font: HFONT, bold: HFONT, dpi: i32) -> Tab1Handles {
+    let button = |text, x, y, w, h, id| make_owner_button(hwnd, text, x, y, w, h, id, font, dpi);
+    let label = |text, x, y, w, id| make_child(hwnd, "STATIC", text, 0x4200, x, y, w, 24, id, font, dpi);
+    let mut ctrls = vec![
+        make_heading(hwnd, "Chuyển Tiếng Việt / Tiếng Anh", 36, 228, bold, dpi),
+        button("Ctrl + Shift", 36, 256, 120, 24, IDC_RAD_CTRL_SHIFT),
+        button("Alt + Z", 164, 256, 92, 24, IDC_RAD_ALT_Z),
+        button("Ctrl + Space", 264, 256, 132, 24, IDC_RAD_CTRL_SPACE),
+        button("Shift + Shift", 404, 256, 200, 24, IDC_RAD_SHIFT_SHIFT),
+        button("Phím tùy chọn", 36, 284, 136, 24, IDC_RAD_CUSTOM_KEY),
     ];
-    Tab1Handles {
-        ctrls,
+    let lbl_switch_custom = label("Tổ hợp tùy chọn: —", 180, 284, 252, IDC_LBL_SWITCH_CUSTOM);
+    ctrls.extend([
         lbl_switch_custom,
-        lbl_conv_hotkey,
-        lbl_undo_hotkey,
-        lbl_conv_sel_hotkey,
+        button("Đặt phím tùy chọn", 444, 280, 160, 32, IDC_BTN_CAP_SWITCH),
+        button("Phím Esc khôi phục từ gốc", 36, 312, 284, 24, IDC_CHK_ESC_RESTORE),
+        button("Âm thanh báo khi chuyển V/E", 344, 312, 260, 24, IDC_CHK_BEEP),
+        button("Nhấn nhanh CapsLock chuyển V/E (giữ >250ms đổi Hoa)", 36, 340, 568, 24, IDC_CHK_QUICK_CAPS),
+        label("Giữ phím tạm chuyển Tiếng Anh", 36, 368, 276, IDC_LBL_HOLD_EN),
+    ]);
+    let cb_hold_en = make_combo(
+        hwnd, 344, 368, 260, 28, IDC_HOLD_EN_COMBO,
+        &["Không dùng", "Right Shift", "Left Shift", "Right Alt", "Right Ctrl", "CapsLock"], 0, font, dpi,
+    );
+    let lbl_conv_hotkey = label("Chuyển mã", 36, 444, 396, IDC_LBL_CONV_HOTKEY);
+    let lbl_undo_hotkey = label("Hoàn tác từ vừa gõ", 36, 472, 396, IDC_LBL_UNDO_HOTKEY);
+    let lbl_conv_sel_hotkey = label("Chuyển đổi vùng chọn", 36, 500, 396, IDC_LBL_CONV_SEL_HOTKEY);
+    ctrls.extend([
         cb_hold_en,
-    }
+        make_heading(hwnd, "Phím tắt công cụ", 36, 416, bold, dpi),
+        lbl_conv_hotkey,
+        button("Đổi phím chuyển mã", 444, 444, 160, 24, IDC_BTN_CAP_CONV),
+        lbl_undo_hotkey,
+        button("Đổi phím hoàn tác", 444, 472, 160, 24, IDC_BTN_CAP_UNDO),
+        lbl_conv_sel_hotkey,
+        button("Đổi phím vùng chọn", 444, 500, 160, 24, IDC_BTN_CAP_CONV_SEL),
+        button("Nhập cấu hình EVKey…", 36, 532, 224, 24, IDC_BTN_IMPORT_TREE),
+        button("Mở thư mục cấu hình", 268, 532, 224, 24, IDC_BTN_OPEN_CFG_DIR),
+    ]);
+    Tab1Handles { ctrls, lbl_switch_custom, lbl_conv_hotkey, lbl_undo_hotkey, lbl_conv_sel_hotkey, cb_hold_en }
 }
 
-fn build_tab2(hwnd: HWND, font: HFONT, dpi: i32) -> Tab2Handles {
-    let cb_theme = make_combo(
-        hwnd,
-        112,
-        296,
-        152,
-        28,
-        IDC_THEME,
-        &["Theo Windows", "Sáng (Light)", "Tối (Dark)"],
-        0,
-        font,
-        dpi,
-    );
-    let edit_sync_path = make_edit(hwnd, "", 160, 334, 292, 28, IDC_EDIT_SYNC_PATH, false, font, dpi);
-    set_cue_banner(edit_sync_path, "Đường dẫn JSON đồng bộ giữa các máy...");
-    let lbl_cur_app = make_child(hwnd, "STATIC", "App gần nhất: -", 0, 44, 404, 492, 24, IDC_LBL_CUR_APP, font, dpi);
-    let admin_btn_txt = if is_elevated() { "Đang chạy Admin" } else { "Mở lại Admin" };
-    let ctrls = vec![
-        make_owner_button(hwnd, "Khởi động cùng Windows", 32, 202, 250, 24, IDC_CHK_AUTOSTART, font, dpi),
-        make_owner_button(hwnd, "Hiện bảng điều khiển khi mở", 296, 202, 252, 24, IDC_CHK_SHOW_START, font, dpi),
-        make_owner_button(hwnd, "Chạy với quyền Admin", 32, 232, 250, 24, IDC_CHK_ADMIN, font, dpi),
-        make_owner_button(hwnd, admin_btn_txt, 364, 228, 172, 28, IDC_BTN_RELAUNCH_ADMIN, font, dpi),
-        make_owner_button(hwnd, "Hiện chỉ báo V/E cạnh con trỏ", 32, 262, 256, 24, IDC_CHK_CARET_OSD, font, dpi),
-        make_owner_button(hwnd, "Tự kiểm tra cập nhật khi mở", 296, 262, 252, 24, IDC_CHK_CHECK_UPDATES, font, dpi),
-        make_child(hwnd, "STATIC", "Giao diện", 0, 32, 300, 76, 22, IDC_LBL_THEME, font, dpi),
-        cb_theme,
-        make_owner_button(hwnd, "Từ điển cá nhân...", 276, 296, 134, 28, IDC_BTN_USER_DICT, font, dpi),
-        make_owner_button(hwnd, "Kiểm tra cập nhật", 418, 296, 130, 28, IDC_BTN_CHECK_UPDATE, font, dpi),
-        make_child(hwnd, "STATIC", "File đồng bộ", 0, 32, 338, 124, 22, IDC_LBL_SYNC_PATH, font, dpi),
-        edit_sync_path,
-        make_owner_button(hwnd, "Chọn...", 460, 334, 88, 28, IDC_BTN_BROWSE_SYNC, font, dpi),
-        lbl_cur_app,
-        make_owner_button(hwnd, "Danh sách ứng dụng...", 44, 436, 236, 32, IDC_BTN_APPS, font, dpi),
-        make_owner_button(hwnd, "Thêm app vào Tiếng Anh", 296, 436, 240, 32, IDC_BTN_ADD_CUR_EN, font, dpi),
-        make_child(hwnd, "STATIC", "Hỗ trợ Luôn Tiếng Anh, Luôn Tiếng Việt & Blacklist", 0x0080, 44, 478, 492, 24, IDC_LBL_APP_HINT, font, dpi),
+fn build_tab2(hwnd: HWND, font: HFONT, bold: HFONT, dpi: i32) -> Tab2Handles {
+    let button = |text, x, y, w, h, id| make_owner_button(hwnd, text, x, y, w, h, id, font, dpi);
+    let label = |text, x, y, w, id| make_child(hwnd, "STATIC", text, 0x4200, x, y, w, 24, id, font, dpi);
+    let admin_btn_txt = if is_elevated() { "Đang chạy Admin" } else { "Mở lại với quyền Admin" };
+    let mut ctrls = vec![
+        make_heading(hwnd, "Khởi động và thông báo", 36, 228, bold, dpi),
+        button("Khởi động cùng Windows", 36, 252, 284, 24, IDC_CHK_AUTOSTART),
+        button("Hiện bảng điều khiển khi mở", 344, 252, 260, 24, IDC_CHK_SHOW_START),
+        button("Chạy với quyền Admin", 36, 276, 284, 24, IDC_CHK_ADMIN),
+        button(admin_btn_txt, 344, 276, 176, 24, IDC_BTN_RELAUNCH_ADMIN),
+        button("Hiện chỉ báo V/E cạnh con trỏ", 36, 300, 284, 24, IDC_CHK_CARET_OSD),
+        button("Tự kiểm tra cập nhật khi mở", 344, 300, 260, 24, IDC_CHK_CHECK_UPDATES),
+        make_heading(hwnd, "Giao diện và dữ liệu", 36, 348, bold, dpi),
+        label("Giao diện", 36, 376, 84, IDC_LBL_THEME),
     ];
-    Tab2Handles {
-        ctrls,
+    let cb_theme = make_combo(
+        hwnd, 128, 376, 176, 28, IDC_THEME, &["Theo Windows", "Sáng", "Tối"], 0, font, dpi,
+    );
+    let edit_sync_path = make_edit(hwnd, "", 128, 408, 380, 28, IDC_EDIT_SYNC_PATH, false, font, dpi);
+    set_cue_banner(edit_sync_path, "Đường dẫn JSON đồng bộ giữa các máy");
+    let lbl_cur_app = label("Gần nhất: —", 36, 488, 300, IDC_LBL_CUR_APP);
+    ctrls.extend([
         cb_theme,
-        lbl_cur_app,
+        button("Từ điển cá nhân…", 320, 376, 132, 28, IDC_BTN_USER_DICT),
+        button("Kiểm tra cập nhật", 460, 376, 144, 28, IDC_BTN_CHECK_UPDATE),
+        label("Tệp đồng bộ", 36, 408, 84, IDC_LBL_SYNC_PATH),
         edit_sync_path,
-    }
+        button("Chọn…", 516, 408, 88, 28, IDC_BTN_BROWSE_SYNC),
+        make_heading(hwnd, "Quy tắc theo ứng dụng", 36, 460, bold, dpi),
+        lbl_cur_app,
+        label("Luôn tiếng Việt, tiếng Anh hoặc bỏ qua", 344, 488, 260, IDC_LBL_APP_HINT),
+        button("Danh sách ứng dụng…", 36, 520, 240, 32, IDC_BTN_APPS),
+        button("Thêm app vào Tiếng Anh", 284, 520, 240, 32, IDC_BTN_ADD_CUR_EN),
+    ]);
+    Tab2Handles { ctrls, cb_theme, lbl_cur_app, edit_sync_path }
+}
+
+fn make_heading(hwnd: HWND, text: &str, x: i32, y: i32, font: HFONT, dpi: i32) -> HWND {
+    make_child(hwnd, "STATIC", text, 0x0200, x, y, 260, 24, IDC_LBL_SECTION, font, dpi)
 }
 
 fn build_footer(hwnd: HWND, font: HFONT, dpi: i32) {
-    make_owner_button(hwnd, "Th.Lập mặc định", 16, 590, 136, 32, IDC_BTN_DEFAULT, font, dpi);
-    make_owner_button(hwnd, "Lưu", 160, 590, 96, 32, IDC_BTN_SAVE, font, dpi);
-    make_child(hwnd, "STATIC", concat!("MS Key v", env!("CARGO_PKG_VERSION"), " • Tiếng Việt Unicode"), 0x0082, 272, 594, 292, 24, IDC_LBL_FOOTER_VER, font, dpi);
+    make_child(hwnd, "STATIC", concat!("Phiên bản ", env!("CARGO_PKG_VERSION")), 0x0200, 20, 584, 184, 28, IDC_LBL_FOOTER_VER, font, dpi);
+    make_owner_button(hwnd, "Khôi phục mặc định", 240, 584, 136, 28, IDC_BTN_DEFAULT, font, dpi);
+    make_owner_button(hwnd, "Thoát", 384, 584, 72, 28, IDC_BTN_EXIT, font, dpi);
+    make_owner_button(hwnd, "Đóng", 464, 584, 64, 28, IDC_BTN_CLOSE, font, dpi);
+    make_owner_button(hwnd, "Lưu", 536, 584, 84, 28, IDC_BTN_SAVE, font, dpi);
 }
