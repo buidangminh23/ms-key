@@ -1,4 +1,5 @@
-use std::time::Duration;
+use std::cell::{Cell, RefCell};
+use std::time::{Duration, Instant};
 
 use mskey_core::{
     CaseTransform, Charset, Config, ConvertEncoding, EngineAction, Mechanism, convert_with_encoding,
@@ -16,6 +17,47 @@ use crate::platform::write_clipboard_text;
 use crate::platform_extra::write_clipboard_for_paste_with_restore;
 
 pub const MSKEY_EXTRA_INFO: usize = 0x4D53_4B59;
+const BATCH_MARKER: usize = 0x4D54_0000;
+const MAX_BATCH_AGE: Duration = Duration::from_secs(1);
+
+thread_local! {
+    static NEXT_BATCH: Cell<u16> = const { Cell::new(0) };
+    static PENDING_BATCHES: RefCell<Vec<(usize, Instant)>> = const { RefCell::new(Vec::new()) };
+}
+
+pub fn output_pending() -> bool {
+    PENDING_BATCHES.with_borrow_mut(|batches| {
+        batches.retain(|(_, start)| start.elapsed() < MAX_BATCH_AGE);
+        !batches.is_empty()
+    })
+}
+
+pub fn acknowledge_output(marker: usize) {
+    if marker & !0xffff == BATCH_MARKER {
+        PENDING_BATCHES.with_borrow_mut(|batches| batches.retain(|(id, _)| *id != marker));
+    }
+}
+
+pub fn clear_pending_output() {
+    PENDING_BATCHES.with_borrow_mut(Vec::clear);
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Delivery {
+    Complete,
+    Rejected,
+    Partial,
+}
+
+impl Delivery {
+    fn from_counts(complete: bool, inserted: usize) -> Self {
+        match (complete, inserted) {
+            (true, _) => Self::Complete,
+            (false, 0) => Self::Rejected,
+            (false, _) => Self::Partial,
+        }
+    }
+}
 
 pub struct ReplacePayload {
     pub backspaces: usize,
@@ -70,7 +112,29 @@ fn should_cycle_modifiers(
         || p.standard_key_send
 }
 
-pub fn dispatch_payload(p: ReplacePayload) {
+pub fn dispatch_payload(p: ReplacePayload, cursor_left: usize) -> Delivery {
+    dispatch_payload_with(p, cursor_left, send_slice)
+}
+
+pub(super) fn dispatch_payload_with(
+    p: ReplacePayload,
+    cursor_left: usize,
+    mut submit: impl FnMut(&[INPUT]) -> usize,
+) -> Delivery {
+    let mut inserted = 0;
+    let complete = write_payload(p, cursor_left, |inputs| {
+        let count = send_ordered_with(inputs, &mut submit);
+        inserted += count;
+        count == inputs.len()
+    });
+    Delivery::from_counts(complete, inserted)
+}
+
+fn write_payload(
+    p: ReplacePayload,
+    cursor_left: usize,
+    mut send: impl FnMut(&mut [INPUT]) -> bool,
+) -> bool {
     let scan_mode = p.standard_key_send;
     let step_delay = effective_step_delay(&p);
     let restore_before_trailing = matches!(p.trailing_vk, Some(VK_RETURN | VK_TAB));
@@ -107,10 +171,16 @@ pub fn dispatch_payload(p: ReplacePayload) {
         && p.use_clipboard
         && write_clipboard_for_paste_with_restore(&p.text)
     {
-        send_slice(&pre);
+        if !send(&mut pre) {
+            return false;
+        }
         pre.clear();
         sleep_precise_ms(step_delay.clamp(6, 12));
-        send_paste_combo(p.paste_via_shift_insert, scan_mode);
+        push_paste_combo(&mut pre, p.paste_via_shift_insert, scan_mode);
+        if !send(&mut pre) {
+            return false;
+        }
+        pre.clear();
         if p.trailing_vk.is_some() || !held_mods.is_empty() {
             sleep_precise_ms(8);
         }
@@ -138,7 +208,10 @@ pub fn dispatch_payload(p: ReplacePayload) {
     }
 
     pre.extend_from_slice(&post);
-    send_slice(&pre);
+    for _ in 0..cursor_left {
+        push_vk_tap(&mut pre, VK_LEFT, true, false);
+    }
+    send(&mut pre)
 }
 
 fn sleep_precise_ms(ms: u32) {
@@ -154,15 +227,23 @@ fn sleep_precise_ms(ms: u32) {
     }
 }
 
-pub fn send_cursor_left(steps: usize) {
-    if steps == 0 {
-        return;
+pub fn forward_typing_key(vk: u16, literal: Option<char>) -> Delivery {
+    forward_typing_key_with(vk, literal, send_slice)
+}
+
+pub(super) fn forward_typing_key_with(
+    vk: u16,
+    literal: Option<char>,
+    submit: impl FnMut(&[INPUT]) -> usize,
+) -> Delivery {
+    let mut inputs = Vec::with_capacity(2);
+    if let Some(ch) = literal {
+        push_unicode_char(&mut inputs, ch);
+    } else {
+        push_vk_tap(&mut inputs, vk, false, false);
     }
-    let mut inputs = Vec::with_capacity(steps * 2);
-    for _ in 0..steps {
-        push_vk_tap(&mut inputs, VK_LEFT, true, false);
-    }
-    send_slice(&inputs);
+    let count = send_ordered_with(&mut inputs, submit);
+    Delivery::from_counts(count == inputs.len(), count)
 }
 
 pub fn send_capslock_tap() {
@@ -196,30 +277,53 @@ fn effective_step_delay(p: &ReplacePayload) -> u32 {
     }
 }
 
-fn send_paste_combo(shift_insert: bool, scan_mode: bool) {
-    let mut paste = Vec::with_capacity(4);
+fn push_paste_combo(paste: &mut Vec<INPUT>, shift_insert: bool, scan_mode: bool) {
     if shift_insert {
-        push_vk(&mut paste, VK_LSHIFT, true, false, scan_mode);
-        push_vk_tap(&mut paste, VK_INSERT, true, scan_mode);
-        push_vk(&mut paste, VK_LSHIFT, false, false, scan_mode);
+        push_vk(paste, VK_LSHIFT, true, false, scan_mode);
+        push_vk_tap(paste, VK_INSERT, true, scan_mode);
+        push_vk(paste, VK_LSHIFT, false, false, scan_mode);
     } else {
-        push_vk(&mut paste, VK_LCONTROL, true, false, scan_mode);
-        push_vk_tap(&mut paste, b'V' as u16, false, scan_mode);
-        push_vk(&mut paste, VK_LCONTROL, false, false, scan_mode);
+        push_vk(paste, VK_LCONTROL, true, false, scan_mode);
+        push_vk_tap(paste, b'V' as u16, false, scan_mode);
+        push_vk(paste, VK_LCONTROL, false, false, scan_mode);
     }
-    send_slice(&paste);
 }
 
-fn send_slice(inputs: &[INPUT]) {
+fn send_ordered_with(inputs: &mut [INPUT], mut submit: impl FnMut(&[INPUT]) -> usize) -> usize {
+    let Some(last) = inputs.last_mut() else {
+        return 0;
+    };
+    let marker = NEXT_BATCH.with(|next| {
+        next.set(next.get().wrapping_add(1));
+        BATCH_MARKER | usize::from(next.get())
+    });
+    last.Anonymous.ki.dwExtraInfo = marker;
+    PENDING_BATCHES.with_borrow_mut(|batches| {
+        batches.retain(|(_, start)| start.elapsed() < MAX_BATCH_AGE);
+        batches.push((marker, Instant::now()));
+    });
+    let mut inserted = 0;
+    while inserted < inputs.len() {
+        let count = submit(&inputs[inserted..]);
+        if count == 0 {
+            acknowledge_output(marker);
+            break;
+        }
+        inserted += count;
+    }
+    inserted
+}
+
+fn send_slice(inputs: &[INPUT]) -> usize {
     if inputs.is_empty() {
-        return;
+        return 0;
     }
     unsafe {
         SendInput(
             inputs.len() as u32,
             inputs.as_ptr(),
             std::mem::size_of::<INPUT>() as i32,
-        );
+        ) as usize
     }
 }
 
@@ -355,6 +459,33 @@ pub fn convert_clipboard_now(target: Charset) {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn failed_delivery_retries_only_the_unsent_suffix_and_releases_its_marker() {
+        assert_eq!(
+            forward_typing_key_with(0x42, Some('b'), |_| 0),
+            Delivery::Rejected
+        );
+        assert!(!output_pending());
+
+        let mut lengths = Vec::new();
+        let result = forward_typing_key_with(0x42, Some('b'), |events| {
+            lengths.push(events.len());
+            usize::from(events.len() == 2)
+        });
+        assert_eq!(lengths, [2, 1]);
+        assert_eq!(result, Delivery::Partial);
+        assert!(!output_pending());
+
+        let result = forward_typing_key_with(0x42, Some('b'), |events| {
+            if events.len() == 1 {
+                acknowledge_output(unsafe { events[0].Anonymous.ki.dwExtraInfo });
+            }
+            1
+        });
+        assert_eq!(result, Delivery::Complete);
+        assert!(!output_pending());
+    }
 
     #[test]
     fn browser_process_excludes_electron_ides_and_terminals() {

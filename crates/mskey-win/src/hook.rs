@@ -19,8 +19,8 @@ use windows_sys::Win32::UI::WindowsAndMessaging::{
 };
 
 use crate::hook_send::{
-    MSKEY_EXTRA_INFO, ReplacePayload, convert_clipboard_now, dispatch_payload, send_capslock_tap,
-    send_cursor_left,
+    Delivery, MSKEY_EXTRA_INFO, ReplacePayload, acknowledge_output, clear_pending_output,
+    convert_clipboard_now, dispatch_payload, forward_typing_key, output_pending, send_capslock_tap,
 };
 use crate::platform::{
     play_switch_beep, query_foreground_info, query_window_title, save_config,
@@ -140,6 +140,9 @@ fn refresh_foreground() {
         caps.reset();
     }
     let (notify_hw, changed_ve, is_vi, caret_on) = with_state(|st| {
+        if st.fg_hwnd != hwnd as usize {
+            clear_pending_output();
+        }
         let before_active = st.effective_vietnamese();
         let before_blacklisted = st.is_blacklisted();
         st.engine.set_temporary_english(false);
@@ -234,6 +237,7 @@ unsafe extern "system" fn keyboard_proc(code: i32, wparam: WPARAM, lparam: LPARA
     }
     let kb = unsafe { &*(lparam as *const KBDLLHOOKSTRUCT) };
     if (kb.flags & LLKHF_INJECTED) != 0 || kb.dwExtraInfo == MSKEY_EXTRA_INFO {
+        acknowledge_output(kb.dwExtraInfo);
         return unsafe { CallNextHookEx(ptr::null_mut(), code, wparam, lparam) };
     }
     let msg = wparam as u32;
@@ -244,23 +248,28 @@ unsafe extern "system" fn keyboard_proc(code: i32, wparam: WPARAM, lparam: LPARA
     }
 
     let vk = kb.vkCode as u16;
-    match handle_key_event(vk, kb.scanCode, is_down, is_up) {
-        KeyDecision::Pass => unsafe { CallNextHookEx(ptr::null_mut(), code, wparam, lparam) },
-        KeyDecision::Consume => 1,
+    let delivery = match handle_key_event(vk, kb.scanCode, is_down, is_up) {
+        KeyDecision::Pass => return unsafe { CallNextHookEx(ptr::null_mut(), code, wparam, lparam) },
+        KeyDecision::Consume => return 1,
+        KeyDecision::Forward(literal) => forward_typing_key(vk, literal),
         KeyDecision::Inject(payload) => {
-            dispatch_payload(payload);
             let steps = with_state(|st| st.engine.take_pending_cursor_left());
-            if steps > 0 {
-                send_cursor_left(steps);
-            }
-            1
+            dispatch_payload(payload, steps)
         }
+    };
+    if delivery != Delivery::Complete {
+        with_state(|st| st.engine.reset_all());
     }
+    if delivery == Delivery::Rejected {
+        return unsafe { CallNextHookEx(ptr::null_mut(), code, wparam, lparam) };
+    }
+    1
 }
 
 enum KeyDecision {
     Pass,
     Consume,
+    Forward(Option<char>),
     Inject(ReplacePayload),
 }
 
@@ -672,18 +681,18 @@ fn dispatch_typing_key(st: &mut AppState, vk: u16, scan: u32) -> KeyDecision {
         return map_action(
             st.engine.process_backspace(),
             None,
+            None,
             &cfg,
-            &st.fg_class,
-            &st.fg_process,
+            st,
         );
     }
     if vk == VK_ESCAPE {
         return map_action(
             st.engine.process_escape(),
             None,
+            None,
             &cfg,
-            &st.fg_class,
-            &st.fg_process,
+            st,
         );
     }
     if is_reset_navigation_vk(vk) {
@@ -695,9 +704,9 @@ fn dispatch_typing_key(st: &mut AppState, vk: u16, scan: u32) -> KeyDecision {
         return map_action(
             st.engine.process_delimiter('\n'),
             Some(VK_RETURN),
+            None,
             &cfg,
-            &st.fg_class,
-            &st.fg_process,
+            st,
         );
     }
     if vk == VK_TAB {
@@ -705,9 +714,9 @@ fn dispatch_typing_key(st: &mut AppState, vk: u16, scan: u32) -> KeyDecision {
         return map_action(
             st.engine.process_delimiter('\t'),
             Some(VK_TAB),
+            None,
             &cfg,
-            &st.fg_class,
-            &st.fg_process,
+            st,
         );
     }
     let Some(ch) = translate_vk_to_char(vk, scan, st.shift_down, st.caps_lock_on) else {
@@ -720,9 +729,9 @@ fn dispatch_typing_key(st: &mut AppState, vk: u16, scan: u32) -> KeyDecision {
     map_action(
         st.engine.process_key(ch),
         trailing,
+        trailing.is_none().then_some(ch),
         &cfg,
-        &st.fg_class,
-        &st.fg_process,
+        st,
     )
 }
 
@@ -857,12 +866,15 @@ fn is_reset_navigation_vk(vk: u16) -> bool {
 fn map_action(
     act: EngineAction,
     trailing_vk: Option<u16>,
+    literal: Option<char>,
     cfg: &mskey_core::Config,
-    fg_class: &str,
-    fg_process: &str,
+    st: &AppState,
 ) -> KeyDecision {
-    match crate::hook_send::build_replace_payload(act, trailing_vk, cfg, fg_class, fg_process) {
+    match crate::hook_send::build_replace_payload(act, trailing_vk, cfg, &st.fg_class, &st.fg_process) {
         Some(p) => KeyDecision::Inject(p),
+        None if (literal.is_some() || !st.shift_down) && output_pending() => {
+            KeyDecision::Forward(literal)
+        }
         None => KeyDecision::Pass,
     }
 }
@@ -905,4 +917,62 @@ fn translate_vk_to_char(vk: u16, scan: u32, shift_down: bool, caps_on: bool) -> 
         return None;
     }
     char::from_u32(out[0] as u32).filter(|c| !c.is_control())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::hook_send::{dispatch_payload_with, forward_typing_key_with};
+    use mskey_core::{Config, Mechanism};
+    use windows_sys::Win32::UI::Input::KeyboardAndMouse::{INPUT, KEYEVENTF_KEYUP, KEYEVENTF_UNICODE};
+
+    #[test]
+    fn pending_replacements_preserve_printable_keys_and_word_boundaries() {
+        let cfg = Config {
+            mechanism: Mechanism::CompatibleHook,
+            ..Config::default()
+        };
+        for (keys, expected) in [("asb", "áb"), ("tieengs vieetj laf ", "tiếng việt là ")] {
+            let mut st = AppState::new(cfg.clone());
+            let mut field = String::new();
+            let mut queued = Vec::new();
+            for ch in keys.chars() {
+                let space = (ch == ' ').then_some(VK_SPACE);
+                let literal = space.is_none().then_some(ch);
+                let action = st.engine.process_key(ch);
+                let decision = map_action(action, space, literal, &cfg, &st);
+                let mut submit = |events: &[INPUT]| {
+                    queued.extend_from_slice(events);
+                    events.len()
+                };
+                match decision {
+                    KeyDecision::Pass => field.push(ch),
+                    KeyDecision::Inject(payload) => {
+                        assert_eq!(dispatch_payload_with(payload, 0, &mut submit), Delivery::Complete);
+                    }
+                    KeyDecision::Forward(literal) => {
+                        let vk = ch.to_ascii_uppercase() as u16;
+                        assert_eq!(forward_typing_key_with(vk, literal, submit), Delivery::Complete);
+                    }
+                    KeyDecision::Consume => panic!("unexpected swallowed key"),
+                }
+            }
+            assert!(output_pending());
+            for event in queued {
+                let key = unsafe { event.Anonymous.ki };
+                if key.dwFlags & KEYEVENTF_KEYUP == 0 {
+                    if key.dwFlags & KEYEVENTF_UNICODE != 0 {
+                        field.push(char::from_u32(u32::from(key.wScan)).unwrap());
+                    } else if key.wVk == VK_SPACE {
+                        field.push(' ');
+                    } else if key.wVk == VK_BACK {
+                        field.pop();
+                    }
+                }
+                acknowledge_output(key.dwExtraInfo);
+            }
+            assert_eq!(field, expected);
+            assert!(!output_pending());
+        }
+    }
 }

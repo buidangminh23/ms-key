@@ -1,3 +1,4 @@
+import AppKit
 import ApplicationServices
 import Carbon
 import Foundation
@@ -5,6 +6,81 @@ import XCTest
 @testable import MSKeyKit
 
 final class MSKeyMacTests: XCTestCase {
+    @MainActor
+    func testVietnameseSentenceInTextView() throws {
+        _ = NSApplication.shared
+        let frame = NSRect(x: 0, y: 0, width: 480, height: 100)
+        let window = NSWindow(contentRect: frame, styleMask: .borderless, backing: .buffered, defer: true)
+        let editor = NSTextView(frame: frame)
+        editor.isAutomaticSpellingCorrectionEnabled = false
+        editor.isAutomaticTextCompletionEnabled = false
+        window.contentView = editor
+        XCTAssertTrue(window.makeFirstResponder(editor))
+        XCTAssertFalse(window.isVisible)
+
+        func typeKey(_ keyCode: CGKeyCode, _ string: String) throws {
+            let event = try XCTUnwrap(CGEvent(keyboardEventSource: nil, virtualKey: keyCode, keyDown: true))
+            var units = Array(string.utf16)
+            event.keyboardSetUnicodeString(stringLength: units.count, unicodeString: &units)
+            editor.interpretKeyEvents([try XCTUnwrap(NSEvent(cgEvent: event))])
+        }
+
+        let keyCodes = Dictionary(uniqueKeysWithValues: (UInt16(0)...UInt16(50)).compactMap { code -> (UInt32, UInt16)? in
+            let vk = MacKeycode.toPortableVK(code)
+            return (65...90).contains(vk) ? (vk + 32, code) : nil
+        })
+        let expected = "bị nuốt nhiều chữ khi gõ chế độ tiếng việt ý "
+        for keys in [
+            "bij nuoots nhieeuf chuwx khi gox chees ddooj tieengs vieetj ys ",
+            "bij nuoost nhieefu chuwx khi gox chees ddooj tieesng vieejt ys ",
+        ] {
+            let engine = RustEngine()
+            editor.string = ""
+            for scalar in keys.unicodeScalars {
+                let action = engine.processKey(scalar: scalar.value)
+                if action.replace {
+                    for _ in 0..<action.backspaces { try typeKey(CGKeyCode(kVK_Delete), "\u{7F}") }
+                    CGEventEmitter.postUnicodeText(action.text, paceEachKey: false, delayMs: 0) { event in
+                        if event.type == .keyDown, let key = NSEvent(cgEvent: event) {
+                            editor.interpretKeyEvents([key])
+                        }
+                    }
+                } else {
+                    let keyCode = scalar == " " ? UInt16(kVK_Space) : try XCTUnwrap(keyCodes[scalar.value])
+                    try typeKey(keyCode, String(scalar))
+                }
+            }
+            XCTAssertEqual(editor.string, expected, keys)
+        }
+        XCTAssertFalse(window.isVisible)
+    }
+
+    func testUnicodeReplacementDeliversEveryScalarAsAKeyPair() {
+        let text = "tiếng Việt là 📝e\u{301}"
+        for paced in [false, true] {
+            var scalars: [UInt32] = []
+            var eventTypes: [CGEventType] = []
+            CGEventEmitter.postUnicodeText(text, paceEachKey: paced, delayMs: 0) { event in
+                XCTAssertEqual(event.getIntegerValueField(.eventSourceUserData), mskeyEventTag)
+                eventTypes.append(event.type)
+                if let scalar = EventTapManager.extractScalar(from: event, keyCode: 0) {
+                    scalars.append(scalar)
+                }
+            }
+            XCTAssertEqual(scalars, text.unicodeScalars.flatMap { [$0.value, $0.value] })
+            XCTAssertEqual(eventTypes, text.unicodeScalars.flatMap { _ in [CGEventType.keyDown, .keyUp] })
+        }
+    }
+
+    func testMultiCharacterInputPassesThroughWithoutStartingAWord() throws {
+        let event = try XCTUnwrap(CGEvent(keyboardEventSource: nil, virtualKey: 0, keyDown: true))
+        for text in ["as", "được", "e\u{301}", "📝x", "nhiều chữ"] {
+            var units = Array(text.utf16)
+            event.keyboardSetUnicodeString(stringLength: units.count, unicodeString: &units)
+            XCTAssertNil(EventTapManager.extractScalar(from: event, keyCode: 0), text)
+        }
+    }
+
     private func typeTelex(_ engine: RustEngine, _ input: String) -> String {
         var out = ""
         for scalar in input.unicodeScalars {

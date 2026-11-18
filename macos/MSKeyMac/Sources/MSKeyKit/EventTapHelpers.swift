@@ -94,39 +94,23 @@ enum CGEventEmitter {
         }
     }
 
-    static func postUnicodeText(_ text: String, singleChar: Bool, delayMs: Int, proxy: CGEventTapProxy) {
+    static func postUnicodeText(_ text: String, paceEachKey: Bool, delayMs: Int, post: (CGEvent) -> Void) {
         let src = CGEventSource(stateID: .privateState)
-        if singleChar {
-            for scalar in text.unicodeScalars {
-                var units = Array(String(scalar).utf16)
-                postUnicodeUnits(&units, src: src, delayMs: delayMs, proxy: proxy)
+        for scalar in text.unicodeScalars {
+            var units = Array(String(scalar).utf16)
+            guard let down = CGEvent(keyboardEventSource: src, virtualKey: 0, keyDown: true),
+                  let up = CGEvent(keyboardEventSource: src, virtualKey: 0, keyDown: false) else { return }
+            for event in [down, up] {
+                event.flags = []
+                event.setIntegerValueField(.eventSourceUserData, value: mskeyEventTag)
+                event.keyboardSetUnicodeString(stringLength: units.count, unicodeString: &units)
+                post(event)
             }
-            return
+            if paceEachKey && delayMs > 0 {
+                usleep(UInt32(delayMs) * 1000)
+            }
         }
-        let units = Array(text.utf16)
-        var offset = 0
-        while offset < units.count {
-            let end = min(offset + 16, units.count)
-            var slice = Array(units[offset..<end])
-            postUnicodeUnits(&slice, src: src, delayMs: delayMs, proxy: proxy)
-            offset = end
-        }
-    }
-
-    private static func postUnicodeUnits(_ units: inout [UniChar], src: CGEventSource?, delayMs: Int, proxy: CGEventTapProxy) {
-        guard let down = CGEvent(keyboardEventSource: src, virtualKey: 0, keyDown: true),
-              let up = CGEvent(keyboardEventSource: src, virtualKey: 0, keyDown: false) else {
-            return
-        }
-        down.flags = []
-        up.flags = []
-        down.setIntegerValueField(.eventSourceUserData, value: mskeyEventTag)
-        up.setIntegerValueField(.eventSourceUserData, value: mskeyEventTag)
-        down.keyboardSetUnicodeString(stringLength: units.count, unicodeString: &units)
-        up.keyboardSetUnicodeString(stringLength: units.count, unicodeString: &units)
-        down.tapPostEvent(proxy)
-        up.tapPostEvent(proxy)
-        if delayMs > 0 {
+        if !paceEachKey && delayMs > 0 {
             usleep(UInt32(delayMs) * 1000)
         }
     }

@@ -399,6 +399,10 @@ public final class EventTapManager: @unchecked Sendable {
     ) -> Unmanaged<CGEvent>? {
         if type == .tapDisabledByTimeout || type == .tapDisabledByUserInput {
             lock.lock()
+            rust.resetAll()
+            rust.setTemporaryEnglish(false)
+            hotkeys.reset()
+            bufferActive = false
             let tap = eventTap
             lock.unlock()
             if let tap { CGEvent.tapEnable(tap: tap, enable: true) }
@@ -600,7 +604,7 @@ public final class EventTapManager: @unchecked Sendable {
             bufferActive = false
             lock.unlock()
             return Unmanaged.passUnretained(event)
-        } else if let scalar = extractScalar(from: event, keyCode: keyCode) {
+        } else if let scalar = Self.extractScalar(from: event, keyCode: keyCode) {
             let needsClipboard = config.macro_enabled
                 && config.macros.contains(where: { $0.enabled && $0.expansion.contains("{clipboard}") })
                 && rust.isActiveDelimiter(scalar: scalar)
@@ -645,15 +649,15 @@ public final class EventTapManager: @unchecked Sendable {
         }
     }
 
-    private func extractScalar(from event: CGEvent, keyCode: UInt16) -> UInt32? {
+    static func extractScalar(from event: CGEvent, keyCode: UInt16) -> UInt32? {
         if Int(keyCode) == kVK_Return || Int(keyCode) == kVK_ANSI_KeypadEnter { return 10 }
         if Int(keyCode) == kVK_Tab { return 9 }
         var length = 0
         var chars = [UniChar](repeating: 0, count: 4)
         event.keyboardGetUnicodeString(maxStringLength: 4, actualStringLength: &length, unicodeString: &chars)
-        guard length > 0 else { return nil }
-        let s = String(utf16CodeUnits: Array(chars.prefix(length)), count: length)
-        return s.unicodeScalars.first?.value
+        guard (1...2).contains(length) else { return nil }
+        let scalars = String(decoding: chars.prefix(length), as: UTF16.self).unicodeScalars
+        return scalars.count == 1 ? scalars.first?.value : nil
     }
 
     private func applyAction(
@@ -679,7 +683,7 @@ public final class EventTapManager: @unchecked Sendable {
 
         if act.backspaces > 0 {
             if opts.browserFix1 {
-                CGEventEmitter.postUnicodeText("\u{200B}", singleChar: true, delayMs: opts.delayMs, proxy: proxy)
+                CGEventEmitter.postUnicodeText("\u{200B}", paceEachKey: true, delayMs: opts.delayMs) { $0.tapPostEvent(proxy) }
                 CGEventEmitter.postBackspaces(1, delayMs: opts.delayMs, proxy: proxy)
             }
             if opts.browserFix2 {
@@ -691,7 +695,7 @@ public final class EventTapManager: @unchecked Sendable {
             if opts.useClipboard && body.count > 1 {
                 emitViaPasteboard(body, pasteShiftInsert: opts.pasteShiftInsert, delayMs: opts.delayMs, proxy: proxy)
             } else {
-                CGEventEmitter.postUnicodeText(body, singleChar: opts.standardMode, delayMs: opts.delayMs, proxy: proxy)
+                CGEventEmitter.postUnicodeText(body, paceEachKey: opts.standardMode, delayMs: opts.delayMs) { $0.tapPostEvent(proxy) }
             }
         }
         if let trailingVK {

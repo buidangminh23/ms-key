@@ -2,6 +2,13 @@
 
 All notable changes to MS Key are documented here. The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and the project uses [Semantic Versioning](https://semver.org/).
 
+## [0.2.3] - 2026-11-18
+
+### Fixed
+
+- On Windows, rapid typing keeps subsequent text behind pending Vietnamese replacements. If Windows rejects a replacement entirely, MS Key lets the original key through.
+- On macOS, MS Key sends each Unicode scalar in its own key event, preserves incoming multi-character events and clears stale composition when the event tap resumes.
+
 ## [0.2.2] - 2026-11-17
 
 ### Fixed
