@@ -924,55 +924,127 @@ mod tests {
     use super::*;
     use crate::hook_send::{dispatch_payload_with, forward_typing_key_with};
     use mskey_core::{Config, Mechanism};
-    use windows_sys::Win32::UI::Input::KeyboardAndMouse::{INPUT, KEYEVENTF_KEYUP, KEYEVENTF_UNICODE};
+    use std::collections::VecDeque;
+    use windows_sys::Win32::UI::Input::KeyboardAndMouse::{
+        INPUT, KEYEVENTF_KEYUP, KEYEVENTF_UNICODE,
+    };
+    use windows_sys::Win32::UI::WindowsAndMessaging::{
+        CreateWindowExW, DestroyWindow, GetWindowTextLengthW, GetWindowTextW, SendMessageW,
+        WM_CHAR, WS_POPUP,
+    };
 
-    #[test]
-    fn pending_replacements_preserve_printable_keys_and_word_boundaries() {
-        let cfg = Config {
-            mechanism: Mechanism::CompatibleHook,
-            ..Config::default()
-        };
-        for (keys, expected) in [("asb", "áb"), ("tieengs vieetj laf ", "tiếng việt là ")] {
-            let mut st = AppState::new(cfg.clone());
-            let mut field = String::new();
-            let mut queued = Vec::new();
-            for ch in keys.chars() {
-                let space = (ch == ' ').then_some(VK_SPACE);
-                let literal = space.is_none().then_some(ch);
-                let action = st.engine.process_key(ch);
-                let decision = map_action(action, space, literal, &cfg, &st);
-                let mut submit = |events: &[INPUT]| {
-                    queued.extend_from_slice(events);
-                    events.len()
-                };
-                match decision {
-                    KeyDecision::Pass => field.push(ch),
-                    KeyDecision::Inject(payload) => {
-                        assert_eq!(dispatch_payload_with(payload, 0, &mut submit), Delivery::Complete);
-                    }
-                    KeyDecision::Forward(literal) => {
-                        let vk = ch.to_ascii_uppercase() as u16;
-                        assert_eq!(forward_typing_key_with(vk, literal, submit), Delivery::Complete);
-                    }
-                    KeyDecision::Consume => panic!("unexpected swallowed key"),
-                }
-            }
-            assert!(output_pending());
-            for event in queued {
+    struct HiddenEdit(HWND);
+
+    impl HiddenEdit {
+        fn new() -> Self {
+            let hwnd = unsafe {
+                CreateWindowExW(
+                    0, windows_sys::w!("EDIT"), ptr::null(), WS_POPUP, 0, 0, 240, 40,
+                    ptr::null_mut(), ptr::null_mut(), ptr::null_mut(), ptr::null(),
+                )
+            };
+            assert!(!hwnd.is_null());
+            Self(hwnd)
+        }
+
+        fn input(&self, unit: u16) {
+            unsafe { SendMessageW(self.0, WM_CHAR, WPARAM::from(unit), 1) };
+        }
+
+        fn text(&self) -> String {
+            let len = unsafe { GetWindowTextLengthW(self.0) };
+            let mut text = vec![0; len as usize + 1];
+            let read = unsafe { GetWindowTextW(self.0, text.as_mut_ptr(), len + 1) };
+            String::from_utf16(&text[..read as usize]).unwrap()
+        }
+
+        fn deliver(&self, events: &mut VecDeque<INPUT>, count: usize) {
+            for event in events.drain(..count.min(events.len())) {
                 let key = unsafe { event.Anonymous.ki };
                 if key.dwFlags & KEYEVENTF_KEYUP == 0 {
                     if key.dwFlags & KEYEVENTF_UNICODE != 0 {
-                        field.push(char::from_u32(u32::from(key.wScan)).unwrap());
-                    } else if key.wVk == VK_SPACE {
-                        field.push(' ');
-                    } else if key.wVk == VK_BACK {
-                        field.pop();
+                        self.input(key.wScan);
+                    } else if matches!(key.wVk, VK_SPACE | VK_BACK) {
+                        self.input(key.wVk);
+                    } else {
+                        panic!("unexpected virtual key {}", key.wVk);
                     }
                 }
                 acknowledge_output(key.dwExtraInfo);
             }
-            assert_eq!(field, expected);
-            assert!(!output_pending());
+        }
+    }
+
+    impl Drop for HiddenEdit {
+        fn drop(&mut self) {
+            unsafe { DestroyWindow(self.0) };
+        }
+    }
+
+    fn type_into_edit(keys: &str, events_per_key: usize) -> String {
+        let cfg = Config {
+            mechanism: Mechanism::CompatibleHook,
+            ..Config::default()
+        };
+        let mut st = AppState::new(cfg.clone());
+        let field = HiddenEdit::new();
+        let mut queued = VecDeque::new();
+        for ch in keys.chars() {
+            st.shift_down = ch.is_ascii_uppercase();
+            let space = (ch == ' ').then_some(VK_SPACE);
+            let backspace = ch == '\x08';
+            let literal = (space.is_none() && !backspace).then_some(ch);
+            let action = if backspace {
+                st.engine.process_backspace()
+            } else {
+                st.engine.process_key(ch)
+            };
+            let decision = map_action(action, space, literal, &cfg, &st);
+            let mut submit = |events: &[INPUT]| {
+                queued.extend(events.iter().copied());
+                events.len()
+            };
+            match decision {
+                KeyDecision::Pass => field.input(ch as u16),
+                KeyDecision::Inject(payload) => {
+                    assert_eq!(dispatch_payload_with(payload, 0, &mut submit), Delivery::Complete);
+                }
+                KeyDecision::Forward(literal) => {
+                    let vk = ch.to_ascii_uppercase() as u16;
+                    assert_eq!(forward_typing_key_with(vk, literal, submit), Delivery::Complete);
+                }
+                KeyDecision::Consume => panic!("unexpected swallowed key"),
+            }
+            field.deliver(&mut queued, events_per_key);
+        }
+        field.deliver(&mut queued, usize::MAX);
+        assert!(!output_pending());
+        field.text()
+    }
+
+    #[test]
+    fn pending_replacements_reach_a_native_edit_across_delivery_schedules() {
+        let cases = [
+            ("vaf", "và"),
+            ("lafm", "làm"),
+            ("lamf", "làm"),
+            ("cacs casc", "các các"),
+            ("asb", "áb"),
+            ("tieengs vieetj laf ", "tiếng việt là "),
+            ("vaf vaf vaf, lafm lamf!", "và và và, làm làm!"),
+            ("ma mas maf mar max maj.", "ma má mà mả mã mạ."),
+            ("DDi DDoong DDAA", "Đi Đông ĐÂ"),
+            ("VAF LAFM LAMF", "VÀ LÀM LÀM"),
+            ("truwowngf truwongf", "trường trường"),
+            ("Tieesng Vieejt raast tuyeejt vowfi!", "Tiếng Việt rất tuyệt vời!"),
+            ("tieesn\x08ng", "tiếng"),
+            ("con mefo\x08s", "con mé"),
+            ("meo \x08\x08\x08\x08cho", "cho"),
+        ];
+        for (keys, expected) in cases {
+            for rate in [0, 1, 3, usize::MAX] {
+                assert_eq!(type_into_edit(keys, rate), expected, "{keys:?} at {rate}");
+            }
         }
     }
 }
