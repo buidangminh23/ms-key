@@ -83,7 +83,7 @@ pub(crate) fn try_apply_quick_end_consonant(
         _ => return false,
     };
     let mut candidate = display.clone();
-    promote_open_u_ohorn(&mut candidate, config.allow_fjwz);
+    promote_u_ohorn_for_suffix(&mut candidate, &[c0, c1], config);
     candidate.push(c0);
     candidate.push(c1);
     let Some(parsed) = parse_syllable(&candidate, config.allow_fjwz) else {
@@ -100,16 +100,20 @@ pub(crate) fn try_apply_quick_end_consonant(
     true
 }
 
-pub(crate) fn promote_open_u_ohorn(display: &mut [char], allow_fjwz: bool) {
-    let Some(parsed) = parse_syllable(display, allow_fjwz) else {
+pub(crate) fn promote_u_ohorn_for_suffix(display: &mut [char], suffix: &[char], config: &Config) {
+    let Some(parsed) = parse_syllable(display, config.allow_fjwz) else {
         return;
     };
-    if !parsed.coda.is_empty() || parsed.vowels.len() != 2 {
+    if parsed.vowels.len() != 2 {
         return;
     }
     let (b0, t0, u0) = parsed.vowels[0];
     let (b1, _, _) = parsed.vowels[1];
     if b0 == BaseVowel::U && b1 == BaseVowel::OHorn {
+        let word: String = display.iter().chain(suffix).collect();
+        if crate::dict::is_vietnamese_word_with_custom(&word, config.allow_fjwz, &config.user_dict_words) {
+            return;
+        }
         display[parsed.vowel_start] = encode_vowel(BaseVowel::UHorn, t0, u0);
     }
 }

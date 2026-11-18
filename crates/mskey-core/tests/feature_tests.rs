@@ -412,9 +412,9 @@ fn u_horn_w_ee_circumflex_revert_and_english_guards() {
     assert_eq!(
         type_with(
             |_| {},
-            "pw kw didn't hadn't doesn't wasn't foos jaws wasm aws github vercel nextjs svelte typescript javascript regex mutex tokio serde tweet tweets tweeting attendee attendees vars cors "
+            "pw kw didn't hadn't doesn't wasn't foos jaws wasm github vercel nextjs svelte typescript javascript regex mutex tokio serde tweet tweets tweeting attendee attendees vars cors "
         ),
-        "pw kw didn't hadn't doesn't wasn't foos jaws wasm aws github vercel nextjs svelte typescript javascript regex mutex tokio serde tweet tweets tweeting attendee attendees vars cors "
+        "pw kw didn't hadn't doesn't wasn't foos jaws wasm github vercel nextjs svelte typescript javascript regex mutex tokio serde tweet tweets tweeting attendee attendees vars cors "
     );
 
     assert_eq!(

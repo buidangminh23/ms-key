@@ -5,7 +5,16 @@ const VI_DIC: &str = include_str!("../data/vi.dic");
 fn simulate(engine: &mut Engine, input: &str) -> String {
     let mut screen = String::new();
     for ch in input.chars() {
-        match engine.process_key(ch) {
+        let action = match ch {
+            '\x08' => engine.process_backspace(),
+            '\x1b' => engine.process_escape(),
+            _ => engine.process_key(ch),
+        };
+        match action {
+            EngineAction::PassThrough if ch == '\x08' => {
+                screen.pop();
+            }
+            EngineAction::PassThrough if ch == '\x1b' => {}
             EngineAction::PassThrough => screen.push(ch),
             EngineAction::Replace { backspaces, text } => {
                 for _ in 0..backspaces {
@@ -125,7 +134,7 @@ fn words() -> Vec<&'static str> {
 
 fn is_ambiguous_spelling(word: &str) -> bool {
     let base = mskey_core::strip_vietnamese_diacritics(word);
-    base.contains("oo") || matches!(word, "palăng" | "gỵa")
+    base.contains("oo") || word == "gỵa"
 }
 
 fn run(style: Style, label: &str) -> Vec<String> {
@@ -340,6 +349,20 @@ fn abbreviations_with_d_stroke() {
     assert!(fails.is_empty(), "{} failures", fails.len());
 }
 
+fn shape_and_tones(method: InputMethod, telex_shape: &'static str, base: char) -> (&'static str, &'static str) {
+    match (method, telex_shape, base) {
+        (InputMethod::Vni, "", _) => ("", " 21345"),
+        (InputMethod::Vni, "w", 'a') => ("8", " 21345"),
+        (InputMethod::Vni, "w", _) => ("7", " 21345"),
+        (InputMethod::Vni, _, _) => ("6", " 21345"),
+        (InputMethod::Viqr, "", _) => ("", " `'?~."),
+        (InputMethod::Viqr, "w", 'a') => ("(", " `'?~."),
+        (InputMethod::Viqr, "w", _) => ("+", " `'?~."),
+        (InputMethod::Viqr, _, _) => ("^", " `'?~."),
+        _ => (telex_shape, " fsrxj"),
+    }
+}
+
 #[test]
 fn every_vietnamese_letter_and_toned_vowel_in_both_cases() {
     for method in [
@@ -362,30 +385,18 @@ fn every_vietnamese_letter_and_toned_vowel_in_both_cases() {
             ] {
                 let composed = simulate(&mut Engine::new(config.clone()), &input);
                 assert_eq!(composed, output, "{method:?} {input:?} before delimiter");
-                let literal_config = Config {
-                    auto_restore_wrong_word: false,
-                    ..config.clone()
-                };
-                let committed = simulate(&mut Engine::new(literal_config), &format!("{input} "));
-                assert_eq!(
-                    committed,
-                    format!("{output} "),
-                    "{method:?} {input:?} after space"
-                );
+                for delimiter in [' ', ',', '!', '\t', '\n'] {
+                    let committed = simulate(&mut Engine::new(config.clone()), &format!("{input}{delimiter}"));
+                    assert_eq!(
+                        committed,
+                        format!("{output}{delimiter}"),
+                        "{method:?} {input:?} before {delimiter:?}"
+                    );
+                }
             }
         };
         for &(row, base, telex_shape) in VOWEL_ROWS {
-            let (shape, tones) = match (method, telex_shape, base) {
-                (InputMethod::Vni, "", _) => ("", " 21345"),
-                (InputMethod::Vni, "w", 'a') => ("8", " 21345"),
-                (InputMethod::Vni, "w", _) => ("7", " 21345"),
-                (InputMethod::Vni, _, _) => ("6", " 21345"),
-                (InputMethod::Viqr, "", _) => ("", " `'?~."),
-                (InputMethod::Viqr, "w", 'a') => ("(", " `'?~."),
-                (InputMethod::Viqr, "w", _) => ("+", " `'?~."),
-                (InputMethod::Viqr, _, _) => ("^", " `'?~."),
-                _ => (telex_shape, " fsrxj"),
-            };
+            let (shape, tones) = shape_and_tones(method, telex_shape, base);
             for (vowel, tone) in row.chars().zip(tones.chars()) {
                 let mut keys = format!("{base}{shape}");
                 if tone != ' ' {
@@ -406,6 +417,29 @@ fn every_vietnamese_letter_and_toned_vowel_in_both_cases() {
             'đ',
         );
     }
+}
+
+#[test]
+fn standalone_letters_respect_explicit_raw_spelling_and_reediting() {
+    for (input, expected) in [
+        ("or if is aws ", "ỏ ì í ắ "),
+        ("or\x1b ", "or "),
+        ("aws \x08f ", "ằ "),
+        ("aws \x08\x08or ", "ỏ "),
+        ("don't wouldn't isn't he's I'll ", "don't wouldn't isn't he's I'll "),
+    ] {
+        assert_eq!(simulate(&mut Engine::new(Config::default()), input), expected, "{input:?}");
+    }
+    let raw_words = Config {
+        user_dict_words: vec!["OR".into(), "aws".into(), "dd".into()],
+        ..Config::default()
+    };
+    assert_eq!(simulate(&mut Engine::new(raw_words), "or aws dd "), "or aws dd ");
+    let display_preferred = Config {
+        user_dict_words: vec!["or".into(), "ỏ".into()],
+        ..Config::default()
+    };
+    assert_eq!(simulate(&mut Engine::new(display_preferred), "or "), "ỏ ");
 }
 
 #[test]
@@ -436,5 +470,39 @@ fn continuous_sentences_preserve_words_and_boundaries_with_early_and_late_tones(
         let input = format!("{early}{late}").repeat(32);
         let output = simulate(&mut engine, &input);
         assert_eq!(output, expected.repeat(64), "{method:?}");
+    }
+}
+
+#[test]
+fn vni_and_viqr_commit_every_dictionary_entry() {
+    for method in [InputMethod::Vni, InputMethod::Viqr] {
+        let mut engine = Engine::new(Config { input_method: method, ..Config::default() });
+        for word in VI_DIC.lines().skip(1) {
+            let mut keys = String::new();
+            let mut final_tone = None;
+            for ch in word.chars() {
+                let lower = ch.to_lowercase().next().unwrap();
+                if lower == 'đ' {
+                    let base = if ch.is_uppercase() { 'D' } else { 'd' };
+                    keys.push(base);
+                    keys.push(if method == InputMethod::Vni { '9' } else { base });
+                } else if let Some((row, base, shape)) = VOWEL_ROWS.iter().find(|(row, _, _)| row.contains(lower)) {
+                    let (modifier, tones) = shape_and_tones(method, shape, *base);
+                    keys.push(if ch.is_uppercase() { base.to_ascii_uppercase() } else { *base });
+                    keys.push_str(modifier);
+                    if let Some((_, tone)) = row.chars().zip(tones.chars()).find(|(c, _)| *c == lower)
+                        && tone != ' '
+                    {
+                        final_tone = Some(tone);
+                    }
+                } else {
+                    keys.push(ch);
+                }
+            }
+            keys.extend(final_tone);
+            keys.push(' ');
+            let got = simulate(&mut engine, &keys);
+            assert_eq!(got, format!("{} ", normalize_tone_style(word, true)), "{method:?} {keys:?}");
+        }
     }
 }

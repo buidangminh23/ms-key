@@ -1,7 +1,7 @@
 use crate::config::InputMethod;
 use crate::engine::Engine;
 use crate::engine_helpers::has_vietnamese_diacritics;
-use crate::engine_quick::promote_open_u_ohorn;
+use crate::engine_quick::promote_u_ohorn_for_suffix;
 use crate::syllable::{is_valid_typing_prefix, parse_syllable};
 use crate::tables::{BaseVowel, Tone, VowelFamily, decode_vowel, is_vietnamese_vowel};
 use crate::transform::{
@@ -346,10 +346,12 @@ impl Engine {
             reanchor_tone(&mut self.display, &self.config);
             return;
         }
+        let closes_ng = ch.eq_ignore_ascii_case(&'g')
+            && self.display.last().is_some_and(|c| c.eq_ignore_ascii_case(&'n'));
         if self.config.vietnamese_enabled
-            && matches!(ch.to_ascii_lowercase(), 'n' | 'm' | 'c' | 't' | 'p' | 'i' | 'u')
+            && (closes_ng || matches!(ch.to_ascii_lowercase(), 'n' | 'm' | 'c' | 't' | 'p' | 'i' | 'u'))
         {
-            promote_open_u_ohorn(&mut self.display, self.config.allow_fjwz);
+            promote_u_ohorn_for_suffix(&mut self.display, &[ch], &self.config);
         }
         self.display.push(ch);
         if is_vietnamese_vowel(ch) {

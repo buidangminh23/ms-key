@@ -2,6 +2,13 @@
 
 All notable changes to MS Key are documented here. The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and the project uses [Semantic Versioning](https://semver.org/).
 
+## [0.2.4] - 2026-11-18
+
+### Fixed
+
+- Standalone Vietnamese letters keep their tone when a word is committed with automatic spelling restoration enabled.
+- The Vietnamese engine preserves the dictionary spellings Nguơn and palăng when entering horn and breve marks.
+
 ## [0.2.3] - 2026-11-18
 
 ### Fixed

@@ -270,9 +270,6 @@ pub fn try_apply_circumflex(
 pub fn try_apply_breve(chars: &mut Vec<char>, config: &Config) -> TransformOutcome {
     let mut candidate = chars.clone();
     let parsed = parse_syllable(&candidate, config.allow_fjwz);
-    if config.spelling_check && parsed.is_none() {
-        return TransformOutcome::Ignored;
-    }
     let indices = vowel_scan_order(&candidate, parsed.as_ref().map(|p| p.vowel_start), config.free_tone);
     for idx in indices {
         let Some((base, tone, upper)) = decode_vowel(candidate[idx]) else {
@@ -284,18 +281,28 @@ pub fn try_apply_breve(chars: &mut Vec<char>, config: &Config) -> TransformOutco
         let Some((next_base, applied)) = toggle_breve(base) else {
             continue;
         };
+        candidate[idx] = encode_vowel(next_base, tone, upper);
+        let allowed = if config.spelling_check && parsed.is_none() {
+            let marked = if applied { &candidate } else { &*chars };
+            dict::has_vietnamese_completion(
+                &marked.iter().collect::<String>(),
+                config.allow_fjwz,
+                &config.user_dict_words,
+            )
+        } else {
+            !applied || validate_candidate(&candidate, config)
+        };
+        if !allowed {
+            candidate[idx] = chars[idx];
+            continue;
+        }
         if !applied {
-            candidate[idx] = encode_vowel(next_base, tone, upper);
             *chars = candidate;
             return TransformOutcome::Reverted;
         }
-        candidate[idx] = encode_vowel(next_base, tone, upper);
-        if validate_candidate(&candidate, config) {
-            reanchor_tone(&mut candidate, config);
-            *chars = candidate;
-            return TransformOutcome::Applied;
-        }
-        candidate[idx] = chars[idx];
+        reanchor_tone(&mut candidate, config);
+        *chars = candidate;
+        return TransformOutcome::Applied;
     }
     TransformOutcome::Ignored
 }
@@ -394,9 +401,18 @@ fn try_apply_uo_compound_horn(
                 return Some(TransformOutcome::Reverted);
             }
         }
-        if i1 + 1 == chars.len() && family_filter != Some(VowelFamily::U) {
+        if family_filter != Some(VowelFamily::U) {
             candidate[i1] = encode_vowel(BaseVowel::OHorn, t1, u1);
-            if validate_candidate(&candidate, config) {
+            let single_horn = if i1 + 1 == chars.len() {
+                validate_candidate(&candidate, config)
+            } else {
+                dict::is_vietnamese_word_with_custom(
+                    &candidate.iter().collect::<String>(),
+                    config.allow_fjwz,
+                    &config.user_dict_words,
+                )
+            };
+            if single_horn {
                 reanchor_tone(&mut candidate, config);
                 *chars = candidate;
                 return Some(TransformOutcome::Applied);

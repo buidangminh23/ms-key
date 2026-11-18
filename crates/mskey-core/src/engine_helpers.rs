@@ -79,14 +79,6 @@ pub(crate) fn should_auto_restore(
     if display_str == raw_str {
         return false;
     }
-    if display.iter().any(|&c| matches!(c, 'đ' | 'Đ'))
-        && crate::transform::is_consonant_abbreviation(display)
-    {
-        return false;
-    }
-    if is_standalone_marked_letter(display) && raw_str.chars().count() <= 2 {
-        return false;
-    }
     if delimiter == '\'' && is_english_contraction_stem(raw_str) {
         return true;
     }
@@ -107,6 +99,14 @@ pub(crate) fn should_auto_restore(
     }
     if dict::is_user_word(raw_str, &config.user_dict_words) {
         return true;
+    }
+    if display.len() == 1 && has_vietnamese_diacritics(display) {
+        return false;
+    }
+    if display.iter().any(|&c| matches!(c, 'đ' | 'Đ'))
+        && crate::transform::is_consonant_abbreviation(display)
+    {
+        return false;
     }
     if dict::is_vietnamese_word_with_custom(
         display_str,
@@ -216,14 +216,6 @@ fn is_non_canonical_english_collision(
     (has_circumflex(BaseVowel::ACircumflex) && !lower.contains("aa"))
         || (has_circumflex(BaseVowel::ECircumflex) && !lower.contains("ee"))
         || (has_circumflex(BaseVowel::OCircumflex) && !lower.contains("oo"))
-}
-
-fn is_standalone_marked_letter(display: &[char]) -> bool {
-    let [c] = display else {
-        return false;
-    };
-    matches!(c, 'đ' | 'Đ')
-        || decode_vowel(*c).is_some_and(|(b, t, _)| t == Tone::None && strip_vowel_diacritic(b) != b)
 }
 
 pub(crate) fn has_vietnamese_diacritics(display: &[char]) -> bool {

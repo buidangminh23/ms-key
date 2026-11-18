@@ -1028,6 +1028,7 @@ mod tests {
             ("vaf", "và"),
             ("lafm", "làm"),
             ("lamf", "làm"),
+            ("aws aas awf aaj vaf lafm cacs ", "ắ ấ ằ ậ và làm các "),
             ("cacs casc", "các các"),
             ("asb", "áb"),
             ("tieengs vieetj laf ", "tiếng việt là "),

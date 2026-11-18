@@ -162,6 +162,56 @@ fn viqr_input_method() {
 }
 
 #[test]
+fn dictionary_spellings_accept_inline_and_deferred_vowel_modifiers() {
+    let telex = (
+        "Nguown Nguonw palawng palangw nguowngx nguowif truowngf",
+        "Nguown",
+        "palawng",
+    );
+    let cases = [
+        (InputMethod::Telex, telex),
+        (InputMethod::SimpleTelex, telex),
+        (
+            InputMethod::Vni,
+            (
+                "Nguo7n Nguon7 pala8ng palang8 nguo7ng4 nguoi72 truong72",
+                "Nguo7n",
+                "pala8ng",
+            ),
+        ),
+        (
+            InputMethod::Viqr,
+            (
+                "Nguo+n Nguon+ pala(ng palang( nguo+ng~ nguoi+` truong+`",
+                "Nguo+n",
+                "pala(ng",
+            ),
+        ),
+    ];
+    for (method, (keys, name, loanword)) in cases {
+        let config = Config {
+            input_method: method,
+            ..Config::default()
+        };
+        let mut engine = Engine::new(config.clone());
+        let expected = "Nguơn Nguơn palăng palăng ngưỡng người trường";
+        assert_eq!(simulate(&mut engine, keys), expected, "{method:?}");
+        for (raw, composed) in [(name, "Nguơn"), (loanword, "palăng")] {
+            assert_eq!(simulate(&mut Engine::new(config.clone()), raw), composed);
+            assert_eq!(
+                simulate(&mut Engine::new(config.clone()), &format!("{raw}\x1b")),
+                raw
+            );
+            let backspace_and_retype = format!("{raw}\x08{} ", raw.chars().last().unwrap());
+            assert_eq!(
+                simulate(&mut Engine::new(config.clone()), &backspace_and_retype),
+                format!("{composed} ")
+            );
+        }
+    }
+}
+
+#[test]
 fn simple_telex_no_w_standalone_or_brackets() {
     let out = type_with(
         |c| c.input_method = InputMethod::SimpleTelex,
