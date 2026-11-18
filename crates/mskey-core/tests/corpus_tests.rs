@@ -1,4 +1,4 @@
-use mskey_core::{Config, Engine, EngineAction, normalize_tone_style};
+use mskey_core::{Config, Engine, EngineAction, InputMethod, normalize_tone_style};
 
 const VI_DIC: &str = include_str!("../data/vi.dic");
 
@@ -9,7 +9,10 @@ fn simulate(engine: &mut Engine, input: &str) -> String {
             EngineAction::PassThrough => screen.push(ch),
             EngineAction::Replace { backspaces, text } => {
                 for _ in 0..backspaces {
-                    screen.pop();
+                    assert!(
+                        screen.pop().is_some(),
+                        "backspace before start of text on {ch:?}"
+                    );
                 }
                 screen.push_str(&text);
             }
@@ -18,23 +21,24 @@ fn simulate(engine: &mut Engine, input: &str) -> String {
     screen
 }
 
+const VOWEL_ROWS: &[(&str, char, &str)] = &[
+    ("aàáảãạ", 'a', ""),
+    ("ăằắẳẵặ", 'a', "w"),
+    ("âầấẩẫậ", 'a', "a"),
+    ("eèéẻẽẹ", 'e', ""),
+    ("êềếểễệ", 'e', "e"),
+    ("iìíỉĩị", 'i', ""),
+    ("oòóỏõọ", 'o', ""),
+    ("ôồốổỗộ", 'o', "o"),
+    ("ơờớởỡợ", 'o', "w"),
+    ("uùúủũụ", 'u', ""),
+    ("ưừứửữự", 'u', "w"),
+    ("yỳýỷỹỵ", 'y', ""),
+];
+
 fn split_char(c: char) -> Option<(char, &'static str, Option<char>)> {
-    let table: &[(&str, char, &str)] = &[
-        ("aàáảãạ", 'a', ""),
-        ("ăằắẳẵặ", 'a', "w"),
-        ("âầấẩẫậ", 'a', "a"),
-        ("eèéẻẽẹ", 'e', ""),
-        ("êềếểễệ", 'e', "e"),
-        ("iìíỉĩị", 'i', ""),
-        ("oòóỏõọ", 'o', ""),
-        ("ôồốổỗộ", 'o', "o"),
-        ("ơờớởỡợ", 'o', "w"),
-        ("uùúủũụ", 'u', ""),
-        ("ưừứửữự", 'u', "w"),
-        ("yỳýỷỹỵ", 'y', ""),
-    ];
     let tone_keys = [None, Some('f'), Some('s'), Some('r'), Some('x'), Some('j')];
-    for (set, base, m) in table {
+    for (set, base, m) in VOWEL_ROWS {
         if let Some(i) = set.chars().position(|x| x == c) {
             return Some((*base, m, tone_keys[i]));
         }
@@ -126,6 +130,7 @@ fn is_ambiguous_spelling(word: &str) -> bool {
 
 fn run(style: Style, label: &str) -> Vec<String> {
     let mut fails = Vec::new();
+    let mut engine = Engine::new(Config::default());
     for w in words() {
         let Some(keys) = to_telex(w, style) else {
             continue;
@@ -135,8 +140,7 @@ fn run(style: Style, label: &str) -> Vec<String> {
         {
             continue;
         }
-        let mut e = Engine::new(Config::default());
-        let got = simulate(&mut e, &format!("{keys} "));
+        let got = simulate(&mut engine, &format!("{keys} "));
         let want = format!("{w} ");
         if got != want && normalize_tone_style(&got, true) != normalize_tone_style(&want, true) {
             fails.push(format!("{label}: {keys} -> {got:?} want {want:?}"));
@@ -334,4 +338,103 @@ fn abbreviations_with_d_stroke() {
         eprintln!("{f}");
     }
     assert!(fails.is_empty(), "{} failures", fails.len());
+}
+
+#[test]
+fn every_vietnamese_letter_and_toned_vowel_in_both_cases() {
+    for method in [
+        InputMethod::Telex,
+        InputMethod::SimpleTelex,
+        InputMethod::Vni,
+        InputMethod::Viqr,
+    ] {
+        let config = Config {
+            input_method: method,
+            ..Config::default()
+        };
+        let check = |keys: &str, expected: char| {
+            for (input, output) in [
+                (keys.to_string(), expected.to_string()),
+                (
+                    keys.to_ascii_uppercase(),
+                    expected.to_uppercase().to_string(),
+                ),
+            ] {
+                let composed = simulate(&mut Engine::new(config.clone()), &input);
+                assert_eq!(composed, output, "{method:?} {input:?} before delimiter");
+                let literal_config = Config {
+                    auto_restore_wrong_word: false,
+                    ..config.clone()
+                };
+                let committed = simulate(&mut Engine::new(literal_config), &format!("{input} "));
+                assert_eq!(
+                    committed,
+                    format!("{output} "),
+                    "{method:?} {input:?} after space"
+                );
+            }
+        };
+        for &(row, base, telex_shape) in VOWEL_ROWS {
+            let (shape, tones) = match (method, telex_shape, base) {
+                (InputMethod::Vni, "", _) => ("", " 21345"),
+                (InputMethod::Vni, "w", 'a') => ("8", " 21345"),
+                (InputMethod::Vni, "w", _) => ("7", " 21345"),
+                (InputMethod::Vni, _, _) => ("6", " 21345"),
+                (InputMethod::Viqr, "", _) => ("", " `'?~."),
+                (InputMethod::Viqr, "w", 'a') => ("(", " `'?~."),
+                (InputMethod::Viqr, "w", _) => ("+", " `'?~."),
+                (InputMethod::Viqr, _, _) => ("^", " `'?~."),
+                _ => (telex_shape, " fsrxj"),
+            };
+            for (vowel, tone) in row.chars().zip(tones.chars()) {
+                let mut keys = format!("{base}{shape}");
+                if tone != ' ' {
+                    keys.push(tone);
+                }
+                check(&keys, vowel);
+            }
+        }
+        for consonant in "bcdghklmnpqrstvx".chars() {
+            check(&consonant.to_string(), consonant);
+        }
+        check(
+            if method == InputMethod::Vni {
+                "d9"
+            } else {
+                "dd"
+            },
+            'đ',
+        );
+    }
+}
+
+#[test]
+fn continuous_sentences_preserve_words_and_boundaries_with_early_and_late_tones() {
+    let expected =
+        "và VÀ Và, tiếng Việt vẫn đủ chữ!\nGõ nhanh: trường học, ngõ nhỏ và chiếc thuyền!\t";
+    let telex_early = "vaf VAF Vaf, tieesng Vieejt vaaxn ddur chuwx!\nGox nhanh: truwowfng hojc, ngox nhor vaf chieesc thuyeefn!\t";
+    let telex_late = "vaf VAF Vaf, tieengs Vieetj vaanx ddur chuwx!\nGox nhanh: truwowngf hocj, ngox nhor vaf chieecs thuyeenf!\t";
+    let cases = [
+        (InputMethod::Telex, telex_early, telex_late),
+        (InputMethod::SimpleTelex, telex_early, telex_late),
+        (
+            InputMethod::Vni,
+            "va2 VA2 Va2, tie61ng Vie65t va64n d9u3 chu74!\nGo4 nhanh: tru7o72ng ho5c, ngo4 nho3 va2 chie61c thuye62n!\t",
+            "va2 VA2 Va2, tie6ng1 Vie6t5 va6n4 d9u3 chu74!\nGo4 nhanh: tru7o7ng2 hoc5, ngo4 nho3 va2 chie6c1 thuye6n2!\t",
+        ),
+        (
+            InputMethod::Viqr,
+            "va` VA` Va`, tie^'ng Vie^.t va^~n ddu? chu+~!\nGo~ nhanh: tru+o+`ng ho.c, ngo~ nho? va` chie^'c thuye^`n!\t",
+            "va` VA` Va`, tie^ng' Vie^t. va^n~ ddu? chu+~!\nGo~ nhanh: tru+o+ng` hoc., ngo~ nho? va` chie^c' thuye^n`!\t",
+        ),
+    ];
+    for (method, early, late) in cases {
+        let mut engine = Engine::new(Config {
+            input_method: method,
+            ..Config::default()
+        });
+        let input = format!("{early}{late}").repeat(32);
+        let output = simulate(&mut engine, &input);
+        assert_eq!(output, expected.repeat(64), "{method:?}");
+    }
 }
