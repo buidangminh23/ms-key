@@ -9,6 +9,10 @@ All notable changes to MS Key are documented here. The format follows [Keep a Ch
 - On Windows, MS Key now starts its update helper with a hidden console so Windows PowerShell can prepare the installation, wait for MS Key to close and reopen the updated app.
 - Windows users on v0.2.6 who see an error after confirming the download can upgrade once by running the Windows x64 Setup from this release. The fix takes effect when v0.2.7 starts the next update.
 
+### Known issue
+
+- On Windows, the updater can restore the previous version even after the new settings window opens and responds. Windows can report an input-idle timeout for a working MS Key window. If the updater reports “The updated app did not start its interface”, run the Windows x64 Setup directly and select “Mở MS Key ngay” on the final page.
+
 ## [0.2.6] - 2026-11-21
 
 ### Fixed
