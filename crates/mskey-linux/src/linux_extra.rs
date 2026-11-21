@@ -2,7 +2,8 @@ use std::env;
 use std::fs;
 use std::io::Write;
 use std::path::{Path, PathBuf};
-use std::process::{Command, Stdio};
+use std::process::{Child, Command, ExitStatus, Stdio};
+use std::time::{Duration, Instant};
 
 use mskey_core::update::{
     GITHUB_LATEST_RELEASE_API, ReleaseAsset, ReleaseInfo, checksum_asset, expected_sha256_for,
@@ -410,7 +411,7 @@ pub struct LinuxStagedUpdate {
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct LinuxInstallOutcome {
-    pub relaunched: bool,
+    pub restart_setup: Option<PathBuf>,
     pub message: String,
 }
 
@@ -587,43 +588,84 @@ fn find_file_recursive(dir: &Path, filename: &str) -> Option<PathBuf> {
     None
 }
 
-pub fn apply_linux_staged_update(staged: &LinuxStagedUpdate) -> Result<LinuxInstallOutcome, String> {
+fn wait_for_installer(
+    child: &mut Child,
+    feedback_after: Duration,
+    report_waiting: impl FnOnce(),
+) -> std::io::Result<ExitStatus> {
+    let started = Instant::now();
+    loop {
+        if let Some(status) = child.try_wait()? {
+            return Ok(status);
+        }
+        let remaining = feedback_after.saturating_sub(started.elapsed());
+        if remaining.is_zero() {
+            report_waiting();
+            return child.wait();
+        }
+        std::thread::sleep(remaining.min(Duration::from_millis(150)));
+    }
+}
+
+fn finish_deb_install(
+    child: &mut Child,
+    staged: &LinuxStagedUpdate,
+    setup_path: Option<PathBuf>,
+    short_hash: &str,
+    report_waiting: impl FnOnce(),
+) -> Result<LinuxInstallOutcome, String> {
+    let status = wait_for_installer(child, Duration::from_secs(15), report_waiting)
+        .map_err(|e| format!("Không theo dõi được tiến trình cài đặt: {e}"))?;
+    if !status.success() {
+        if status.code() == Some(126) {
+            return Ok(LinuxInstallOutcome {
+                restart_setup: None,
+                message: format!("Đã hủy cấp quyền cài đặt.\nGói đã xác thực nằm tại {}.", staged.file_path.display()),
+            });
+        }
+        let reason = if status.code() == Some(127) {
+            "Không thể cấp quyền cài đặt".to_string()
+        } else {
+            format!("Trình cài đặt trả về {status}")
+        };
+        return Err(format!("{reason}. Gói đã xác thực nằm tại {}.", staged.file_path.display()));
+    }
+    if let Ok(mut ibus) = Command::new("ibus").arg("restart").spawn() {
+        std::thread::spawn(move || { let _ = ibus.wait(); });
+    }
+    Ok(LinuxInstallOutcome {
+        restart_setup: setup_path,
+        message: format!(
+            "Đã cài đặt MS Key v{} (.deb, SHA-256 {}...).",
+            staged.version, short_hash
+        ),
+    })
+}
+
+pub fn apply_linux_staged_update(
+    staged: &LinuxStagedUpdate,
+    report_waiting: impl FnOnce(),
+) -> Result<LinuxInstallOutcome, String> {
     let short_hash: String = staged.sha256.chars().take(12).collect();
+    let setup_path = env::current_exe().ok();
     if staged.is_deb {
-        let has_pkexec = Command::new("which")
-            .arg("pkexec")
-            .output()
-            .is_ok_and(|o| o.status.success());
-        if has_pkexec {
-            let pkg_str = staged.file_path.to_string_lossy().to_string();
-            if let Ok(out) = Command::new("pkexec").args(["dpkg", "-i", &pkg_str]).output()
-                && out.status.success()
-            {
-                let _ = Command::new("ibus").arg("restart").output();
-                if let Ok(exe) = env::current_exe() {
-                    let _ = Command::new(exe).arg("--setup").spawn();
-                    return Ok(LinuxInstallOutcome {
-                        relaunched: true,
-                        message: format!(
-                            "Đã cài đặt MS Key v{} (.deb, SHA-256 {}...) và khởi động lại.",
-                            staged.version, short_hash
-                        ),
-                    });
-                }
-                return Ok(LinuxInstallOutcome {
-                    relaunched: false,
-                    message: format!(
-                        "Đã cài đặt MS Key v{} (.deb, SHA-256 {}...).",
-                        staged.version, short_hash
-                    ),
-                });
+        let child = Command::new("pkexec")
+            .args(["--disable-internal-agent", "dpkg", "-i"])
+            .arg(&staged.file_path)
+            .stdin(Stdio::null())
+            .spawn();
+        match child {
+            Ok(mut child) => {
+                return finish_deb_install(&mut child, staged, setup_path, &short_hash, report_waiting);
             }
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound => {}
+            Err(e) => return Err(format!("Không thể mở trình cấp quyền cài đặt: {e}")),
         }
         if let Some(parent) = staged.file_path.parent() {
             let _ = Command::new("xdg-open").arg(parent).spawn();
         }
         return Ok(LinuxInstallOutcome {
-            relaunched: false,
+            restart_setup: None,
             message: format!(
                 "Đã tải và xác thực SHA-256 ({}...) tại:\n{}\n\nChạy lệnh sau để cài đặt:\nsudo dpkg -i \"{}\"",
                 short_hash,
@@ -652,7 +694,7 @@ pub fn apply_linux_staged_update(staged: &LinuxStagedUpdate) -> Result<LinuxInst
     }
 
     let new_bin = find_file_recursive(&extract_dir, "mskey-linux");
-    if let (Some(src_bin), Ok(cur_exe)) = (new_bin, env::current_exe())
+    if let (Some(src_bin), Some(cur_exe)) = (new_bin, setup_path)
         && let Some(cur_dir) = cur_exe.parent()
     {
         let temp_dest = cur_dir.join(format!(".mskey-linux.new.{}", std::process::id()));
@@ -664,13 +706,9 @@ pub fn apply_linux_staged_update(staged: &LinuxStagedUpdate) -> Result<LinuxInst
             }
             if fs::rename(&temp_dest, &cur_exe).is_ok() {
                 let _ = fs::remove_dir_all(&extract_dir);
-                let _ = Command::new(&cur_exe).arg("--setup").spawn();
                 return Ok(LinuxInstallOutcome {
-                    relaunched: true,
-                    message: format!(
-                        "Đã cập nhật MS Key v{} (SHA-256 {}...) và mở lại.",
-                        staged.version, short_hash
-                    ),
+                    restart_setup: Some(cur_exe),
+                    message: format!("Đã cập nhật MS Key v{} (SHA-256 {}...).", staged.version, short_hash),
                 });
             }
             let _ = fs::remove_file(&temp_dest);
@@ -682,13 +720,51 @@ pub fn apply_linux_staged_update(staged: &LinuxStagedUpdate) -> Result<LinuxInst
         let _ = Command::new("xdg-open").arg(parent).spawn();
     }
     Ok(LinuxInstallOutcome {
-        relaunched: false,
+        restart_setup: None,
         message: format!(
             "Đã tải và xác thực SHA-256 ({}...) tại:\n{}\n\nThư mục cài đặt cần quyền root; hãy giải nén và chạy install.sh với sudo.",
             short_hash,
             staged.file_path.display()
         ),
     })
+}
+
+#[cfg(all(test, unix))]
+mod installer_tests {
+    use super::*;
+
+    #[test]
+    fn a_slow_install_continues_after_waiting_is_reported() {
+        let mut child = Command::new("sh")
+            .args(["-c", "read -r answer && test \"$answer\" = finish"])
+            .stdin(Stdio::piped())
+            .spawn()
+            .unwrap();
+        let mut input = child.stdin.take().unwrap();
+        let mut reports = 0;
+        let status = wait_for_installer(&mut child, Duration::ZERO, || {
+            reports += 1;
+            writeln!(input, "finish").unwrap();
+        }).unwrap();
+        assert!(status.success());
+        assert_eq!(reports, 1);
+    }
+
+    #[test]
+    fn a_cancelled_installer_returns_without_another_prompt() {
+        let mut child = Command::new("sh").args(["-c", "exit 126"]).spawn().unwrap();
+        let staged = LinuxStagedUpdate {
+            version: "1.0.0".into(),
+            asset_name: "test.deb".into(),
+            file_path: "/tmp/test.deb".into(),
+            sha256: "test".into(),
+            is_deb: true,
+        };
+        let result = finish_deb_install(&mut child, &staged, None, "test", || panic!("unexpected wait")).unwrap();
+        assert!(result.restart_setup.is_none());
+        assert!(result.message.contains("Đã hủy"));
+        assert!(result.message.contains("/tmp/test.deb"));
+    }
 }
 
 pub fn is_us_keyboard_layout() -> bool {

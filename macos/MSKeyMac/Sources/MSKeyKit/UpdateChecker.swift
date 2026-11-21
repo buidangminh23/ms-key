@@ -87,7 +87,7 @@ public final class UpdateChecker: ObservableObject {
     public static func currentAppVersion() -> String {
         let ver = MSKeyBrand.version.trimmingCharacters(in: .whitespacesAndNewlines)
         if ver.isEmpty || ver == "development" {
-            return "0.2.5"
+            return "0.2.6"
         }
         return ver
     }
@@ -247,7 +247,7 @@ public final class UpdateChecker: ObservableObject {
         Task {
             do {
                 let url = URL(string: Self.latestReleaseAPI)!
-                let (data, response) = try await URLSession.shared.data(for: request(url, timeout: 20, isAPI: true))
+                let (data, response) = try await Self.metadataSession.data(for: request(url, timeout: 20, isAPI: true))
                 try Self.requireSuccess(response)
                 guard let release = String(data: data, encoding: .utf8).flatMap(Self.parseReleaseJSON) else {
                     throw UpdateFailure("Dữ liệu phát hành từ GitHub không hợp lệ.")
@@ -315,6 +315,12 @@ public final class UpdateChecker: ObservableObject {
         return request
     }
 
+    private static let metadataSession: URLSession = {
+        let configuration = URLSessionConfiguration.ephemeral
+        configuration.timeoutIntervalForResource = 60
+        return URLSession(configuration: configuration)
+    }()
+
     nonisolated fileprivate static func requireSuccess(_ response: URLResponse?) throws {
         guard let response = response as? HTTPURLResponse else {
             throw UpdateFailure("Máy chủ không trả về phản hồi hợp lệ.")
@@ -358,7 +364,7 @@ public final class UpdateChecker: ObservableObject {
                 }
                 try await progress.download(request(assetURL, timeout: 180), to: archive)
                 transition(.verifying, "Đang kiểm tra tính toàn vẹn của gói tải về…")
-                let (data, response) = try await URLSession.shared.data(for: request(checksumURL, timeout: 30))
+                let (data, response) = try await Self.metadataSession.data(for: request(checksumURL, timeout: 30))
                 try Self.requireSuccess(response)
                 let verified = try await Task.detached(priority: .userInitiated) {
                     let digest = try Self.sha256Hex(fileURL: archive)
@@ -407,7 +413,7 @@ public final class UpdateChecker: ObservableObject {
         process.standardError = FileHandle.nullDevice
         do {
             try process.run()
-            let started = await waitForUpdate(seconds: 7) {
+            let started = await waitForUpdate(seconds: 75) {
                 FileManager.default.fileExists(atPath: handoff.started.path) || !process.isRunning
             }
             guard started, process.isRunning, FileManager.default.fileExists(atPath: handoff.started.path) else {
@@ -446,7 +452,9 @@ private final class PackageTransfer: NSObject, URLSessionDownloadDelegate, @unch
     func download(_ request: URLRequest, to destination: URL) async throws {
         try await withCheckedThrowingContinuation { continuation in
             lock.withLock { pending = (destination, continuation) }
-            let session = URLSession(configuration: .ephemeral, delegate: self, delegateQueue: nil)
+            let configuration = URLSessionConfiguration.ephemeral
+            configuration.timeoutIntervalForResource = 600
+            let session = URLSession(configuration: configuration, delegate: self, delegateQueue: nil)
             session.downloadTask(with: request).resume()
         }
     }
@@ -496,7 +504,7 @@ private func waitForUpdate(seconds: Int, until check: () -> Bool) async -> Bool 
     return true
 }
 
-private struct UpdateHandoff: Codable, Sendable {
+struct UpdateHandoff: Codable, Sendable {
     let work: URL
     let target: URL
     let previousPID: Int32
@@ -606,7 +614,8 @@ private struct UpdateHandoff: Codable, Sendable {
             guard try validateBundle(handoff.target) == handoff.version else {
                 throw UpdateFailure("Phiên bản đã cài không khớp với gói cập nhật.")
             }
-            let launched = try await open(handoff.target, arguments: ["--show", "--update-ready-file", handoff.ready.path])
+            let launched = try await open(handoff.target, arguments: ["--show", "--update-ready-file", handoff.ready.path],
+                                          readyPID: handoff.readyPID)
             nextApp = launched
             let ready = await waitForUpdate(seconds: 18) {
                 launched.isTerminated || handoff.readyPID() == launched.processIdentifier
@@ -619,6 +628,9 @@ private struct UpdateHandoff: Codable, Sendable {
                 }
             }
             throw UpdateFailure("Bản \(handoff.version) đã cài nhưng chưa khởi động hoàn chỉnh.")
+        } catch is LaunchTimeout {
+            showError("macOS chưa xác nhận đã mở MS Key. Bản trước được giữ tại \(handoff.backup.path).")
+            return 1
         } catch {
             let originalError = error.localizedDescription
             do {
@@ -661,8 +673,12 @@ private struct UpdateHandoff: Codable, Sendable {
         return Int32(text.trimmingCharacters(in: .whitespacesAndNewlines))
     }
 
+    private struct LaunchTimeout: LocalizedError {
+        var errorDescription: String? { "macOS chưa xác nhận đã mở MS Key trong thời gian chờ." }
+    }
+
     @MainActor
-    private static func open(_ url: URL, arguments: [String]) async throws -> NSRunningApplication {
+    private static func open(_ url: URL, arguments: [String], readyPID: (() -> Int32?)? = nil) async throws -> NSRunningApplication {
         let config = NSWorkspace.OpenConfiguration()
         config.arguments = arguments
         config.activates = true
@@ -670,7 +686,23 @@ private struct UpdateHandoff: Codable, Sendable {
         config.allowsRunningApplicationSubstitution = false
         config.addsToRecentItems = false
         config.promptsUserIfNeeded = false
-        return try await NSWorkspace.shared.openApplication(at: url, configuration: config)
+        var result: Result<NSRunningApplication, Error>?
+        Task { @MainActor in
+            do {
+                result = .success(try await NSWorkspace.shared.openApplication(at: url, configuration: config))
+            } catch {
+                result = .failure(error)
+            }
+        }
+        _ = await waitForUpdate(seconds: 25) {
+            if result == nil, let pid = readyPID?(), let app = NSRunningApplication(processIdentifier: pid),
+               !app.isTerminated, app.bundleURL?.resolvingSymlinksInPath().path == url.path {
+                result = .success(app)
+            }
+            return result != nil
+        }
+        guard let result else { throw LaunchTimeout() }
+        return try result.get()
     }
 
     @MainActor
@@ -700,18 +732,29 @@ private struct UpdateHandoff: Codable, Sendable {
             throw UpdateFailure("Gói tải về không chứa ứng dụng MS Key hợp lệ.")
         }
         try runTool("/usr/bin/codesign", ["--verify", "--deep", "--strict", url.path],
-                    "Chữ ký ứng dụng MS Key không hợp lệ.")
+                    "Chữ ký ứng dụng MS Key không hợp lệ.", timeout: 30)
         return version
     }
 
-    private static func runTool(_ path: String, _ args: [String], _ message: String) throws {
+    static func runTool(_ path: String, _ args: [String], _ message: String, timeout: TimeInterval = 90) throws {
         let process = Process()
+        let exited = DispatchSemaphore(value: 0)
+        process.terminationHandler = { _ in exited.signal() }
         process.executableURL = URL(fileURLWithPath: path)
         process.arguments = args
+        process.standardInput = FileHandle.nullDevice
         process.standardOutput = FileHandle.nullDevice
         process.standardError = FileHandle.nullDevice
         try process.run()
-        process.waitUntilExit()
+        if exited.wait(timeout: .now() + timeout) == .timedOut {
+            let pid = process.processIdentifier
+            if process.isRunning {
+                let target = getpgid(pid) == pid ? -pid : pid
+                kill(target, SIGKILL)
+                _ = exited.wait(timeout: .now() + 2)
+            }
+            throw UpdateFailure("\(URL(fileURLWithPath: path).lastPathComponent) đã hết thời gian chờ.")
+        }
         guard process.terminationStatus == 0 else { throw UpdateFailure(message) }
     }
 }

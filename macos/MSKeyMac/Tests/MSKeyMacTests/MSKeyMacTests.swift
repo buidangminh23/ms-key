@@ -474,6 +474,21 @@ final class MSKeyMacTests: XCTestCase {
         XCTAssertFalse(RustEngine.isNewerVersion(current: "0.2.0", candidate: "0.1.9"))
     }
 
+    func testUpdateCommandDeadlineStopsAnUnresponsiveSignerAndItsChild() throws {
+        let marker = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        defer { try? FileManager.default.removeItem(at: marker) }
+        let start = ContinuousClock.now
+        XCTAssertThrowsError(try UpdateHandoff.runTool(
+            "/bin/sh", ["-c", "(sleep 1; touch \"$1\") & wait", "signer", marker.path], "", timeout: 0.15
+        )) {
+            XCTAssertTrue($0.localizedDescription.contains("hết thời gian chờ"))
+        }
+        XCTAssertLessThan(start.duration(to: .now), .seconds(3))
+        Thread.sleep(forTimeInterval: 1.1)
+        XCTAssertFalse(FileManager.default.fileExists(atPath: marker.path))
+        XCTAssertNoThrow(try UpdateHandoff.runTool("/usr/bin/true", [], ""))
+    }
+
     func testUpdateCheckerJSONAndSHA256Verification() throws {
         let releaseJSON = """
         {

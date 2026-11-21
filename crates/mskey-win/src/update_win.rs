@@ -9,6 +9,7 @@ use std::ptr;
 use std::sync::Mutex;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::thread;
+use std::time::{Duration, Instant};
 
 use mskey_core::update::{
     GITHUB_LATEST_RELEASE_API, GITHUB_RELEASES_URL, ReleaseAsset, ReleaseInfo, checksum_asset,
@@ -24,7 +25,7 @@ use windows_sys::Win32::Networking::WinHttp::{
     WINHTTP_OPTION_REDIRECT_POLICY, WINHTTP_OPTION_REDIRECT_POLICY_DISALLOW_HTTPS_TO_HTTP,
     WINHTTP_QUERY_FLAG_NUMBER, WINHTTP_QUERY_LOCATION, WINHTTP_QUERY_STATUS_CODE,
     WinHttpCloseHandle, WinHttpConnect, WinHttpOpen, WinHttpOpenRequest,
-    WinHttpQueryDataAvailable, WinHttpQueryHeaders, WinHttpReadData, WinHttpReceiveResponse,
+    WinHttpQueryHeaders, WinHttpReadData, WinHttpReceiveResponse,
     WinHttpSendRequest, WinHttpSetOption, WinHttpSetTimeouts,
 };
 use windows_sys::Win32::UI::Input::KeyboardAndMouse::EnableWindow;
@@ -60,6 +61,7 @@ struct StagedUpdate {
 }
 
 enum UpdateReport {
+    Prepared(Result<(), String>),
     Check {
         silent: bool,
         outcome: UpdateOutcome,
@@ -134,7 +136,6 @@ pub fn check_for_updates_async(main_hwnd: HWND, silent: bool) {
             if let Ok(mut slot) = PENDING_REPORT.lock() {
                 *slot = Some(UpdateReport::Check { silent, outcome });
             }
-            OP_IN_FLIGHT.store(false, Ordering::Release);
             unsafe {
                 PostMessageW(hwnd_raw as HWND, WM_APP_UPDATE_RESULT, 0, 0);
             }
@@ -169,7 +170,6 @@ fn start_download_async(
             if let Ok(mut slot) = PENDING_REPORT.lock() {
                 *slot = Some(UpdateReport::Downloaded { html_url, result });
             }
-            OP_IN_FLIGHT.store(false, Ordering::Release);
             unsafe {
                 PostMessageW(hwnd_raw as HWND, WM_APP_UPDATE_RESULT, 0, 0);
             }
@@ -185,10 +185,15 @@ pub fn handle_update_result_message(owner: HWND) {
     let Some(report) = report else {
         return;
     };
+    OP_IN_FLIGHT.store(false, Ordering::Release);
     set_update_ui_state(owner, false, "Kiểm tra cập nhật", None);
     let current = env!("CARGO_PKG_VERSION");
 
     match report {
+        UpdateReport::Prepared(Ok(())) => unsafe { DestroyWindow(owner); },
+        UpdateReport::Prepared(Err(err)) => {
+            show_info_box(owner, "Cập nhật MS Key", &err, MB_OK | MB_ICONWARNING);
+        }
         UpdateReport::Check { silent, outcome } => match outcome {
             UpdateOutcome::Available(info) => {
                 set_update_ui_state(
@@ -237,23 +242,7 @@ pub fn handle_update_result_message(owner: HWND) {
                 if show_info_box(owner, "Sẵn sàng cập nhật MS Key", &prompt, MB_YESNO | MB_ICONINFORMATION)
                     == IDYES
                 {
-                    match launch_detached_updater(&staged) {
-                        Ok(()) => unsafe {
-                            DestroyWindow(owner);
-                        },
-                        Err(err) => {
-                            let _ = fs::remove_dir_all(&staged.staging_dir);
-                            let msg = format!(
-                                "Không thể khởi chạy trình cập nhật tự động:\n{}\n\nBạn có muốn mở trang phát hành để tải thủ công?",
-                                err
-                            );
-                            if show_info_box(owner, "Cập nhật MS Key", &msg, MB_YESNO | MB_ICONWARNING)
-                                == IDYES
-                            {
-                                open_url(&html_url);
-                            }
-                        }
-                    }
+                    prepare_update_async(owner, staged);
                 } else {
                     let _ = fs::remove_dir_all(&staged.staging_dir);
                 }
@@ -395,13 +384,10 @@ fn download_and_verify_update(
         ));
     }
 
-    let staging_dir = env::temp_dir().join(format!(
-        "mskey-update-{}-{}",
-        version.replace(['/', '\\'], "_"),
-        std::process::id()
-    ));
-    let _ = fs::remove_dir_all(&staging_dir);
-    fs::create_dir_all(&staging_dir)
+    let nonce = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH)
+        .map_err(|e| e.to_string())?.as_nanos();
+    let staging_dir = env::temp_dir().join(format!("mskey-update-{}-{nonce}", std::process::id()));
+    fs::create_dir(&staging_dir)
         .map_err(|e| format!("Không tạo được thư mục tạm cập nhật: {e}"))?;
 
     let safe_name = sanitize_filename(&asset.name);
@@ -451,50 +437,13 @@ fn build_windows_updater_script(
     staging_dir: &Path,
     is_installer: bool,
 ) -> Result<String, String> {
-    let target_dir = target_exe
-        .parent()
-        .ok_or_else(|| "Không xác định được thư mục cài đặt hiện tại".to_string())?;
-    let pkg = escape_ps_single(&package_path.to_string_lossy());
-    let exe = escape_ps_single(&target_exe.to_string_lossy());
-    let dir = escape_ps_single(&target_dir.to_string_lossy());
-    let stg = escape_ps_single(&staging_dir.to_string_lossy());
-
-    let apply_block = if is_installer {
-        format!(
-            "$p = New-Object System.Diagnostics.Process\n\
-             $p.StartInfo.FileName = '{pkg}'\n\
-             $p.StartInfo.Arguments = '/S /D=' + '{dir}'\n\
-             $p.StartInfo.UseShellExecute = $false\n\
-             $null = $p.Start()\n\
-             $p.WaitForExit()\n\
-             if ($p.ExitCode -ne 0) {{ throw ('Installer exited ' + $p.ExitCode) }}\n"
-        )
-    } else {
-        format!(
-            "$ext = Join-Path '{stg}' 'unpacked'\n\
-             New-Item -ItemType Directory -Force -Path $ext | Out-Null\n\
-             Expand-Archive -LiteralPath '{pkg}' -DestinationPath $ext -Force\n\
-             $srcExe = Get-ChildItem -Path $ext -Filter 'MSKey.exe' -Recurse | Select-Object -First 1\n\
-             if (-not $srcExe) {{ throw 'MSKey.exe missing in archive' }}\n\
-             Copy-Item -LiteralPath $srcExe.FullName -Destination '{exe}' -Force\n\
-             foreach ($txt in @('LICENSE.txt', 'THIRD-PARTY-NOTICES.txt')) {{\n\
-               $found = Get-ChildItem -Path $ext -Filter $txt -Recurse | Select-Object -First 1\n\
-               if ($found) {{ Copy-Item -LiteralPath $found.FullName -Destination (Join-Path '{dir}' $txt) -Force }}\n\
-             }}\n"
-        )
-    };
-
     Ok(format!(
-        "$ErrorActionPreference = 'Stop'\n\
-         for ($i = 0; $i -lt 120; $i++) {{\n\
-           if (-not (Get-Process -Id {pid} -ErrorAction SilentlyContinue)) {{ break }}\n\
-           Start-Sleep -Milliseconds 150\n\
-         }}\n\
-         {apply_block}\
-         Remove-Item -LiteralPath '{stg}' -Recurse -Force -ErrorAction SilentlyContinue\n\
-         if (Test-Path -LiteralPath '{exe}') {{\n\
-           Start-Process -FilePath '{exe}' -ArgumentList '--show'\n\
-         }}\n"
+        "$parentId = {pid}\n$package = '{}'\n$targetExe = '{}'\n$stage = '{}'\n$isInstaller = ${}\n{}",
+        escape_ps_single(&package_path.to_string_lossy()),
+        escape_ps_single(&target_exe.to_string_lossy()),
+        escape_ps_single(&staging_dir.to_string_lossy()),
+        if is_installer { "true" } else { "false" },
+        include_str!("../../../scripts/windows-update.ps1")
     ))
 }
 
@@ -529,6 +478,27 @@ fn encode_ps_utf16le_base64(script: &str) -> String {
     out
 }
 
+fn prepare_update_async(owner: HWND, staged: StagedUpdate) {
+    if OP_IN_FLIGHT.swap(true, Ordering::AcqRel) {
+        return;
+    }
+    set_update_ui_state(owner, true, "Đang chuẩn bị...", Some("Đang chuẩn bị bản cập nhật..."));
+    let hwnd = owner as usize;
+    if thread::Builder::new().name("mskey-update-prepare".into()).spawn(move || {
+        let result = launch_detached_updater(&staged);
+        if result.is_err() {
+            let _ = fs::remove_dir_all(&staged.staging_dir);
+        }
+        if let Ok(mut slot) = PENDING_REPORT.lock() {
+            *slot = Some(UpdateReport::Prepared(result));
+        }
+        unsafe { PostMessageW(hwnd as HWND, WM_APP_UPDATE_RESULT, 0, 0); }
+    }).is_err() {
+        OP_IN_FLIGHT.store(false, Ordering::Release);
+        set_update_ui_state(owner, false, "Kiểm tra cập nhật", None);
+    }
+}
+
 fn launch_detached_updater(staged: &StagedUpdate) -> Result<(), String> {
     let current_exe = env::current_exe()
         .map_err(|e| format!("Không xác định được đường dẫn ứng dụng: {e}"))?;
@@ -540,7 +510,7 @@ fn launch_detached_updater(staged: &StagedUpdate) -> Result<(), String> {
         staged.is_installer,
     )?;
     let encoded = encode_ps_utf16le_base64(&script);
-    Command::new("powershell.exe")
+    let mut child = Command::new("powershell.exe")
         .args(["-NoProfile", "-WindowStyle", "Hidden", "-EncodedCommand", &encoded])
         .creation_flags(CREATE_NO_WINDOW | DETACHED_PROCESS)
         .stdin(Stdio::null())
@@ -548,7 +518,23 @@ fn launch_detached_updater(staged: &StagedUpdate) -> Result<(), String> {
         .stderr(Stdio::null())
         .spawn()
         .map_err(|e| format!("Không thể chạy PowerShell updater: {e}"))?;
-    Ok(())
+    let until = Instant::now() + Duration::from_secs(60);
+    let ready = staged.staging_dir.join("ready");
+    loop {
+        if child.try_wait().map_err(|e| e.to_string())?.is_some() {
+            let reason = fs::read_to_string(staged.staging_dir.join("update-error.txt"))
+                .unwrap_or_else(|_| "Không thể chuẩn bị bản cập nhật.".into());
+            return Err(reason);
+        }
+        if ready.is_file() {
+            return Ok(());
+        }
+        if Instant::now() >= until {
+            child.kill().map_err(|e| e.to_string())?;
+            return Err("Chuẩn bị cập nhật quá thời gian. MS Key hiện tại vẫn đang chạy.".into());
+        }
+        thread::sleep(Duration::from_millis(100));
+    }
 }
 
 fn parse_https_url(url: &str) -> Option<(String, u16, String)> {
@@ -635,6 +621,13 @@ fn query_redirect_location(req: *mut c_void) -> Option<String> {
     if s.is_empty() { None } else { Some(s) }
 }
 
+fn check_download_deadline(until: Instant) -> Result<(), String> {
+    if Instant::now() >= until {
+        return Err("Tải bản cập nhật quá thời gian. Vui lòng thử lại.".into());
+    }
+    Ok(())
+}
+
 fn download_https_into(
     url: &str,
     extra_headers: &str,
@@ -665,9 +658,10 @@ fn download_https_into(
     if session.0.is_null() {
         return Err("Không khởi tạo được WinHTTP session".to_string());
     }
-    unsafe {
-        WinHttpSetTimeouts(session.0, 10_000, 15_000, 15_000, 60_000);
+    if unsafe { WinHttpSetTimeouts(session.0, 10_000, 15_000, 15_000, 30_000) } == 0 {
+        return Err("Không đặt được thời hạn kết nối cập nhật.".into());
     }
+    let until = Instant::now() + Duration::from_secs(if max_bytes == MAX_PKG_BYTES { 180 } else { 45 });
 
     let mut current_url = url.to_string();
     let verb_w = to_wide("GET");
@@ -685,6 +679,7 @@ fn download_https_into(
     let headers_w = to_wide(&formatted_headers);
 
     for _hop in 0..=MAX_REDIRECTS {
+        check_download_deadline(until)?;
         let Some((host, port, object_path)) = parse_https_url(&current_url) else {
             return Err("URL cập nhật không hợp lệ hoặc không dùng HTTPS".to_string());
         };
@@ -770,41 +765,63 @@ fn download_https_into(
             return Err(format!("Máy chủ trả về mã HTTP {}", status_code));
         }
 
-        let mut total: u64 = 0;
-        let mut chunk = vec![0u8; 64 * 1024];
-        loop {
-            let mut avail: u32 = 0;
-            if unsafe { WinHttpQueryDataAvailable(req.0, &mut avail) } == 0 {
-                return Err("Lỗi đọc dữ liệu phản hồi".to_string());
-            }
-            if avail == 0 {
-                break;
-            }
-            let to_read = (avail as usize).min(chunk.len()) as u32;
-            let mut read: u32 = 0;
-            if unsafe { WinHttpReadData(req.0, chunk.as_mut_ptr().cast(), to_read, &mut read) } == 0
-            {
+        return copy_download_body(dest, max_bytes, until, |chunk| {
+            let mut read = 0;
+            if unsafe { WinHttpReadData(req.0, chunk.as_mut_ptr().cast(), chunk.len() as u32, &mut read) } == 0 {
                 return Err("Không đọc được nội dung phản hồi".to_string());
             }
-            if read == 0 {
-                break;
-            }
-            total = total.saturating_add(read as u64);
-            if total > max_bytes {
-                return Err("Kích thước tệp tải về vượt quá giới hạn cho phép".to_string());
-            }
-            dest.write_all(&chunk[..read as usize])
-                .map_err(|e| format!("Không thể ghi dữ liệu tải về: {e}"))?;
-        }
-        return Ok(());
+            Ok(read as usize)
+        });
     }
 
     Err("Quá nhiều lần chuyển hướng HTTP".to_string())
 }
 
+fn copy_download_body(
+    dest: &mut dyn Write,
+    max_bytes: u64,
+    until: Instant,
+    mut receive: impl FnMut(&mut [u8]) -> Result<usize, String>,
+) -> Result<(), String> {
+    let mut total = 0u64;
+    let mut chunk = vec![0u8; 64 * 1024];
+    loop {
+        check_download_deadline(until)?;
+        let read = receive(&mut chunk)?;
+        check_download_deadline(until)?;
+        if read == 0 {
+            return Ok(());
+        }
+        total += read as u64;
+        if total > max_bytes {
+            return Err("Kích thước tệp tải về vượt quá giới hạn cho phép".into());
+        }
+        dest.write_all(&chunk[..read])
+            .map_err(|e| format!("Không thể ghi dữ liệu tải về: {e}"))?;
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn stalled_download_can_be_retried() {
+        let mut bytes = Vec::new();
+        let result = copy_download_body(&mut bytes, 16, Instant::now() + Duration::from_millis(20), |chunk| {
+            thread::sleep(Duration::from_millis(30));
+            chunk[0] = 1;
+            Ok(1)
+        });
+        assert!(result.is_err());
+        assert!(bytes.is_empty());
+
+        let mut input = std::io::Cursor::new(b"retry");
+        copy_download_body(&mut bytes, 16, Instant::now() + Duration::from_secs(2), |chunk| {
+            std::io::Read::read(&mut input, chunk).map_err(|e| e.to_string())
+        }).unwrap();
+        assert_eq!(bytes, b"retry");
+    }
 
     #[test]
     fn https_url_parsing_and_ps_encoding() {

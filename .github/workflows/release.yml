@@ -14,6 +14,9 @@ jobs:
       - uses: actions/checkout@v4
       - uses: dtolnay/rust-toolchain@stable
       - run: cargo test --workspace
+      - name: Verify Windows update handoff and rollback
+        shell: powershell
+        run: ./scripts/test-windows-update.ps1
       - name: Install NSIS
         shell: pwsh
         run: |
@@ -38,7 +41,16 @@ jobs:
         shell: pwsh
         run: |
           $setup = Get-ChildItem dist/MSKey-Setup-*.exe | Select-Object -First 1
-          $p = Start-Process $setup.FullName -ArgumentList '/S' -Wait -PassThru
+          $previous = Join-Path $env:RUNNER_TEMP 'MSKey-previous.exe'
+          curl.exe -fsSL --connect-timeout 15 --max-time 90 --retry 2 -o $previous https://github.com/buidangminh23/ms-key/releases/download/v0.2.2/MSKey-Setup-0.2.2-windows-x64.exe
+          if ($LASTEXITCODE -or (Get-FileHash $previous).Hash -ne 'e1ec3965c13a204699e4d40f8714c436510e213e2f30692241b3dce231dd0922') { throw 'Previous installer could not be verified' }
+          $prior = Start-Process $previous -ArgumentList '/S' -PassThru
+          if (!$prior.WaitForExit(120000) -or $prior.ExitCode -ne 0) { throw 'Previous install failed' }
+          $key = 'HKCU:\Software\Microsoft\Windows\CurrentVersion\Uninstall\MSKey'
+          if ((Get-ItemProperty $key).DisplayVersion -ne '0.2.2') { throw 'Missing previous installation' }
+          $p = Start-Process $setup.FullName -ArgumentList '/S' -PassThru
+          if (!$p.WaitForExit(120000)) { throw 'Upgrade timed out' }
+          if ((Get-ItemProperty $key).DisplayVersion -ne $env:GITHUB_REF_NAME.TrimStart('v')) { throw 'Upgrade version mismatch' }
           if ($p.ExitCode -ne 0) { throw "installer exit $($p.ExitCode)" }
           $dir = "$env:LOCALAPPDATA\Programs\MS Key"
           $smoke = Join-Path $env:RUNNER_TEMP 'smoke.txt'
@@ -111,7 +123,12 @@ jobs:
           tar -C "$STAGE" -czf "dist/mskey-cli-${VERSION}-linux-amd64.tar.gz" mskey LICENSE THIRD-PARTY-NOTICES.md
       - name: Install package and smoke test
         run: |
+          curl -fsSL --connect-timeout 15 --max-time 90 --retry 2 -o /tmp/mskey-previous.deb https://github.com/buidangminh23/ms-key/releases/download/v0.2.2/mskey_0.2.2_amd64.deb
+          echo 'c4416adfa7cdd47f00abe9dccfa7d72929984cdd0ae1724113122c47c43b489f  /tmp/mskey-previous.deb' | sha256sum --check
+          DEBIAN_FRONTEND=noninteractive apt-get install -y /tmp/mskey-previous.deb
+          test "$(dpkg-query -W -f='${Version}' mskey)" = "0.2.2"
           DEBIAN_FRONTEND=noninteractive apt-get install -y ./dist/mskey_*_amd64.deb
+          test "$(dpkg-query -W -f='${Version}' mskey)" = "${GITHUB_REF_NAME#v}"
           grep -q '<exec>/usr/bin/mskey-linux --ibus</exec>' /usr/share/ibus/component/mskey.xml
           xvfb-run -a /usr/bin/mskey-linux --verify-smoke /tmp/smoke.txt
           head -n1 /tmp/smoke.txt
@@ -148,7 +165,12 @@ jobs:
           tar -C "$STAGE" -czf "dist/mskey-cli-${VERSION}-linux-arm64.tar.gz" mskey LICENSE THIRD-PARTY-NOTICES.md
       - name: Install package and smoke test
         run: |
+          curl -fsSL --connect-timeout 15 --max-time 90 --retry 2 -o /tmp/mskey-previous.deb https://github.com/buidangminh23/ms-key/releases/download/v0.2.2/mskey_0.2.2_arm64.deb
+          echo '24f68d315735680121cd6f3f3e4aaabe4b457ee7265940e9cd483022080b893f  /tmp/mskey-previous.deb' | sha256sum --check
+          DEBIAN_FRONTEND=noninteractive apt-get install -y /tmp/mskey-previous.deb
+          test "$(dpkg-query -W -f='${Version}' mskey)" = "0.2.2"
           DEBIAN_FRONTEND=noninteractive apt-get install -y ./dist/mskey_*_arm64.deb
+          test "$(dpkg-query -W -f='${Version}' mskey)" = "${GITHUB_REF_NAME#v}"
           grep -q '<exec>/usr/bin/mskey-linux --ibus</exec>' /usr/share/ibus/component/mskey.xml
           xvfb-run -a /usr/bin/mskey-linux --verify-smoke /tmp/smoke.txt
           head -n1 /tmp/smoke.txt
@@ -214,8 +236,14 @@ jobs:
           cat "$RUNNER_TEMP/dmg-smoke.txt"
       - name: Install from local release and smoke test
         run: |
+          mkdir -p "$RUNNER_TEMP/apps"
+          curl -fsSL --connect-timeout 15 --max-time 90 --retry 2 -o "$RUNNER_TEMP/previous.zip" https://github.com/buidangminh23/ms-key/releases/download/v0.2.2/MSKey-0.2.2-macos-universal.zip
+          echo "317db5f5cd6549531c668ea57c07579ef0977c9ca9b53efc1b4d42539dcbd9a1  $RUNNER_TEMP/previous.zip" | shasum -a 256 -c
+          ditto -xk "$RUNNER_TEMP/previous.zip" "$RUNNER_TEMP/apps"
+          test "$(plutil -extract CFBundleShortVersionString raw "$RUNNER_TEMP/apps/MSKey.app/Contents/Info.plist")" = "0.2.2"
           (cd dist && shasum -a 256 MSKey-*-macos-universal.zip > SHA256SUMS)
           MSKEY_BASE_URL="file://$PWD/dist" bash dist/install-macos.sh --dir "$RUNNER_TEMP/apps" --no-launch
+          test "$(plutil -extract CFBundleShortVersionString raw "$RUNNER_TEMP/apps/MSKey.app/Contents/Info.plist")" = "${GITHUB_REF_NAME#v}"
           lipo -archs "$RUNNER_TEMP/apps/MSKey.app/Contents/MacOS/MSKey"
           "$RUNNER_TEMP/apps/MSKey.app/Contents/MacOS/MSKey" --verify-smoke "$RUNNER_TEMP/smoke.txt"
           cat "$RUNNER_TEMP/smoke.txt"

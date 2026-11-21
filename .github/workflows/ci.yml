@@ -11,6 +11,9 @@ jobs:
     runs-on: windows-latest
     steps:
       - uses: actions/checkout@v4
+      - name: Exercise Windows updater handoff and rollback
+        shell: powershell
+        run: ./scripts/test-windows-update.ps1
       - uses: dtolnay/rust-toolchain@stable
         with:
           components: clippy

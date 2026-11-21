@@ -28,9 +28,9 @@ fail() {
 
 download_file() {
     if [ -t 2 ] && [ "${TERM:-dumb}" != dumb ] && [ "${MSKEY_REDUCE_MOTION:-0}" != 1 ]; then
-        curl -fL --progress-bar "$1" -o "$2"
+        curl --connect-timeout 15 --max-time 300 -fL --progress-bar "$1" -o "$2"
     else
-        curl -fsSL "$1" -o "$2"
+        curl --connect-timeout 15 --max-time 300 -fsSL "$1" -o "$2"
     fi
 }
 

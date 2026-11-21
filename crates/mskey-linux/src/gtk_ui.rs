@@ -2,9 +2,11 @@ use std::cell::{Cell, RefCell};
 use std::ffi::c_void;
 use std::fs;
 use std::os::raw::c_int;
+use std::path::PathBuf;
 use std::process::Command;
 use std::ptr;
 use std::thread;
+use std::time::Instant;
 
 use mskey_core::{AppBehavior, Config, HotkeyCombo, SwitchPreset};
 
@@ -17,7 +19,7 @@ use crate::gtk_dialogs_edit::{show_app_rules_dialog, show_custom_keymap_dialog, 
 use crate::gtk_extras::{show_extras_dialog, show_sandbox_dialog, show_user_dict_dialog};
 use crate::gtk_ffi::{
     GTK_POLICY_AUTOMATIC, GTK_POLICY_NEVER, GTK_WIN_POS_CENTER, GTK_WINDOW_TOPLEVEL, GtkAllocation,
-    GtkWidget, connect_signal, gtk_container_add, gtk_container_set_border_width, gtk_init_check,
+    GtkWidget, connect_signal, gtk_button_set_label, gtk_container_add, gtk_container_set_border_width, gtk_init_check,
     gtk_main, gtk_main_quit, gtk_notebook_append_page, gtk_notebook_new, gtk_scrolled_window_new,
     gtk_scrolled_window_set_overlay_scrolling, gtk_scrolled_window_set_policy, gtk_widget_destroy, gtk_widget_get_allocation,
     gtk_widget_set_sensitive, gtk_widget_show_all, gtk_window_new, gtk_window_set_default_size,
@@ -44,6 +46,8 @@ thread_local! {
     static IS_INIT: Cell<bool> = const { Cell::new(false) };
     static SYNCING: Cell<bool> = const { Cell::new(false) };
     static UPDATE_MODAL_CHOICE: Cell<u8> = const { Cell::new(0) };
+    static INSTALL_STARTED: Cell<Option<Instant>> = const { Cell::new(None) };
+    static RESTART_SETUP: RefCell<Option<PathBuf>> = const { RefCell::new(None) };
 }
 
 pub fn ensure_gtk_init() -> bool {
@@ -70,7 +74,7 @@ pub fn run_converter_only() -> i32 {
 }
 
 pub fn run_setup_ui(smoke_out: Option<&str>) -> i32 {
-    let _lock = if smoke_out.is_none() {
+    let lock = if smoke_out.is_none() {
         let Some(lock) = acquire_setup_lock() else {
             return 0;
         };
@@ -114,6 +118,13 @@ pub fn run_setup_ui(smoke_out: Option<&str>) -> i32 {
 
     connect_signal(win, "destroy", on_main_destroy as *const c_void, 0);
     unsafe { gtk_main() };
+    drop(lock);
+    if let Some(exe) = RESTART_SETUP.take()
+        && let Err(err) = Command::new(exe).arg("--setup").spawn()
+    {
+        show_info_modal(ptr::null_mut(), "Cập nhật MS Key", &format!("Đã cài đặt. Không mở lại được cửa sổ cài đặt: {err}"));
+        return 1;
+    }
     0
 }
 
@@ -598,13 +609,17 @@ unsafe extern "C" fn on_update_install_done(data: *mut c_void) -> c_int {
         return 0;
     }
     let payload = unsafe { Box::from_raw(data as *mut UpdateInstallPayload) };
+    INSTALL_STARTED.set(None);
     let (modal_win, close_win) = UI.with(|c| {
         if let Some(st) = c.borrow().as_ref() {
-            unsafe { gtk_widget_set_sensitive(st.btn_check_update, 1) };
+            unsafe {
+                gtk_button_set_label(st.btn_check_update, cstr("Kiểm tra cập nhật").as_ptr());
+                gtk_widget_set_sensitive(st.btn_check_update, 1);
+            }
             match &payload.result {
                 Ok(out) => {
-                    set_label_text(st.lbl_update_status, "Kiểm tra/cập nhật hoàn tất");
-                    return (Some(st.win), out.relaunched);
+                    set_label_text(st.lbl_update_status, out.message.lines().next().unwrap_or_default());
+                    return (Some(st.win), out.restart_setup.is_some());
                 }
                 Err(err) => {
                     set_label_text(st.lbl_update_status, err);
@@ -619,6 +634,7 @@ unsafe extern "C" fn on_update_install_done(data: *mut c_void) -> c_int {
             Ok(out) => {
                 show_info_modal(win, "Cập nhật MS Key", &out.message);
                 if close_win {
+                    RESTART_SETUP.set(out.restart_setup);
                     unsafe { gtk_widget_destroy(win) };
                 }
             }
@@ -631,6 +647,30 @@ unsafe extern "C" fn on_update_install_done(data: *mut c_void) -> c_int {
             }
         }
     }
+    0
+}
+
+unsafe extern "C" fn on_installer_started(_: *mut c_void) -> c_int {
+    INSTALL_STARTED.set(Some(Instant::now()));
+    UI.with_borrow(|state| {
+        if let Some(st) = state {
+            set_label_text(st.lbl_update_status, "Đã xác thực gói. Đang chờ cấp quyền hoặc cài đặt…");
+        }
+    });
+    0
+}
+
+unsafe extern "C" fn on_installer_waiting(_: *mut c_void) -> c_int {
+    UI.with_borrow(|state| {
+        if let (Some(st), Some(start)) = (state, INSTALL_STARTED.get()) {
+            let seconds = start.elapsed().as_secs();
+            set_label_text(st.lbl_update_status, &format!("Trình cài đặt vẫn đang chạy ({seconds} giây). Hãy kiểm tra hộp thoại cấp quyền nếu có."));
+            unsafe {
+                gtk_button_set_label(st.btn_check_update, cstr("Xem trạng thái cài đặt").as_ptr());
+                gtk_widget_set_sensitive(st.btn_check_update, 1);
+            }
+        }
+    });
     0
 }
 
@@ -652,7 +692,14 @@ fn start_async_update_download(
     };
     thread::spawn(move || {
         let result = download_and_verify_linux_update(&info.version, &asset, &sums, None)
-            .and_then(|staged| apply_linux_staged_update(&staged));
+            .and_then(|staged| {
+                if staged.is_deb {
+                    unsafe { g_idle_add(Some(on_installer_started), ptr::null_mut()) };
+                }
+                apply_linux_staged_update(&staged, || unsafe {
+                    g_idle_add(Some(on_installer_waiting), ptr::null_mut());
+                })
+            });
         let payload = Box::into_raw(Box::new(UpdateInstallPayload { result, html_url }));
         unsafe {
             g_idle_add(Some(on_update_install_done), payload as *mut c_void);
@@ -724,6 +771,10 @@ fn start_async_update_check(show_modal: bool) {
 }
 
 unsafe extern "C" fn on_check_update(_: *mut GtkWidget, _: *mut c_void) {
+    if INSTALL_STARTED.get().is_some() {
+        unsafe { on_installer_waiting(ptr::null_mut()) };
+        return;
+    }
     start_async_update_check(true);
 }
 

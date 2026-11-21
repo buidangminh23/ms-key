@@ -66,8 +66,8 @@ VIAddVersionKey "LegalCopyright" "MIT License"
 !insertmacro MUI_LANGUAGE "Vietnamese"
 
 !macro StopRunningApp
-  nsExec::Exec 'taskkill /F /IM ${APP_EXE}'
-  nsExec::Exec 'taskkill /F /IM mskey-win.exe'
+  nsExec::Exec /TIMEOUT=5000 'taskkill /F /IM ${APP_EXE}'
+  nsExec::Exec /TIMEOUT=5000 'taskkill /F /IM mskey-win.exe'
   Sleep 500
 !macroend
 
