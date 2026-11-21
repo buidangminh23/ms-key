@@ -72,7 +72,7 @@ pub(crate) fn should_auto_restore(
     display: &[char],
     display_str: &str,
     raw_str: &str,
-    has_reverted: bool,
+    keep_reverted_spelling: bool,
     reverted_circumflex: Option<crate::tables::VowelFamily>,
     delimiter: char,
 ) -> bool {
@@ -82,10 +82,13 @@ pub(crate) fn should_auto_restore(
     if delimiter == '\'' && is_english_contraction_stem(raw_str) {
         return true;
     }
-    if has_reverted
-        && !has_vietnamese_diacritics(display)
-        && !dict::is_english_word(raw_str)
-    {
+    if dict::is_user_word(display_str, &config.user_dict_words) {
+        return false;
+    }
+    if dict::is_user_word(raw_str, &config.user_dict_words) {
+        return true;
+    }
+    if keep_reverted_spelling && !dict::is_english_word(raw_str) {
         return false;
     }
     if let Some(fam) = reverted_circumflex
@@ -93,12 +96,6 @@ pub(crate) fn should_auto_restore(
         && has_reverted_circumflex_pair(display, fam)
     {
         return false;
-    }
-    if dict::is_user_word(display_str, &config.user_dict_words) {
-        return false;
-    }
-    if dict::is_user_word(raw_str, &config.user_dict_words) {
-        return true;
     }
     if display.len() == 1 && has_vietnamese_diacritics(display) {
         return false;

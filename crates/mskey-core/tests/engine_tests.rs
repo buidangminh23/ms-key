@@ -106,6 +106,18 @@ fn telex_triple_o_and_double_key_revert() {
 }
 
 #[test]
+fn committing_an_escaped_tone_keeps_the_visible_spelling() {
+    assert_eq!(
+        type_with(|_| {}, "aass ddiss tieengss ass address "),
+        "âs đis tiêngs ass address "
+    );
+    assert_eq!(
+        type_with(|c| c.user_dict_words.push("aass".into()), "aass "),
+        "aass "
+    );
+}
+
+#[test]
 fn telex_w_and_bracket_shortcuts() {
     assert_eq!(type_with(|_| {}, "w ww "), "ư w ");
     assert_eq!(type_with(|_| {}, "[ ] [[ ]] "), "ơ ư [ ] ");

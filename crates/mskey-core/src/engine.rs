@@ -2,7 +2,7 @@ use std::collections::VecDeque;
 
 use crate::config::{Charset, Config, InputMethod};
 use crate::engine_helpers::{
-    encode_string, encoded_len, match_macro, should_auto_restore,
+    encode_string, encoded_len, has_vietnamese_diacritics, match_macro, should_auto_restore,
 };
 use crate::tables::{Tone, VowelFamily, base_family, decode_vowel};
 use crate::transform::{KeyRole, classify_key, reanchor_tone};
@@ -587,7 +587,7 @@ impl Engine {
                 &self.display,
                 &display_str,
                 &raw_str,
-                self.has_any_revert(),
+                self.should_keep_reverted_spelling(),
                 self.reverted_circumflex,
                 delimiter,
             )
@@ -841,14 +841,17 @@ impl Engine {
         false
     }
 
-    fn has_any_revert(&self) -> bool {
-        self.reverted_circumflex.is_some()
+    fn should_keep_reverted_spelling(&self) -> bool {
+        if self.reverted_tone.is_some() {
+            return true;
+        }
+        let reverted = self.reverted_circumflex.is_some()
             || self.reverted_breve
             || self.reverted_horn
-            || self.reverted_tone.is_some()
             || self.reverted_d
             || self.reverted_w_standalone
-            || self.reverted_bracket.is_some()
+            || self.reverted_bracket.is_some();
+        reverted && !has_vietnamese_diacritics(&self.display)
     }
 
     fn update_sentence_state(&mut self, delimiter: char) {

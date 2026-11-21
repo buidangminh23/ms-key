@@ -872,7 +872,9 @@ fn map_action(
 ) -> KeyDecision {
     match crate::hook_send::build_replace_payload(act, trailing_vk, cfg, &st.fg_class, &st.fg_process) {
         Some(p) => KeyDecision::Inject(p),
-        None if (literal.is_some() || !st.shift_down) && output_pending() => {
+        None if (literal.is_some() || trailing_vk == Some(VK_SPACE) || !st.shift_down)
+            && output_pending() =>
+        {
             KeyDecision::Forward(literal)
         }
         None => KeyDecision::Pass,
@@ -981,7 +983,7 @@ mod tests {
         }
     }
 
-    fn type_into_edit(keys: &str, events_per_key: usize) -> String {
+    fn type_into_edit(keys: &str, events_per_key: usize, shift_on_space: bool) -> String {
         let cfg = Config {
             mechanism: Mechanism::CompatibleHook,
             ..Config::default()
@@ -990,7 +992,7 @@ mod tests {
         let field = HiddenEdit::new();
         let mut queued = VecDeque::new();
         for ch in keys.chars() {
-            st.shift_down = ch.is_ascii_uppercase();
+            st.shift_down = ch.is_ascii_uppercase() || (ch == ' ' && shift_on_space);
             let space = (ch == ' ').then_some(VK_SPACE);
             let backspace = ch == '\x08';
             let literal = (space.is_none() && !backspace).then_some(ch);
@@ -1044,8 +1046,15 @@ mod tests {
         ];
         for (keys, expected) in cases {
             for rate in [0, 1, 3, usize::MAX] {
-                assert_eq!(type_into_edit(keys, rate), expected, "{keys:?} at {rate}");
+                assert_eq!(type_into_edit(keys, rate, false), expected, "{keys:?} at {rate}");
             }
+        }
+    }
+
+    #[test]
+    fn space_with_shift_held_follows_pending_replacements() {
+        for rate in [0, 1, 3, usize::MAX] {
+            assert_eq!(type_into_edit("AS DD ", rate, true), "Á Đ ", "rate {rate}");
         }
     }
 }
