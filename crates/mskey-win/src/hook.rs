@@ -19,7 +19,7 @@ use windows_sys::Win32::UI::WindowsAndMessaging::{
 };
 
 use crate::hook_send::{
-    Delivery, MSKEY_EXTRA_INFO, ReplacePayload, acknowledge_output, clear_pending_output,
+    Delivery, MSKEY_EXTRA_INFO, ReplacePayload, acknowledge_output,
     convert_clipboard_now, dispatch_payload, forward_typing_key, output_pending, send_capslock_tap,
 };
 use crate::platform::{
@@ -140,9 +140,6 @@ fn refresh_foreground() {
         caps.reset();
     }
     let (notify_hw, changed_ve, is_vi, caret_on) = with_state(|st| {
-        if st.fg_hwnd != hwnd as usize {
-            clear_pending_output();
-        }
         let before_active = st.effective_vietnamese();
         let before_blacklisted = st.is_blacklisted();
         st.engine.set_temporary_english(false);
@@ -655,7 +652,7 @@ fn maybe_preload_macro_clipboard(st: &mut AppState) {
     }
 }
 
-fn dispatch_typing_key(st: &mut AppState, vk: u16, scan: u32) -> KeyDecision {
+fn dispatch_typing_key(st: &mut AppState, vk: u16, scan: u32, focus: HWND) -> KeyDecision {
     let cfg = st.engine.config().clone();
     let us_layout = if cfg.disable_on_non_us_layout {
         let live = crate::platform_extra::is_foreground_layout_us();
@@ -673,7 +670,7 @@ fn dispatch_typing_key(st: &mut AppState, vk: u16, scan: u32) -> KeyDecision {
         }
         return KeyDecision::Pass;
     }
-    if crate::platform_extra::is_focused_password_field() {
+    if crate::platform_extra::is_focused_password_field(focus) {
         st.engine.reset_all();
         return KeyDecision::Pass;
     }
@@ -790,10 +787,19 @@ fn handle_key_event(vk: u16, scan: u32, is_down: bool, is_up: bool) -> KeyDecisi
                 fx.caret_osd = Some((st.effective_vietnamese(), st.engine.is_temporary_english()));
             }
         }
+        let focus = if is_down {
+            let focus = crate::platform_extra::focused_control();
+            if st.update_input_focus(focus) {
+                crate::uia::notify_focus_check();
+            }
+            focus
+        } else {
+            ptr::null_mut()
+        };
         if let Some(d) = check_hotkey_decision(st, vk, is_down, is_up, &mut fx) {
             return d;
         }
-        dispatch_typing_key(st, vk, scan)
+        dispatch_typing_key(st, vk, scan, focus)
     });
 
     if fx.send_os_capslock {
@@ -983,7 +989,11 @@ mod tests {
         }
     }
 
-    fn type_into_edit(keys: &str, events_per_key: usize, shift_on_space: bool) -> String {
+    fn type_into_edit(
+        keys: &str,
+        shift_on_space: bool,
+        mut events_to_deliver: impl FnMut(char) -> usize,
+    ) -> String {
         let cfg = Config {
             mechanism: Mechanism::CompatibleHook,
             ..Config::default()
@@ -1017,7 +1027,7 @@ mod tests {
                 }
                 KeyDecision::Consume => panic!("unexpected swallowed key"),
             }
-            field.deliver(&mut queued, events_per_key);
+            field.deliver(&mut queued, events_to_deliver(ch));
         }
         field.deliver(&mut queued, usize::MAX);
         assert!(!output_pending());
@@ -1046,7 +1056,7 @@ mod tests {
         ];
         for (keys, expected) in cases {
             for rate in [0, 1, 3, usize::MAX] {
-                assert_eq!(type_into_edit(keys, rate, false), expected, "{keys:?} at {rate}");
+                assert_eq!(type_into_edit(keys, false, |_| rate), expected, "{keys:?} at {rate}");
             }
         }
     }
@@ -1054,7 +1064,20 @@ mod tests {
     #[test]
     fn space_with_shift_held_follows_pending_replacements() {
         for rate in [0, 1, 3, usize::MAX] {
-            assert_eq!(type_into_edit("AS DD ", rate, true), "Á Đ ", "rate {rate}");
+            assert_eq!(type_into_edit("AS DD ", true, |_| rate), "Á Đ ", "rate {rate}");
         }
+    }
+
+    #[test]
+    fn delayed_space_commit_preserves_the_next_words_first_letter() {
+        let text = type_into_edit("keep banj", false, |ch| {
+            if ch == ' ' {
+                std::thread::sleep(std::time::Duration::from_millis(1100));
+                0
+            } else {
+                usize::MAX
+            }
+        });
+        assert_eq!(text, "keep bạn");
     }
 }

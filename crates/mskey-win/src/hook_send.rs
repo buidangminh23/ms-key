@@ -1,5 +1,5 @@
-use std::cell::{Cell, RefCell};
-use std::time::{Duration, Instant};
+use std::cell::Cell;
+use std::time::Duration;
 
 use mskey_core::{
     CaseTransform, Charset, Config, ConvertEncoding, EngineAction, Mechanism, convert_with_encoding,
@@ -17,29 +17,41 @@ use crate::platform::write_clipboard_text;
 use crate::platform_extra::write_clipboard_for_paste_with_restore;
 
 pub const MSKEY_EXTRA_INFO: usize = 0x4D53_4B59;
-const BATCH_MARKER: usize = 0x4D54_0000;
-const MAX_BATCH_AGE: Duration = Duration::from_secs(1);
+const SEQUENCE_MASK: usize = 0x000F_FFFF;
+const ORDERED_INPUT_MARKER: usize = 0x4D60_0000;
+
+#[derive(Clone, Copy)]
+struct OutputProgress {
+    issued: u64,
+    accepted: u64,
+    observed: u64,
+    submitting: usize,
+}
 
 thread_local! {
-    static NEXT_BATCH: Cell<u16> = const { Cell::new(0) };
-    static PENDING_BATCHES: RefCell<Vec<(usize, Instant)>> = const { RefCell::new(Vec::new()) };
+    static OUTPUT: Cell<OutputProgress> = const { Cell::new(OutputProgress {
+        issued: 0,
+        accepted: 0,
+        observed: 0,
+        submitting: 0,
+    }) };
 }
 
 pub fn output_pending() -> bool {
-    PENDING_BATCHES.with_borrow_mut(|batches| {
-        batches.retain(|(_, start)| start.elapsed() < MAX_BATCH_AGE);
-        !batches.is_empty()
-    })
+    let progress = OUTPUT.get();
+    progress.submitting != 0 || progress.observed < progress.accepted
 }
 
 pub fn acknowledge_output(marker: usize) {
-    if marker & !0xffff == BATCH_MARKER {
-        PENDING_BATCHES.with_borrow_mut(|batches| batches.retain(|(id, _)| *id != marker));
+    if marker & !SEQUENCE_MASK == ORDERED_INPUT_MARKER {
+        let mut progress = OUTPUT.get();
+        let distance = marker.wrapping_sub(progress.observed as usize) & SEQUENCE_MASK;
+        let ticket = progress.observed + distance as u64;
+        if ticket <= progress.issued {
+            progress.observed = ticket;
+            OUTPUT.set(progress);
+        }
     }
-}
-
-pub fn clear_pending_output() {
-    PENDING_BATCHES.with_borrow_mut(Vec::clear);
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -290,23 +302,29 @@ fn push_paste_combo(paste: &mut Vec<INPUT>, shift_insert: bool, scan_mode: bool)
 }
 
 fn send_ordered_with(inputs: &mut [INPUT], mut submit: impl FnMut(&[INPUT]) -> usize) -> usize {
-    let Some(last) = inputs.last_mut() else {
-        return 0;
-    };
-    let marker = NEXT_BATCH.with(|next| {
-        next.set(next.get().wrapping_add(1));
-        BATCH_MARKER | usize::from(next.get())
-    });
-    last.Anonymous.ki.dwExtraInfo = marker;
-    PENDING_BATCHES.with_borrow_mut(|batches| {
-        batches.retain(|(_, start)| start.elapsed() < MAX_BATCH_AGE);
-        batches.push((marker, Instant::now()));
-    });
     let mut inserted = 0;
     while inserted < inputs.len() {
-        let count = submit(&inputs[inserted..]);
+        let remaining = &mut inputs[inserted..];
+        let mut progress = OUTPUT.get();
+        let base = progress.issued;
+        for event in remaining.iter_mut() {
+            progress.issued += 1;
+            event.Anonymous.ki.dwExtraInfo =
+                ORDERED_INPUT_MARKER | (progress.issued as usize & SEQUENCE_MASK);
+        }
+        progress.submitting += 1;
+        OUTPUT.set(progress);
+        let count = submit(remaining);
+        let mut progress = OUTPUT.get();
+        progress.submitting -= 1;
+        if progress.issued == base + remaining.len() as u64 {
+            progress.issued = base + count as u64;
+        }
+        if count != 0 {
+            progress.accepted = progress.accepted.max(base + count as u64);
+        }
+        OUTPUT.set(progress);
         if count == 0 {
-            acknowledge_output(marker);
             break;
         }
         inserted += count;
@@ -461,7 +479,7 @@ mod tests {
     use super::*;
 
     #[test]
-    fn failed_delivery_retries_only_the_unsent_suffix_and_releases_its_marker() {
+    fn failed_delivery_tracks_only_the_accepted_prefix() {
         assert_eq!(
             forward_typing_key_with(0x42, Some('b'), |_| 0),
             Delivery::Rejected
@@ -469,21 +487,57 @@ mod tests {
         assert!(!output_pending());
 
         let mut lengths = Vec::new();
+        let mut first = 0;
         let result = forward_typing_key_with(0x42, Some('b'), |events| {
             lengths.push(events.len());
+            if events.len() == 2 {
+                first = unsafe { events[0].Anonymous.ki.dwExtraInfo };
+            }
             usize::from(events.len() == 2)
         });
         assert_eq!(lengths, [2, 1]);
         assert_eq!(result, Delivery::Partial);
+        assert!(output_pending());
+        acknowledge_output(first);
         assert!(!output_pending());
 
         let result = forward_typing_key_with(0x42, Some('b'), |events| {
+            assert!(output_pending());
             if events.len() == 1 {
                 acknowledge_output(unsafe { events[0].Anonymous.ki.dwExtraInfo });
             }
             1
         });
         assert_eq!(result, Delivery::Complete);
+        assert!(!output_pending());
+    }
+
+    #[test]
+    fn later_acknowledgement_covers_missed_callbacks_across_sequence_wrap() {
+        let start = SEQUENCE_MASK as u64 - 1;
+        OUTPUT.set(OutputProgress {
+            issued: start,
+            accepted: start,
+            observed: start,
+            submitting: 0,
+        });
+        let mut markers = Vec::new();
+        for vk in [VK_BACK, 0x42] {
+            let delivery = forward_typing_key_with(vk, None, |events| {
+                markers.extend(
+                    events.iter().map(|event| unsafe { event.Anonymous.ki.dwExtraInfo }),
+                );
+                events.len()
+            });
+            assert_eq!(delivery, Delivery::Complete);
+        }
+        acknowledge_output(MSKEY_EXTRA_INFO);
+        assert!(output_pending());
+        acknowledge_output(markers[2]);
+        assert!(output_pending());
+        acknowledge_output(markers[0]);
+        assert!(output_pending());
+        acknowledge_output(markers[3]);
         assert!(!output_pending());
     }
 

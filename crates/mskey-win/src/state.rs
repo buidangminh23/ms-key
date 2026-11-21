@@ -22,6 +22,7 @@ pub struct AppState {
     pub fg_title: String,
     pub fg_is_us: bool,
     pub fg_hwnd: usize,
+    focused_control: usize,
     pub last_typing_hwnd: usize,
     pub user_preferred_ve: bool,
     pub suspend_typing_for_hotkey: bool,
@@ -90,6 +91,7 @@ impl AppState {
             fg_title: String::new(),
             fg_is_us: true,
             fg_hwnd: 0,
+            focused_control: 0,
             last_typing_hwnd: 0,
             user_preferred_ve: pref,
             suspend_typing_for_hotkey: false,
@@ -121,6 +123,15 @@ pub fn with_state<R>(f: impl FnOnce(&mut AppState) -> R) -> R {
 impl AppState {
     pub fn main_window(&self) -> HWND {
         self.main_hwnd as HWND
+    }
+
+    pub fn update_input_focus(&mut self, hwnd: HWND) -> bool {
+        if self.focused_control == hwnd as usize {
+            return false;
+        }
+        self.focused_control = hwnd as usize;
+        self.engine.reset_all();
+        true
     }
 
     pub fn current_window_behavior(&self) -> AppBehavior {
@@ -235,7 +246,23 @@ impl AppState {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use mskey_core::AppRule;
+    use mskey_core::{AppRule, EngineAction};
+
+    #[test]
+    fn first_letter_in_a_new_control_starts_its_own_word() {
+        let mut st = AppState::new(Config::default());
+        let first = 1 as HWND;
+        let second = 2 as HWND;
+        st.update_input_focus(first);
+        st.engine.process_key('m');
+        st.update_input_focus(first);
+        st.engine.process_key('a');
+        assert_eq!(st.engine.current_word(), "ma");
+
+        st.update_input_focus(second);
+        assert_eq!(st.engine.process_key('s'), EngineAction::PassThrough);
+        assert_eq!(st.engine.current_word(), "s");
+    }
 
     fn state_with_explorer_rule() -> AppState {
         AppState::new(Config {

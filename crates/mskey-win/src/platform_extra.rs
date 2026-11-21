@@ -323,17 +323,24 @@ pub fn write_clipboard_for_paste_with_restore(text: &str) -> bool {
     ok
 }
 
-pub fn is_focused_password_field() -> bool {
+pub fn focused_control() -> HWND {
+    let mut gti: GUITHREADINFO = unsafe { std::mem::zeroed() };
+    gti.cbSize = std::mem::size_of::<GUITHREADINFO>() as u32;
+    if unsafe { GetGUIThreadInfo(0, &mut gti) } == 0 {
+        return ptr::null_mut();
+    }
+    gti.hwndFocus
+}
+
+pub fn is_focused_password_field(focus: HWND) -> bool {
     if crate::uia::is_password_focused() {
         return true;
     }
-    let mut gti: GUITHREADINFO = unsafe { std::mem::zeroed() };
-    gti.cbSize = std::mem::size_of::<GUITHREADINFO>() as u32;
-    if unsafe { GetGUIThreadInfo(0, &mut gti) } == 0 || gti.hwndFocus.is_null() {
+    if focus.is_null() {
         return false;
     }
     let mut buf = [0u16; 128];
-    let len = unsafe { GetClassNameW(gti.hwndFocus, buf.as_mut_ptr(), buf.len() as i32) };
+    let len = unsafe { GetClassNameW(focus, buf.as_mut_ptr(), buf.len() as i32) };
     if len <= 0 {
         return false;
     }
@@ -341,14 +348,14 @@ pub fn is_focused_password_field() -> bool {
     if !cls.contains("edit") {
         return false;
     }
-    let style = unsafe { GetWindowLongW(gti.hwndFocus, GWL_STYLE) } as u32;
+    let style = unsafe { GetWindowLongW(focus, GWL_STYLE) } as u32;
     if (style & 0x0020) != 0 {
         return true;
     }
     let mut pw_char: usize = 0;
     let ok = unsafe {
         SendMessageTimeoutW(
-            gti.hwndFocus,
+            focus,
             0x00D2,
             0,
             0,
