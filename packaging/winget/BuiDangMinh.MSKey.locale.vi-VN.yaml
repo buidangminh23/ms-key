@@ -1,5 +1,5 @@
 PackageIdentifier: BuiDangMinh.MSKey
-PackageVersion: 0.1.2
+PackageVersion: 0.2.6
 PackageLocale: vi-VN
 Publisher: Bui Dang Minh
 PublisherUrl: https://github.com/buidangminh23
@@ -16,6 +16,6 @@ Tags:
   - ime
   - telex
   - vni
-ReleaseNotesUrl: https://github.com/buidangminh23/ms-key/releases/tag/v0.1.2
+ReleaseNotesUrl: https://github.com/buidangminh23/ms-key/releases/tag/v0.2.6
 ManifestType: locale
 ManifestVersion: 1.6.0
