@@ -1,5 +1,5 @@
 PackageIdentifier: BuiDangMinh.MSKey
-PackageVersion: 0.2.7
+PackageVersion: 0.2.8
 PackageLocale: en-US
 Publisher: Bui Dang Minh
 PublisherUrl: https://github.com/buidangminh23
@@ -20,6 +20,6 @@ Tags:
   - telex
   - vni
   - keyboard
-ReleaseNotesUrl: https://github.com/buidangminh23/ms-key/releases/tag/v0.2.7
+ReleaseNotesUrl: https://github.com/buidangminh23/ms-key/releases/tag/v0.2.8
 ManifestType: defaultLocale
 ManifestVersion: 1.6.0
