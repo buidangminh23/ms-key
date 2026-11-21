@@ -10,6 +10,30 @@ $parentExited = $false
 $changed = $false
 
 try {
+    Add-Type -Namespace MSKeyUpdate -Name WindowProbe -MemberDefinition @'
+        [System.Runtime.InteropServices.DllImport("user32.dll", CharSet = System.Runtime.InteropServices.CharSet.Unicode)]
+        private static extern IntPtr FindWindowEx(IntPtr parent, IntPtr after, string className, string title);
+        [System.Runtime.InteropServices.DllImport("user32.dll")]
+        private static extern uint GetWindowThreadProcessId(IntPtr window, out uint processId);
+        [System.Runtime.InteropServices.DllImport("user32.dll", EntryPoint = "SendMessageTimeoutW")]
+        private static extern IntPtr SendMessageTimeout(IntPtr window, uint message, UIntPtr wParam,
+            IntPtr lParam, uint flags, uint timeout, out UIntPtr result);
+
+        public static bool Responds(uint processId) {
+            IntPtr window = IntPtr.Zero;
+            while ((window = FindWindowEx(IntPtr.Zero, window, "MSKeyMainWindow", null)) != IntPtr.Zero) {
+                uint owner;
+                GetWindowThreadProcessId(window, out owner);
+                if (owner == processId) {
+                    const uint WM_NULL = 0, SMTO_ABORTIFHUNG = 2, SMTO_ERRORONEXIT = 32;
+                    UIntPtr result;
+                    return SendMessageTimeout(window, WM_NULL, UIntPtr.Zero, IntPtr.Zero,
+                        SMTO_ABORTIFHUNG | SMTO_ERRORONEXIT, 250, out result) != IntPtr.Zero;
+                }
+            }
+            return false;
+        }
+'@
     $parent = Get-Process -Id $parentId -ErrorAction SilentlyContinue
     Copy-Item -LiteralPath $targetExe -Destination $backup
     if ($isInstaller) {
@@ -39,8 +63,13 @@ try {
         }
     }
     $runningChild = Start-Process -FilePath $targetExe -ArgumentList '--show --no-relaunch' -PassThru
-    if (!$runningChild.WaitForInputIdle(20000) -or $runningChild.WaitForExit(500)) {
-        throw 'The updated app did not start its interface.'
+    $deadline = [Diagnostics.Stopwatch]::StartNew()
+    while ($true) {
+        if ($runningChild.HasExited) { throw 'The updated app exited during startup.' }
+        if ([MSKeyUpdate.WindowProbe]::Responds($runningChild.Id) -and !$runningChild.WaitForExit(500) -and
+            [MSKeyUpdate.WindowProbe]::Responds($runningChild.Id)) { break }
+        if ($deadline.ElapsedMilliseconds -ge 20000) { throw 'The updated app window did not respond before the startup deadline.' }
+        Start-Sleep -Milliseconds 100
     }
 } catch {
     $reason = $_.Exception.Message

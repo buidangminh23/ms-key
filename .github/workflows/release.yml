@@ -38,21 +38,44 @@ jobs:
           & (Join-Path $stage 'mskey.exe') --version
           Compress-Archive -Path (Join-Path $stage '*') -DestinationPath "dist/mskey-cli-${version}-windows-x64.zip" -Force
       - name: Install, smoke test and uninstall
-        shell: pwsh
+        shell: powershell
         run: |
           $setup = Get-ChildItem dist/MSKey-Setup-*.exe | Select-Object -First 1
           $previous = Join-Path $env:RUNNER_TEMP 'MSKey-previous.exe'
-          curl.exe -fsSL --connect-timeout 15 --max-time 90 --retry 2 -o $previous https://github.com/buidangminh23/ms-key/releases/download/v0.2.6/MSKey-Setup-0.2.6-windows-x64.exe
-          if ($LASTEXITCODE -or (Get-FileHash $previous).Hash -ne '8ebfeef04e313795208a74524cc30cdf267aa966870845d5ce45029baabe0396') { throw 'Previous installer could not be verified' }
+          curl.exe -fsSL --connect-timeout 15 --max-time 90 --retry 2 -o $previous https://github.com/buidangminh23/ms-key/releases/download/v0.2.7/MSKey-Setup-0.2.7-windows-x64.exe
+          if ($LASTEXITCODE -or (Get-FileHash $previous).Hash -ne 'acd6c0a1a5f43880695365a295023056c2e19ad7d354ce710fa56ac3b1ffcfe7') { throw 'Previous installer could not be verified' }
           $prior = Start-Process $previous -ArgumentList '/S' -PassThru
+          $null = $prior.Handle
           if (!$prior.WaitForExit(120000) -or $prior.ExitCode -ne 0) { throw 'Previous install failed' }
           $key = 'HKCU:\Software\Microsoft\Windows\CurrentVersion\Uninstall\MSKey'
-          if ((Get-ItemProperty $key).DisplayVersion -ne '0.2.6') { throw 'Missing previous installation' }
-          $p = Start-Process $setup.FullName -ArgumentList '/S' -PassThru
-          if (!$p.WaitForExit(120000)) { throw 'Upgrade timed out' }
+          if ((Get-ItemProperty $key).DisplayVersion -ne '0.2.7') { throw 'Missing previous installation' }
+          $dir = (Get-ItemProperty $key).InstallLocation
+          $targetExe = Join-Path $dir 'MSKey.exe'
+          $app = Start-Process $targetExe -ArgumentList '--show --no-relaunch' -PassThru
+          $parentId = $app.Id
+          $package = $setup.FullName
+          $stage = (New-Item -ItemType Directory -Path (Join-Path $env:RUNNER_TEMP 'mskey-upgrade')).FullName
+          $isInstaller = $true
+          $handoff = Start-Job -ArgumentList $parentId,$targetExe,$stage -ScriptBlock {
+            param($idToClose,$expectedExe,$stage)
+            $old = Get-Process -Id $idToClose -ErrorAction Stop
+            if ($old.Path -ne $expectedExe) { throw 'Unexpected previous app' }
+            $timer = [Diagnostics.Stopwatch]::StartNew()
+            while (!(Test-Path -LiteralPath (Join-Path $stage 'ready'))) {
+              if ($timer.Elapsed.TotalSeconds -gt 60 -or $old.HasExited) { throw 'Update handoff failed' }
+              Start-Sleep -Milliseconds 100
+            }
+            $old.Kill()
+          }
+          & ./scripts/windows-update.ps1
+          if (!(Wait-Job $handoff -Timeout 65)) { throw 'Update handoff timed out' }
+          Receive-Job $handoff -ErrorAction Stop
+          $diagnostic = Join-Path $stage 'update-error.txt'
+          if (Test-Path -LiteralPath $diagnostic) { throw (Get-Content $diagnostic -Raw) }
+          if (Test-Path -LiteralPath $stage) { throw 'Updater did not finish' }
           if ((Get-ItemProperty $key).DisplayVersion -ne $env:GITHUB_REF_NAME.TrimStart('v')) { throw 'Upgrade version mismatch' }
-          if ($p.ExitCode -ne 0) { throw "installer exit $($p.ExitCode)" }
-          $dir = "$env:LOCALAPPDATA\Programs\MS Key"
+          $reopened = @(Get-Process MSKey -ErrorAction SilentlyContinue | Where-Object { $_.Id -ne $parentId -and $_.Path -eq $targetExe })
+          if ($reopened.Count -ne 1) { throw 'The updater did not reopen the installed app' }
           $smoke = Join-Path $env:RUNNER_TEMP 'smoke.txt'
           $q = Start-Process "$dir\MSKey.exe" -ArgumentList '--verify-smoke', $smoke -Wait -PassThru
           if ($q.ExitCode -ne 0) { throw "smoke exit $($q.ExitCode)" }

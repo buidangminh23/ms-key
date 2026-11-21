@@ -2,6 +2,13 @@
 
 All notable changes to MS Key are documented here. The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and the project uses [Semantic Versioning](https://semver.org/).
 
+## [0.2.8] - 2026-11-21
+
+### Fixed
+
+- On Windows, the updater now checks that the new MS Key process owns a settings window that responds to a message. This prevents an unnecessary rollback when a working window fails the Windows input-idle check. A hung window or a process that quits during startup still triggers recovery.
+- An update started in v0.2.7 uses that version's readiness check. If it restores v0.2.7, run the Windows x64 Setup from this release once. Updates started in v0.2.8 use the new check.
+
 ## [0.2.7] - 2026-11-21
 
 ### Fixed

@@ -9,13 +9,60 @@ $fixtureSource = @'
 using System;
 using System.Diagnostics;
 using System.IO;
+using System.Runtime.InteropServices;
 using System.Threading;
 using System.Windows.Forms;
 
 static class Fixture {
+    [StructLayout(LayoutKind.Sequential, CharSet = CharSet.Unicode)]
+    struct WindowClass {
+        public uint style;
+        public IntPtr procedure;
+        public int extraClassBytes, extraWindowBytes;
+        public IntPtr instance, icon, cursor, background;
+        public IntPtr menu, name;
+    }
+    [DllImport("user32.dll", CharSet = CharSet.Unicode)]
+    static extern bool GetClassInfo(IntPtr instance, string name, out WindowClass info);
+    [DllImport("user32.dll", CharSet = CharSet.Unicode)]
+    static extern ushort RegisterClass(ref WindowClass info);
+    [DllImport("user32.dll", CharSet = CharSet.Unicode)]
+    static extern IntPtr CreateWindowEx(uint exStyle, string name, string title, uint style,
+        int x, int y, int width, int height, IntPtr parent, IntPtr menu, IntPtr instance, IntPtr param);
+    [DllImport("user32.dll", EntryPoint = "PeekMessageW")]
+    static extern bool PeekMessage(IntPtr message, IntPtr window, uint first, uint last, uint flags);
+    [DllImport("user32.dll", EntryPoint = "DispatchMessageW")]
+    static extern IntPtr DispatchMessage(IntPtr message);
+
+    static void RunUpdatedWindow(string dir) {
+        WindowClass windowClass;
+        if (!GetClassInfo(IntPtr.Zero, "STATIC", out windowClass)) throw new Exception("Missing STATIC class.");
+        windowClass.instance = Process.GetCurrentProcess().MainModule.BaseAddress;
+        string name = File.Exists(Path.Combine(dir, "wrong class")) ? "MSKeyPlaceholder" : "MSKeyMainWindow";
+        windowClass.name = Marshal.StringToHGlobalUni(name);
+        try {
+            if (RegisterClass(ref windowClass) == 0) throw new Exception("Could not register fixture class.");
+        } finally { Marshal.FreeHGlobal(windowClass.name); }
+        if (CreateWindowEx(0, name, "", 0x80000000, 0, 0, 1, 1,
+            IntPtr.Zero, IntPtr.Zero, windowClass.instance, IntPtr.Zero) == IntPtr.Zero) {
+            throw new Exception("Could not create fixture window.");
+        }
+        File.WriteAllText(Path.Combine(dir, "window-created.pid"), Process.GetCurrentProcess().Id.ToString());
+        if (File.Exists(Path.Combine(dir, "hung window"))) Thread.Sleep(60000);
+        const uint PM_REMOVE = 1, PM_NOYIELD = 2;
+        IntPtr message = Marshal.AllocHGlobal(64);
+        try {
+            while (true) {
+                while (PeekMessage(message, IntPtr.Zero, 0, 0, PM_REMOVE | PM_NOYIELD)) DispatchMessage(message);
+                Thread.Sleep(5);
+            }
+        } finally { Marshal.FreeHGlobal(message); }
+    }
+
     [STAThread]
     static int Main(string[] args) {
         string dir = AppDomain.CurrentDomain.BaseDirectory;
+        if (Array.IndexOf(args, "--decoy") >= 0) { RunUpdatedWindow(dir); return 0; }
         if (Array.IndexOf(args, "/S") >= 0) {
             string install = string.Join(" ", args).Split(new string[] {"/D="}, StringSplitOptions.None)[1];
             File.Copy(Path.Combine(dir, "replacement.exe"), Path.Combine(install, "MSKey.exe"), true);
@@ -32,6 +79,7 @@ static class Fixture {
 #endif
         File.WriteAllText(Path.Combine(dir, name + ".pid"), Process.GetCurrentProcess().Id.ToString());
         if (name == "updated" && File.Exists(Path.Combine(dir, "reject"))) return 1;
+        if (name == "updated") RunUpdatedWindow(dir);
         Application.Run(new ApplicationContext());
         return 0;
     }
@@ -89,11 +137,17 @@ function Test-UpdateCase([string]$name) {
     } else {
         Compress-Archive -LiteralPath $replacement -DestinationPath (Join-Path $stage 'package.zip')
         if ($name -eq 'rejected startup') { [IO.File]::WriteAllText((Join-Path $app 'reject'), '') }
+        if ($name -in 'hung window','wrong class') { [IO.File]::WriteAllText((Join-Path $app $name), '') }
     }
     $parent = Start-Process -FilePath $exe -WindowStyle Hidden -PassThru
     $runner = $null
+    $decoy = $null
     try {
         Wait-ForFile (Join-Path $app 'parent.pid') $parent
+        if ($name -eq 'wrong class') {
+            $decoy = Start-Process -FilePath $previous -ArgumentList '--decoy' -WindowStyle Hidden -PassThru
+            Wait-ForFile (Join-Path $root 'window-created.pid') $decoy
+        }
         $argsLine = '-NoProfile -NonInteractive -ExecutionPolicy Bypass -File "{0}" "{1}" {2}' -f $scriptPath,$caseDir,$parent.Id
         $stderr = Join-Path $caseDir 'stderr.txt'
         $runner = Start-Process -FilePath (Join-Path $PSHOME 'powershell.exe') -ArgumentList $argsLine -WindowStyle Hidden -PassThru -RedirectStandardError $stderr
@@ -115,6 +169,8 @@ function Test-UpdateCase([string]$name) {
             }
             Assert-True (!(Test-Path -LiteralPath $stage)) 'The completed update left its stage behind.'
             Wait-ForFile (Join-Path $app 'updated.pid') $null
+            $updated = Get-Process -Id ([int][IO.File]::ReadAllText((Join-Path $app 'updated.pid')))
+            Assert-True (!$updated.WaitForInputIdle(200)) 'The responsive fixture unexpectedly signaled input idle.'
             $expectedExe = $replacement
         } else {
             Assert-True ($runner.ExitCode -eq 1) "$name did not report failure."
@@ -129,6 +185,9 @@ function Test-UpdateCase([string]$name) {
                 Assert-True ([IO.File]::ReadAllText((Join-Path $app 'version.txt')) -ceq 'previous') 'Registry version was not restored.'
             } else {
                 Assert-True (Test-Path -LiteralPath (Join-Path $app 'updated.pid')) 'Replacement was never launched.'
+                if ($name -in 'hung window','wrong class') {
+                    Assert-True ($reason -match 'window did not respond') "Unexpected window error: $reason"
+                }
             }
             Wait-ForFile (Join-Path $app 'restored.pid') $null
             $expectedExe = $previous
@@ -136,6 +195,7 @@ function Test-UpdateCase([string]$name) {
         Assert-True ((Get-FileHash -LiteralPath $exe).Hash -eq (Get-FileHash -LiteralPath $expectedExe).Hash) "Incorrect installed executable after $name."
         Write-Host "Passed: $name"
     } finally {
+        if ($decoy -and !$decoy.HasExited) { $decoy.Kill(); $decoy.WaitForExit() }
         if ($runner -and !$runner.HasExited) { $runner.Kill(); $runner.WaitForExit() }
         foreach ($process in (Get-Process -Name MSKey,setup -ErrorAction SilentlyContinue)) {
             if ($process.Path -in @($exe, (Join-Path $stage 'setup.exe')) -and !$process.HasExited) {
@@ -160,10 +220,14 @@ try {
         if ($LASTEXITCODE) { throw 'Could not compile the updater fixture.' }
     }
     Assert-True ($helper.Contains('WaitForExit(120000)')) 'Update the test override for the installer deadline.'
+    Assert-True ($helper.Contains('ElapsedMilliseconds -ge 20000')) 'Update the test override for the startup deadline.'
+    $helper = $helper.Replace('ElapsedMilliseconds -ge 20000', 'ElapsedMilliseconds -ge 1500')
     $helper = $helper.Replace('New-Object -ComObject WScript.Shell', 'New-FixturePopup')
     $runScript = $fixturePreamble + [Environment]::NewLine + $helper.Replace('WaitForExit(120000)', 'WaitForExit(1500)')
     [IO.File]::WriteAllText($scriptPath, $runScript, [Text.Encoding]::UTF8)
-    foreach ($name in 'success archive','success installer','hung installer','rejected startup') { Test-UpdateCase $name }
+    foreach ($name in 'success archive','success installer','hung installer','rejected startup','hung window','wrong class') {
+        Test-UpdateCase $name
+    }
 } finally {
     $resolved = (Resolve-Path -LiteralPath $root).ProviderPath
     if ([IO.Path]::GetFullPath($root) -ne $resolved -or [IO.Path]::GetDirectoryName($resolved) -ne $tempDir.TrimEnd('\')) {
