@@ -2,6 +2,13 @@
 
 All notable changes to MS Key are documented here. The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and the project uses [Semantic Versioning](https://semver.org/).
 
+## [0.2.7] - 2026-11-21
+
+### Fixed
+
+- On Windows, MS Key now starts its update helper with a hidden console so Windows PowerShell can prepare the installation, wait for MS Key to close and reopen the updated app.
+- Windows users on v0.2.6 who see an error after confirming the download can upgrade once by running the Windows x64 Setup from this release. The fix takes effect when v0.2.7 starts the next update.
+
 ## [0.2.6] - 2026-11-21
 
 ### Fixed

@@ -44,7 +44,6 @@ const MAX_API_BYTES: u64 = 4 * 1024 * 1024;
 const MAX_PKG_BYTES: u64 = 128 * 1024 * 1024;
 const MAX_REDIRECTS: usize = 8;
 const CREATE_NO_WINDOW: u32 = 0x0800_0000;
-const DETACHED_PROCESS: u32 = 0x0000_0008;
 
 enum UpdateOutcome {
     Available(ReleaseInfo),
@@ -485,7 +484,7 @@ fn prepare_update_async(owner: HWND, staged: StagedUpdate) {
     set_update_ui_state(owner, true, "Đang chuẩn bị...", Some("Đang chuẩn bị bản cập nhật..."));
     let hwnd = owner as usize;
     if thread::Builder::new().name("mskey-update-prepare".into()).spawn(move || {
-        let result = launch_detached_updater(&staged);
+        let result = launch_windows_updater(&staged);
         if result.is_err() {
             let _ = fs::remove_dir_all(&staged.staging_dir);
         }
@@ -499,7 +498,7 @@ fn prepare_update_async(owner: HWND, staged: StagedUpdate) {
     }
 }
 
-fn launch_detached_updater(staged: &StagedUpdate) -> Result<(), String> {
+fn launch_windows_updater(staged: &StagedUpdate) -> Result<(), String> {
     let current_exe = env::current_exe()
         .map_err(|e| format!("Không xác định được đường dẫn ứng dụng: {e}"))?;
     let script = build_windows_updater_script(
@@ -509,21 +508,26 @@ fn launch_detached_updater(staged: &StagedUpdate) -> Result<(), String> {
         &staged.staging_dir,
         staged.is_installer,
     )?;
-    let encoded = encode_ps_utf16le_base64(&script);
+    run_update_helper(&script, &staged.staging_dir)
+}
+
+fn run_update_helper(script: &str, staging_dir: &Path) -> Result<(), String> {
+    let encoded = encode_ps_utf16le_base64(script);
     let mut child = Command::new("powershell.exe")
         .args(["-NoProfile", "-WindowStyle", "Hidden", "-EncodedCommand", &encoded])
-        .creation_flags(CREATE_NO_WINDOW | DETACHED_PROCESS)
+        .creation_flags(CREATE_NO_WINDOW)
         .stdin(Stdio::null())
         .stdout(Stdio::null())
         .stderr(Stdio::null())
         .spawn()
         .map_err(|e| format!("Không thể chạy PowerShell updater: {e}"))?;
     let until = Instant::now() + Duration::from_secs(60);
-    let ready = staged.staging_dir.join("ready");
+    let ready = staging_dir.join("ready");
     loop {
-        if child.try_wait().map_err(|e| e.to_string())?.is_some() {
-            let reason = fs::read_to_string(staged.staging_dir.join("update-error.txt"))
-                .unwrap_or_else(|_| "Không thể chuẩn bị bản cập nhật.".into());
+        if let Some(status) = child.try_wait().map_err(|e| e.to_string())? {
+            let reason = fs::read_to_string(staging_dir.join("update-error.txt")).unwrap_or_else(|_| {
+                format!("PowerShell đã thoát ({status}) trước khi xác nhận sẵn sàng. MS Key hiện tại vẫn đang chạy.")
+            });
             return Err(reason);
         }
         if ready.is_file() {
@@ -804,6 +808,26 @@ fn copy_download_body(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn powershell_executes_the_hidden_helper_before_the_app_exits() {
+        let stage = env::temp_dir().join(format!("mskey-helper-test-{}", std::process::id()));
+        fs::create_dir(&stage).unwrap();
+        let early_exit = run_update_helper("exit 37", &stage).unwrap_err();
+        let ready = stage.join("ready");
+        let path = escape_ps_single(&ready.to_string_lossy());
+        let script = format!(
+            "$ready = '{path}'\n[IO.File]::WriteAllText($ready, 'ready')\n\
+             for ($i = 0; $i -lt 200 -and [IO.File]::Exists($ready); $i++) {{ Start-Sleep -Milliseconds 50 }}"
+        );
+        let confirmed = run_update_helper(&script, &stage);
+        if ready.is_file() {
+            fs::remove_file(ready).unwrap();
+        }
+        fs::remove_dir(&stage).unwrap();
+        assert!(early_exit.contains("37"), "{early_exit}");
+        confirmed.unwrap();
+    }
 
     #[test]
     fn stalled_download_can_be_retried() {

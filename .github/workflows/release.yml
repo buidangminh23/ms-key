@@ -42,12 +42,12 @@ jobs:
         run: |
           $setup = Get-ChildItem dist/MSKey-Setup-*.exe | Select-Object -First 1
           $previous = Join-Path $env:RUNNER_TEMP 'MSKey-previous.exe'
-          curl.exe -fsSL --connect-timeout 15 --max-time 90 --retry 2 -o $previous https://github.com/buidangminh23/ms-key/releases/download/v0.2.2/MSKey-Setup-0.2.2-windows-x64.exe
-          if ($LASTEXITCODE -or (Get-FileHash $previous).Hash -ne 'e1ec3965c13a204699e4d40f8714c436510e213e2f30692241b3dce231dd0922') { throw 'Previous installer could not be verified' }
+          curl.exe -fsSL --connect-timeout 15 --max-time 90 --retry 2 -o $previous https://github.com/buidangminh23/ms-key/releases/download/v0.2.6/MSKey-Setup-0.2.6-windows-x64.exe
+          if ($LASTEXITCODE -or (Get-FileHash $previous).Hash -ne '8ebfeef04e313795208a74524cc30cdf267aa966870845d5ce45029baabe0396') { throw 'Previous installer could not be verified' }
           $prior = Start-Process $previous -ArgumentList '/S' -PassThru
           if (!$prior.WaitForExit(120000) -or $prior.ExitCode -ne 0) { throw 'Previous install failed' }
           $key = 'HKCU:\Software\Microsoft\Windows\CurrentVersion\Uninstall\MSKey'
-          if ((Get-ItemProperty $key).DisplayVersion -ne '0.2.2') { throw 'Missing previous installation' }
+          if ((Get-ItemProperty $key).DisplayVersion -ne '0.2.6') { throw 'Missing previous installation' }
           $p = Start-Process $setup.FullName -ArgumentList '/S' -PassThru
           if (!$p.WaitForExit(120000)) { throw 'Upgrade timed out' }
           if ((Get-ItemProperty $key).DisplayVersion -ne $env:GITHUB_REF_NAME.TrimStart('v')) { throw 'Upgrade version mismatch' }
