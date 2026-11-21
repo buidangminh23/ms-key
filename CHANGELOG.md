@@ -2,6 +2,14 @@
 
 All notable changes to MS Key are documented here. The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and the project uses [Semantic Versioning](https://semver.org/).
 
+## [0.2.5] - 2026-11-21
+
+### Fixed
+
+- On Windows, delayed edits at a word boundary now finish before the first letter of the next word. Holding Shift while pressing Space also keeps the space after the accented letter.
+- On Windows, typing in a newly focused text field starts a fresh word, including when an app moves focus between fields in the same window.
+- Repeating a tone key to enter it literally now keeps the displayed spelling when pressing Space, including words that still contain Vietnamese diacritics. English and custom dictionary spellings are still recognized.
+
 ## [0.2.4] - 2026-11-18
 
 ### Fixed
