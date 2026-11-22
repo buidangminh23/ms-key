@@ -2,6 +2,18 @@
 
 All notable changes to MS Key are documented here. The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and the project uses [Semantic Versioning](https://semver.org/).
 
+## [0.2.13] - 2026-11-22
+
+### Fixed
+
+- On Linux, MS Key no longer switches itself off after login or when IBus restarts. MS Key now finishes setting up before it announces itself to IBus, so GNOME can select it right away instead of falling back to the English (US) layout.
+
+### macOS installation
+
+```sh
+curl -fsSL https://github.com/buidangminh23/ms-key/releases/download/v0.2.13/install-macos.sh | bash
+```
+
 ## [0.2.12] - 2026-11-22
 
 ### Fixed
