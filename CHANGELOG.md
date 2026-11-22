@@ -2,6 +2,19 @@
 
 All notable changes to MS Key are documented here. The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and the project uses [Semantic Versioning](https://semver.org/).
 
+## [0.2.11] - 2026-11-22
+
+### Verification
+
+- This patch packages the Telex engine from v0.2.10 after a full-dictionary typing check in Codex on macOS. All 6,711 entries matched the text read back from the composer, including spaces between words. Examples included `cacs` → “các”, `hoawcj` → “hoặc” and `ddaayf` → “đầy”.
+- The check used automated, overlapping keystrokes with a target interval of 7 ms in 28 batches. Expected output followed the configured modern tone placement for 69 dictionary entries. Physical keyboards were not exercised in this check.
+
+### macOS installation
+
+```sh
+curl -fsSL https://github.com/buidangminh23/ms-key/releases/download/v0.2.11/install-macos.sh | bash
+```
+
 ## [0.2.10] - 2026-11-22
 
 ### Fixed
