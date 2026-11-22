@@ -641,7 +641,9 @@ fn last_error_line(text: &str) -> String {
 }
 
 fn run_bounded(mut command: Command, limit: Duration) -> Result<(Option<ExitStatus>, String), String> {
-    let log_path = env::temp_dir().join(format!("mskey-update-{}.log", std::process::id()));
+    static RUN: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+    let run = RUN.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+    let log_path = env::temp_dir().join(format!("mskey-update-{}-{run}.log", std::process::id()));
     let log = fs::File::create(&log_path).map_err(|e| format!("Không tạo được nhật ký cập nhật: {e}"))?;
     let log_err = log.try_clone().map_err(|e| format!("Không tạo được nhật ký cập nhật: {e}"))?;
     let mut child = command
