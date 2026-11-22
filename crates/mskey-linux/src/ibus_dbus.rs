@@ -96,7 +96,6 @@ pub fn run_ibus_service() -> i32 {
         return 1;
     }
 
-    request_ibus_name(conn);
     let _ = ensure_gtk_init();
     let f_xml = cstr(FACTORY_XML);
     let f_node = unsafe { g_dbus_node_info_new_for_xml(f_xml.as_ptr(), ptr::null_mut()) };
@@ -141,6 +140,10 @@ pub fn run_ibus_service() -> i32 {
         );
         g_timeout_add(500, Some(poll_config_reload), ptr::null_mut());
     }
+    // Own the bus name only after the Factory object is exported: IBus calls
+    // CreateEngine as soon as the name appears, and an early request makes it
+    // fail with UnknownMethod so GNOME falls back to xkb:us.
+    request_ibus_name(conn);
 
     let ml = unsafe { g_main_loop_new(ptr::null_mut(), 0) };
     MAIN_LOOP.with(|c| c.set(ml));
