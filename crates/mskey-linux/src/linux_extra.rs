@@ -588,87 +588,125 @@ fn find_file_recursive(dir: &Path, filename: &str) -> Option<PathBuf> {
     None
 }
 
-fn wait_for_installer(
-    child: &mut Child,
-    feedback_after: Duration,
-    report_waiting: impl FnOnce(),
-) -> std::io::Result<ExitStatus> {
+pub const LINUX_UPDATE_HELPER: &str = "/usr/lib/mskey/mskey-update";
+const INSTALL_TIME_LIMIT: Duration = Duration::from_secs(15 * 60);
+
+pub fn has_linux_update_helper() -> bool {
+    Path::new(LINUX_UPDATE_HELPER).is_file()
+}
+
+fn wait_with_limit(child: &mut Child, limit: Duration) -> std::io::Result<Option<ExitStatus>> {
     let started = Instant::now();
     loop {
         if let Some(status) = child.try_wait()? {
-            return Ok(status);
+            return Ok(Some(status));
         }
-        let remaining = feedback_after.saturating_sub(started.elapsed());
-        if remaining.is_zero() {
-            report_waiting();
-            return child.wait();
+        if started.elapsed() >= limit {
+            let _ = child.kill();
+            let _ = child.wait();
+            return Ok(None);
         }
-        std::thread::sleep(remaining.min(Duration::from_millis(150)));
+        std::thread::sleep(Duration::from_millis(150));
     }
+}
+
+fn restart_ibus_in_background() {
+    if let Ok(mut ibus) = Command::new("ibus").arg("restart").spawn() {
+        std::thread::spawn(move || {
+            let _ = ibus.wait();
+        });
+    }
+}
+
+fn installer_failure(status: Option<ExitStatus>, detail: &str, limit: Duration) -> String {
+    let reason = match status.and_then(|s| s.code()) {
+        None if status.is_none() => format!("Cập nhật quá {} phút nên đã dừng", limit.as_secs() / 60),
+        Some(126) => "Đã hủy cấp quyền cập nhật".to_string(),
+        Some(127) => "Máy chưa cho phép cập nhật không cần mật khẩu".to_string(),
+        Some(code) => format!("Trình cập nhật dừng với mã {code}"),
+        None => "Trình cập nhật bị dừng đột ngột".to_string(),
+    };
+    let detail = detail.trim();
+    if detail.is_empty() { format!("{reason}.") } else { format!("{reason}: {detail}") }
+}
+
+fn last_error_line(text: &str) -> String {
+    text.lines()
+        .rev()
+        .map(str::trim)
+        .filter(|l| !l.is_empty())
+        .find(|l| !l.starts_with("W:") && !l.contains("Download is performed unsandboxed"))
+        .unwrap_or_default()
+        .to_string()
+}
+
+fn run_bounded(mut command: Command, limit: Duration) -> Result<(Option<ExitStatus>, String), String> {
+    let log_path = env::temp_dir().join(format!("mskey-update-{}.log", std::process::id()));
+    let log = fs::File::create(&log_path).map_err(|e| format!("Không tạo được nhật ký cập nhật: {e}"))?;
+    let log_err = log.try_clone().map_err(|e| format!("Không tạo được nhật ký cập nhật: {e}"))?;
+    let mut child = command
+        .stdin(Stdio::null())
+        .stdout(log)
+        .stderr(log_err)
+        .spawn()
+        .map_err(|e| format!("Không chạy được trình cập nhật: {e}"))?;
+    let status = wait_with_limit(&mut child, limit).map_err(|e| format!("Không theo dõi được trình cập nhật: {e}"))?;
+    let output = fs::read_to_string(&log_path).unwrap_or_default();
+    let _ = fs::remove_file(&log_path);
+    Ok((status, output))
+}
+
+pub fn install_linux_update_with_helper(version: &str) -> Result<LinuxInstallOutcome, String> {
+    install_with_helper_command(version, Command::new("pkexec"), INSTALL_TIME_LIMIT)
+}
+
+fn install_with_helper_command(version: &str, mut command: Command, limit: Duration) -> Result<LinuxInstallOutcome, String> {
+    command.args(["--disable-internal-agent", LINUX_UPDATE_HELPER, version]);
+    let (status, output) = run_bounded(command, limit)?;
+    if status.is_some_and(|s| s.success()) {
+        restart_ibus_in_background();
+        return Ok(LinuxInstallOutcome {
+            restart_setup: env::current_exe().ok(),
+            message: format!("Đã cập nhật MS Key lên v{version}."),
+        });
+    }
+    Err(installer_failure(status, &last_error_line(&output), limit))
 }
 
 fn finish_deb_install(
-    child: &mut Child,
+    child_command: Command,
     staged: &LinuxStagedUpdate,
     setup_path: Option<PathBuf>,
-    short_hash: &str,
-    report_waiting: impl FnOnce(),
+    limit: Duration,
 ) -> Result<LinuxInstallOutcome, String> {
-    let status = wait_for_installer(child, Duration::from_secs(15), report_waiting)
-        .map_err(|e| format!("Không theo dõi được tiến trình cài đặt: {e}"))?;
-    if !status.success() {
-        if status.code() == Some(126) {
-            return Ok(LinuxInstallOutcome {
-                restart_setup: None,
-                message: format!("Đã hủy cấp quyền cài đặt.\nGói đã xác thực nằm tại {}.", staged.file_path.display()),
-            });
-        }
-        let reason = if status.code() == Some(127) {
-            "Không thể cấp quyền cài đặt".to_string()
-        } else {
-            format!("Trình cài đặt trả về {status}")
-        };
-        return Err(format!("{reason}. Gói đã xác thực nằm tại {}.", staged.file_path.display()));
+    let (status, output) = run_bounded(child_command, limit)?;
+    if status.is_some_and(|s| s.success()) {
+        restart_ibus_in_background();
+        return Ok(LinuxInstallOutcome {
+            restart_setup: setup_path,
+            message: format!("Đã cập nhật MS Key lên v{}.", staged.version),
+        });
     }
-    if let Ok(mut ibus) = Command::new("ibus").arg("restart").spawn() {
-        std::thread::spawn(move || { let _ = ibus.wait(); });
-    }
-    Ok(LinuxInstallOutcome {
-        restart_setup: setup_path,
-        message: format!(
-            "Đã cài đặt MS Key v{} (.deb, SHA-256 {}...).",
-            staged.version, short_hash
-        ),
-    })
+    Err(format!(
+        "{} Gói đã xác thực nằm tại {}.",
+        installer_failure(status, &last_error_line(&output), limit),
+        staged.file_path.display()
+    ))
 }
 
-pub fn apply_linux_staged_update(
-    staged: &LinuxStagedUpdate,
-    report_waiting: impl FnOnce(),
-) -> Result<LinuxInstallOutcome, String> {
+pub fn apply_linux_staged_update(staged: &LinuxStagedUpdate) -> Result<LinuxInstallOutcome, String> {
     let short_hash: String = staged.sha256.chars().take(12).collect();
     let setup_path = env::current_exe().ok();
     if staged.is_deb {
-        let child = Command::new("pkexec")
-            .args(["--disable-internal-agent", "dpkg", "-i"])
-            .arg(&staged.file_path)
-            .stdin(Stdio::null())
-            .spawn();
-        match child {
-            Ok(mut child) => {
-                return finish_deb_install(&mut child, staged, setup_path, &short_hash, report_waiting);
-            }
-            Err(e) if e.kind() == std::io::ErrorKind::NotFound => {}
-            Err(e) => return Err(format!("Không thể mở trình cấp quyền cài đặt: {e}")),
-        }
-        if let Some(parent) = staged.file_path.parent() {
-            let _ = Command::new("xdg-open").arg(parent).spawn();
+        if Command::new("pkexec").arg("--version").stdout(Stdio::null()).stderr(Stdio::null()).status().is_ok() {
+            let mut command = Command::new("pkexec");
+            command.args(["--disable-internal-agent", "dpkg", "-i"]).arg(&staged.file_path);
+            return finish_deb_install(command, staged, setup_path, INSTALL_TIME_LIMIT);
         }
         return Ok(LinuxInstallOutcome {
             restart_setup: None,
             message: format!(
-                "Đã tải và xác thực SHA-256 ({}...) tại:\n{}\n\nChạy lệnh sau để cài đặt:\nsudo dpkg -i \"{}\"",
-                short_hash,
+                "Đã tải và xác thực gói tại {}. Chạy: sudo dpkg -i \"{}\"",
                 staged.file_path.display(),
                 staged.file_path.display()
             ),
@@ -733,37 +771,37 @@ pub fn apply_linux_staged_update(
 mod installer_tests {
     use super::*;
 
-    #[test]
-    fn a_slow_install_continues_after_waiting_is_reported() {
-        let mut child = Command::new("sh")
-            .args(["-c", "read -r answer && test \"$answer\" = finish"])
-            .stdin(Stdio::piped())
-            .spawn()
-            .unwrap();
-        let mut input = child.stdin.take().unwrap();
-        let mut reports = 0;
-        let status = wait_for_installer(&mut child, Duration::ZERO, || {
-            reports += 1;
-            writeln!(input, "finish").unwrap();
-        }).unwrap();
-        assert!(status.success());
-        assert_eq!(reports, 1);
+    fn fake(script: &str) -> Command {
+        let mut command = Command::new("sh");
+        command.args(["-c", script, "fake-pkexec"]);
+        command
     }
 
     #[test]
-    fn a_cancelled_installer_returns_without_another_prompt() {
-        let mut child = Command::new("sh").args(["-c", "exit 126"]).spawn().unwrap();
-        let staged = LinuxStagedUpdate {
-            version: "1.0.0".into(),
-            asset_name: "test.deb".into(),
-            file_path: "/tmp/test.deb".into(),
-            sha256: "test".into(),
-            is_deb: true,
-        };
-        let result = finish_deb_install(&mut child, &staged, None, "test", || panic!("unexpected wait")).unwrap();
-        assert!(result.restart_setup.is_none());
-        assert!(result.message.contains("Đã hủy"));
-        assert!(result.message.contains("/tmp/test.deb"));
+    fn a_successful_helper_reports_the_new_version() {
+        let out = install_with_helper_command("9.9.9", fake("exit 0"), Duration::from_secs(5)).unwrap();
+        assert!(out.message.contains("v9.9.9"));
+    }
+
+    #[test]
+    fn a_hung_helper_is_stopped_at_the_limit() {
+        let started = Instant::now();
+        let err = install_with_helper_command("9.9.9", fake("sleep 30"), Duration::from_millis(400)).unwrap_err();
+        assert!(started.elapsed() < Duration::from_secs(5));
+        assert!(err.contains("quá"));
+    }
+
+    #[test]
+    fn a_failed_helper_shows_its_last_message() {
+        let err = install_with_helper_command("9.9.9", fake("echo 'W: noise' >&2; echo 'Sai mã SHA-256' >&2; exit 6"), Duration::from_secs(5)).unwrap_err();
+        assert!(err.contains("mã 6"));
+        assert!(err.contains("Sai mã SHA-256"));
+    }
+
+    #[test]
+    fn a_refused_authorization_is_explained() {
+        let err = install_with_helper_command("9.9.9", fake("exit 126"), Duration::from_secs(5)).unwrap_err();
+        assert!(err.contains("hủy"));
     }
 }
 

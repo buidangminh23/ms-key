@@ -2,6 +2,25 @@
 
 All notable changes to MS Key are documented here. The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and the project uses [Semantic Versioning](https://semver.org/).
 
+## [0.2.12] - 2026-11-22
+
+### Fixed
+
+- On macOS, Backspace right after a word boundary goes back into the word MS Key just typed. It no longer re-reads the word from the app through Accessibility, which in Chromium and Electron apps (Claude, Zalo, Chrome, VS Code) can lag behind the screen and make later keystrokes delete or replace the wrong letters. The Accessibility read is kept for words typed before MS Key saw them, and only after typing has paused for 0.6 s.
+- On macOS, a focus notification from the app no longer drops the word being typed. MS Key keeps the last confirmed input field while it re-reads focus, so tone keys typed during that moment still apply. Secure Input still bypasses composition.
+- On Linux, checking for and installing an update can no longer hang. Every step has a time limit, and the installer is stopped after 15 minutes with a message instead of waiting forever.
+
+### Changed
+
+- On Linux, the Updates section has one button and one status line. It shows “Cập nhật lên vX” when a newer release exists and installs it in place, with no pop-up dialogs. Checking on start only updates the status line.
+- The Linux `.deb` installs `/usr/lib/mskey/mskey-update` and a polkit policy. From this version on, the person at the computer can update MS Key without typing a password. The helper only installs a newer official `mskey` release downloaded from this repository’s GitHub Releases and checked against `SHA256SUMS`. Remote or inactive sessions still require an administrator password. Updating from 0.2.11 or earlier still asks for the password once.
+
+### macOS installation
+
+```sh
+curl -fsSL https://github.com/buidangminh23/ms-key/releases/download/v0.2.12/install-macos.sh | bash
+```
+
 ## [0.2.11] - 2026-11-22
 
 ### Verification

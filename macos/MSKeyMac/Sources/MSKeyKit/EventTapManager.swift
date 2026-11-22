@@ -31,6 +31,8 @@ public final class EventTapManager: @unchecked Sendable {
     var onFocusRefresh: (@Sendable () -> Void)?
     private var sandboxFocused = false
     private var bufferActive = false
+    private var previousWordFromEngine = false
+    private var lastKeyUptime: TimeInterval = 0
     private var usesUSKeyboardLayout = true
     private var isSelectionPopupOpen = false
     private var pasteGeneration: UInt64 = 0
@@ -210,7 +212,7 @@ public final class EventTapManager: @unchecked Sendable {
         effectiveVE = cfg.vietnamese_enabled
         rust.setConfig(cfg)
         rust.setTemporaryEnglish(false)
-        bufferActive = false
+        markBufferInactive()
         hotkeys.reset()
         session.invalidateActive()
         session.setUserVE(cfg.vietnamese_enabled)
@@ -224,7 +226,7 @@ public final class EventTapManager: @unchecked Sendable {
         usesUSKeyboardLayout = isUS
         if config.disable_on_non_us_layout {
             rust.resetAll()
-            bufferActive = false
+            markBufferInactive()
         }
     }
 
@@ -233,7 +235,7 @@ public final class EventTapManager: @unchecked Sendable {
         sandboxFocused = focused
         if focused {
             rust.resetAll()
-            bufferActive = false
+            markBufferInactive()
         }
         lock.unlock()
     }
@@ -252,7 +254,7 @@ public final class EventTapManager: @unchecked Sendable {
             rust.resetAll()
             rust.setTemporaryEnglish(false)
             hotkeys.reset()
-            bufferActive = false
+            markBufferInactive()
         }
         let sync = focus.flatMap { applyWindowCheckInsideLock(appName: $0.appName, windowTitle: $0.windowTitle) }
         lock.unlock()
@@ -283,7 +285,7 @@ public final class EventTapManager: @unchecked Sendable {
         }
         rust.resetAll()
         rust.setTemporaryEnglish(false)
-        bufferActive = false
+        markBufferInactive()
         if !sameApp {
             hotkeys.reset()
         }
@@ -316,7 +318,7 @@ public final class EventTapManager: @unchecked Sendable {
         pasteGeneration &+= 1
         pendingSavedPasteboard = nil
         rust.resetAll()
-        bufferActive = false
+        markBufferInactive()
         lock.unlock()
 
         selectionQueue.async { [weak self] in
@@ -426,7 +428,7 @@ public final class EventTapManager: @unchecked Sendable {
             rust.resetAll()
             rust.setTemporaryEnglish(false)
             hotkeys.reset()
-            bufferActive = false
+            markBufferInactive()
             let tap = eventTap
             lock.unlock()
             if let tap { CGEvent.tapEnable(tap: tap, enable: true) }
@@ -439,7 +441,7 @@ public final class EventTapManager: @unchecked Sendable {
             lock.lock()
             rust.resetWord()
             rust.setTemporaryEnglish(false)
-            bufferActive = false
+            markBufferInactive()
             hotkeys.reset()
             lock.unlock()
             return Unmanaged.passUnretained(event)
@@ -532,7 +534,7 @@ public final class EventTapManager: @unchecked Sendable {
         }
         if sig == .convertClipboard {
             rust.resetAll()
-            bufferActive = false
+            markBufferInactive()
             lock.unlock()
             if let s = pendingAppSync {
                 DispatchQueue.main.async { self.onSyncUI?(s.0, s.1, false) }
@@ -543,7 +545,7 @@ public final class EventTapManager: @unchecked Sendable {
         let skipFocus = focus?.allowsTyping(targetPID: targetPID, frontPID: frontPID, secureInput: secureInput) != true
         if skipFocus {
             rust.resetAll()
-            bufferActive = false
+            markBufferInactive()
             lock.unlock()
             if let s = pendingAppSync {
                 DispatchQueue.main.async { self.onSyncUI?(s.0, s.1, false) }
@@ -552,7 +554,7 @@ public final class EventTapManager: @unchecked Sendable {
         }
         if sig == .convertSelection {
             rust.resetAll()
-            bufferActive = false
+            markBufferInactive()
             lock.unlock()
             if let s = pendingAppSync {
                 DispatchQueue.main.async { self.onSyncUI?(s.0, s.1, false) }
@@ -563,7 +565,7 @@ public final class EventTapManager: @unchecked Sendable {
         if sig == .undoLastWord {
             let undoAct = rust.toggleLastCommittedWord()
             if undoAct.replace {
-                bufferActive = false
+                markBufferInactive()
                 let undoOpts = makeSendOptionsInsideLock(activeApp: session.activeApp)
                 lock.unlock()
                 if let s = pendingAppSync {
@@ -585,7 +587,7 @@ public final class EventTapManager: @unchecked Sendable {
         if inSandbox || hasAccelMod || session.activeBehavior == .blacklist {
             if hasAccelMod {
                 rust.resetWord()
-                bufferActive = false
+                markBufferInactive()
                 pasteGeneration &+= 1
                 pendingSavedPasteboard = nil
             }
@@ -609,15 +611,20 @@ public final class EventTapManager: @unchecked Sendable {
         return processKeyAction(event: event, keyCode: keyCode, opts: opts, proxy: proxy)
     }
 
+    static let accessibilitySettleSeconds: TimeInterval = 0.6
+
     private func processKeyAction(event: CGEvent, keyCode: UInt16, opts: SendOptions, proxy: CGEventTapProxy) -> Unmanaged<CGEvent>? {
         lock.lock()
+        defer { lastKeyUptime = ProcessInfo.processInfo.systemUptime }
         var cursorLeft = 0
         let act: KeyActionResult
         if Int(keyCode) == kVK_Escape {
             act = rust.processEscape()
-            bufferActive = false
+            markBufferInactive()
         } else if Int(keyCode) == kVK_Delete {
-            let tryReedit = config.reeditSurroundingWord && effectiveVE && !bufferActive
+            let restoresEngineWord = previousWordFromEngine
+            let axSettled = ProcessInfo.processInfo.systemUptime - lastKeyUptime > Self.accessibilitySettleSeconds
+            let tryReedit = config.reeditSurroundingWord && effectiveVE && !bufferActive && !restoresEngineWord && axSettled
             if tryReedit {
                 lock.unlock()
                 let surrounding = MacAppDetector.surroundingWordBeforeCaret()
@@ -631,12 +638,16 @@ public final class EventTapManager: @unchecked Sendable {
                 }
             }
             act = rust.processBackspace()
+            if restoresEngineWord {
+                previousWordFromEngine = false
+                bufferActive = true
+            }
             if act.replace {
                 cursorLeft = rust.takePendingCursorLeft()
             }
         } else if MacKeycode.isNavigationKey(keyCode) {
             rust.resetWord()
-            bufferActive = false
+            markBufferInactive()
             lock.unlock()
             return Unmanaged.passUnretained(event)
         } else if let scalar = Self.extractScalar(from: event, keyCode: keyCode) {
@@ -652,17 +663,23 @@ public final class EventTapManager: @unchecked Sendable {
             let isDelim = rust.isActiveDelimiter(scalar: scalar) || scalar == 10 || scalar == 9
             act = rust.processKey(scalar: scalar)
             bufferActive = !isDelim
+            previousWordFromEngine = isDelim && rust.isActiveDelimiter(scalar: scalar)
             if act.replace {
                 cursorLeft = rust.takePendingCursorLeft()
             }
         } else {
             rust.resetWord()
-            bufferActive = false
+            markBufferInactive()
             lock.unlock()
             return Unmanaged.passUnretained(event)
         }
         lock.unlock()
         return applyAction(act, original: event, triggerKeyCode: keyCode, opts: opts, cursorLeft: cursorLeft, proxy: proxy)
+    }
+
+    private func markBufferInactive() {
+        bufferActive = false
+        previousWordFromEngine = false
     }
 
     private func toggleVEInsideLock() -> (Bool, String, Bool) {
@@ -673,7 +690,7 @@ public final class EventTapManager: @unchecked Sendable {
         rust.setEnabled(next)
         rust.resetAll()
         rust.setTemporaryEnglish(false)
-        bufferActive = false
+        markBufferInactive()
         return (next, session.activeApp, config.beep_on_switch)
     }
 

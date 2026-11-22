@@ -125,7 +125,6 @@ final class MacTypingFocusMonitor {
         if ready && ((notice == kAXFocusedUIElementChangedNotification && element == field) ||
                      (notice == kAXFocusedWindowChangedNotification && element == window)) { return }
         ready = false
-        tap.updateTypingFocus(nil, targetChanged: false)
         refresh()
     }
 
@@ -192,6 +191,11 @@ final class MacTypingFocusMonitor {
             nextFocus = MacTypingFocus(pid: pid, appName: name, windowTitle: title, secureField: secure)
         } else {
             nextFocus = nil
+        }
+        let stillFrontmost = NSWorkspace.shared.frontmostApplication?.processIdentifier == pid
+        if nextFocus == nil && !targetChanged && stillFrontmost && security == nil {
+            ready = false
+            return
         }
         ready = nextFocus != nil
         tap.updateTypingFocus(nextFocus, targetChanged: targetChanged)

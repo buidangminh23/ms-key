@@ -1,0 +1,20 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE policyconfig PUBLIC "-//freedesktop//DTD PolicyKit Policy Configuration 1.0//EN"
+ "http://www.freedesktop.org/standards/PolicyKit/1/policyconfig.dtd">
+<policyconfig>
+  <vendor>MS Key</vendor>
+  <vendor_url>https://github.com/buidangminh23/ms-key</vendor_url>
+  <action id="org.mskey.update">
+    <description>Update MS Key to a newer official release</description>
+    <description xml:lang="vi">Cập nhật MS Key lên bản phát hành chính thức mới hơn</description>
+    <message>Authentication is required to update MS Key</message>
+    <message xml:lang="vi">Cần xác thực để cập nhật MS Key</message>
+    <icon_name>mskey</icon_name>
+    <defaults>
+      <allow_any>auth_admin</allow_any>
+      <allow_inactive>auth_admin</allow_inactive>
+      <allow_active>yes</allow_active>
+    </defaults>
+    <annotate key="org.freedesktop.policykit.exec.path">/usr/lib/mskey/mskey-update</annotate>
+  </action>
+</policyconfig>

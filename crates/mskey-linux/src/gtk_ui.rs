@@ -6,7 +6,6 @@ use std::path::PathBuf;
 use std::process::Command;
 use std::ptr;
 use std::thread;
-use std::time::Instant;
 
 use mskey_core::{AppBehavior, Config, HotkeyCombo, SwitchPreset};
 
@@ -26,8 +25,8 @@ use crate::gtk_ffi::{
     gtk_window_set_position, gtk_window_set_resizable, gtk_window_set_title,
 };
 use crate::gtk_helpers::{
-    create_modal_gtk, get_combo, make_button, make_hbox, make_label, make_vbox, pack, read_entry,
-    run_modal_gtk, set_label_text, show_info_modal, write_entry,
+    get_combo, make_button, make_hbox, make_label, make_vbox, pack, read_entry, set_label_text,
+    show_info_modal, write_entry,
 };
 use crate::gtk_theme::{add_css_class, apply_gtk_theme};
 use crate::gtk_ui_tabs::{
@@ -36,8 +35,9 @@ use crate::gtk_ui_tabs::{
 };
 use crate::linux_extra::{
     LinuxInstallOutcome, acquire_setup_lock, apply_linux_staged_update, check_latest_release,
-    detect_active_app, download_and_verify_linux_update, format_update_check_message,
-    select_linux_update_asset, show_linux_switch_osd,
+    detect_active_app, download_and_verify_linux_update, has_linux_update_helper,
+    install_linux_update_with_helper, is_deb_installed, select_linux_update_asset,
+    show_linux_switch_osd,
 };
 
 thread_local! {
@@ -45,8 +45,8 @@ thread_local! {
     static LAST_APP: RefCell<String> = const { RefCell::new(String::new()) };
     static IS_INIT: Cell<bool> = const { Cell::new(false) };
     static SYNCING: Cell<bool> = const { Cell::new(false) };
-    static UPDATE_MODAL_CHOICE: Cell<u8> = const { Cell::new(0) };
-    static INSTALL_STARTED: Cell<Option<Instant>> = const { Cell::new(None) };
+    static UPDATE_BUSY: Cell<bool> = const { Cell::new(false) };
+    static PENDING_UPDATE: RefCell<Option<mskey_core::update::ReleaseInfo>> = const { RefCell::new(None) };
     static RESTART_SETUP: RefCell<Option<PathBuf>> = const { RefCell::new(None) };
 }
 
@@ -113,7 +113,7 @@ pub fn run_setup_ui(smoke_out: Option<&str>) -> i32 {
     }
 
     if check_updates_start {
-        start_async_update_check(false);
+        start_async_update_check();
     }
 
     connect_signal(win, "destroy", on_main_destroy as *const c_void, 0);
@@ -531,178 +531,23 @@ unsafe extern "C" fn on_sync_clear(_: *mut GtkWidget, _: *mut c_void) {
     sync_widgets_from_config();
 }
 
-struct UpdateResultPayload {
-    show_modal: bool,
-    has_newer: bool,
-    msg: String,
-    release: Option<mskey_core::update::ReleaseInfo>,
+struct UpdateCheckPayload {
+    result: Result<mskey_core::update::ReleaseInfo, String>,
 }
 
 struct UpdateInstallPayload {
+    release: mskey_core::update::ReleaseInfo,
     result: Result<LinuxInstallOutcome, String>,
-    html_url: String,
 }
 
-unsafe extern "C" fn on_upd_choice_install(_: *mut GtkWidget, dlg: *mut c_void) {
-    UPDATE_MODAL_CHOICE.with(|c| c.set(1));
-    unsafe { gtk_widget_destroy(dlg as *mut GtkWidget) };
-}
-
-unsafe extern "C" fn on_upd_choice_github(_: *mut GtkWidget, dlg: *mut c_void) {
-    UPDATE_MODAL_CHOICE.with(|c| c.set(2));
-    unsafe { gtk_widget_destroy(dlg as *mut GtkWidget) };
-}
-
-unsafe extern "C" fn on_upd_choice_close(_: *mut GtkWidget, dlg: *mut c_void) {
-    UPDATE_MODAL_CHOICE.with(|c| c.set(0));
-    unsafe { gtk_widget_destroy(dlg as *mut GtkWidget) };
-}
-
-fn show_update_available_dialog(
-    parent: *mut GtkWidget,
-    info: &mskey_core::update::ReleaseInfo,
-    asset: Option<&mskey_core::update::ReleaseAsset>,
-) -> u8 {
-    UPDATE_MODAL_CHOICE.with(|c| c.set(0));
-    let dlg = create_modal_gtk(parent, "Cập nhật MS Key", 460, 210);
-    let vbox = make_vbox(10);
-    let mut text = format!(
-        "Đã có phiên bản mới v{} (hiện tại v{}).",
-        info.version,
-        env!("CARGO_PKG_VERSION")
-    );
-    if let Some(a) = asset {
-        let sz = mskey_core::update::format_bytes_human(a.size);
-        let sz_part = if sz.is_empty() { String::new() } else { format!(" ({sz})") };
-        text.push_str(&format!("\nGói: {}{}\nXác thực chữ ký SHA-256 tự động.", a.name, sz_part));
-    }
-    let notes = mskey_core::update::release_notes_preview(&info.body, 280);
-    if !notes.is_empty() {
-        text.push_str("\n\nGhi chú:\n");
-        text.push_str(&notes);
-    }
-    let lbl = make_label(&text, false);
-    pack(vbox, lbl, true, true, 0);
-
-    let brow = make_hbox(8);
-    let btn_close = make_button("Để sau", false);
-    let btn_github = make_button("Mở trang phát hành", false);
-    pack(brow, btn_close, false, false, 0);
-    pack(brow, btn_github, false, false, 0);
-    if asset.is_some() {
-        let btn_install = make_button("Tải & Cập nhật", true);
-        connect_signal(btn_install, "clicked", on_upd_choice_install as *const c_void, dlg as usize);
-        pack(brow, btn_install, true, true, 0);
-    }
-    connect_signal(btn_github, "clicked", on_upd_choice_github as *const c_void, dlg as usize);
-    connect_signal(btn_close, "clicked", on_upd_choice_close as *const c_void, dlg as usize);
-    unsafe {
-        gtk_container_add(dlg, vbox);
-    }
-    pack(vbox, brow, false, false, 0);
-    run_modal_gtk(dlg);
-    UPDATE_MODAL_CHOICE.with(|c| c.get())
-}
-
-unsafe extern "C" fn on_update_install_done(data: *mut c_void) -> c_int {
-    if data.is_null() {
-        return 0;
-    }
-    let payload = unsafe { Box::from_raw(data as *mut UpdateInstallPayload) };
-    INSTALL_STARTED.set(None);
-    let (modal_win, close_win) = UI.with(|c| {
-        if let Some(st) = c.borrow().as_ref() {
-            unsafe {
-                gtk_button_set_label(st.btn_check_update, cstr("Kiểm tra cập nhật").as_ptr());
-                gtk_widget_set_sensitive(st.btn_check_update, 1);
-            }
-            match &payload.result {
-                Ok(out) => {
-                    set_label_text(st.lbl_update_status, out.message.lines().next().unwrap_or_default());
-                    return (Some(st.win), out.restart_setup.is_some());
-                }
-                Err(err) => {
-                    set_label_text(st.lbl_update_status, err);
-                    return (Some(st.win), false);
-                }
-            }
-        }
-        (None, false)
-    });
-    if let Some(win) = modal_win {
-        match payload.result {
-            Ok(out) => {
-                show_info_modal(win, "Cập nhật MS Key", &out.message);
-                if close_win {
-                    RESTART_SETUP.set(out.restart_setup);
-                    unsafe { gtk_widget_destroy(win) };
-                }
-            }
-            Err(err) => {
-                show_info_modal(
-                    win,
-                    "Lỗi cập nhật MS Key",
-                    &format!("{err}\n\nTrang phát hành: {}", payload.html_url),
-                );
-            }
-        }
-    }
-    0
-}
-
-unsafe extern "C" fn on_installer_started(_: *mut c_void) -> c_int {
-    INSTALL_STARTED.set(Some(Instant::now()));
+fn set_update_ui(status: &str, button: &str, enabled: bool) {
     UI.with_borrow(|state| {
         if let Some(st) = state {
-            set_label_text(st.lbl_update_status, "Đã xác thực gói. Đang chờ cấp quyền hoặc cài đặt…");
-        }
-    });
-    0
-}
-
-unsafe extern "C" fn on_installer_waiting(_: *mut c_void) -> c_int {
-    UI.with_borrow(|state| {
-        if let (Some(st), Some(start)) = (state, INSTALL_STARTED.get()) {
-            let seconds = start.elapsed().as_secs();
-            set_label_text(st.lbl_update_status, &format!("Trình cài đặt vẫn đang chạy ({seconds} giây). Hãy kiểm tra hộp thoại cấp quyền nếu có."));
+            set_label_text(st.lbl_update_status, status);
             unsafe {
-                gtk_button_set_label(st.btn_check_update, cstr("Xem trạng thái cài đặt").as_ptr());
-                gtk_widget_set_sensitive(st.btn_check_update, 1);
+                gtk_button_set_label(st.btn_check_update, cstr(button).as_ptr());
+                gtk_widget_set_sensitive(st.btn_check_update, c_int::from(enabled));
             }
-        }
-    });
-    0
-}
-
-fn start_async_update_download(
-    info: mskey_core::update::ReleaseInfo,
-    asset: mskey_core::update::ReleaseAsset,
-    sums: mskey_core::update::ReleaseAsset,
-) {
-    UI.with(|c| {
-        if let Some(st) = c.borrow().as_ref() {
-            set_label_text(st.lbl_update_status, &format!("Đang tải {}...", asset.name));
-            unsafe { gtk_widget_set_sensitive(st.btn_check_update, 0) };
-        }
-    });
-    let html_url = if info.html_url.trim().is_empty() {
-        mskey_core::update::GITHUB_RELEASES_URL.to_string()
-    } else {
-        info.html_url.clone()
-    };
-    thread::spawn(move || {
-        let result = download_and_verify_linux_update(&info.version, &asset, &sums, None)
-            .and_then(|staged| {
-                if staged.is_deb {
-                    unsafe { g_idle_add(Some(on_installer_started), ptr::null_mut()) };
-                }
-                apply_linux_staged_update(&staged, || unsafe {
-                    g_idle_add(Some(on_installer_waiting), ptr::null_mut());
-                })
-            });
-        let payload = Box::into_raw(Box::new(UpdateInstallPayload { result, html_url }));
-        unsafe {
-            g_idle_add(Some(on_update_install_done), payload as *mut c_void);
         }
     });
 }
@@ -711,71 +556,103 @@ unsafe extern "C" fn on_update_check_done(data: *mut c_void) -> c_int {
     if data.is_null() {
         return 0;
     }
-    let payload = unsafe { Box::from_raw(data as *mut UpdateResultPayload) };
-    let modal_win = UI.with(|c| {
-        if let Some(st) = c.borrow().as_ref() {
-            set_label_text(st.lbl_update_status, &payload.msg);
-            unsafe { gtk_widget_set_sensitive(st.btn_check_update, 1) };
-            if payload.show_modal || payload.has_newer {
-                return Some(st.win);
-            }
+    let payload = unsafe { Box::from_raw(data as *mut UpdateCheckPayload) };
+    UPDATE_BUSY.set(false);
+    let current = env!("CARGO_PKG_VERSION");
+    match payload.result {
+        Ok(info) if mskey_core::update::is_newer_version(current, &info.version) => {
+            let status = format!("Có bản mới v{} (đang dùng v{current}).", info.version);
+            let button = format!("Cập nhật lên v{}", info.version);
+            PENDING_UPDATE.with_borrow_mut(|p| *p = Some(info));
+            set_update_ui(&status, &button, true);
         }
-        None
-    });
-    if let Some(win) = modal_win {
-        if payload.has_newer
-            && let Some(info) = payload.release
-        {
-            let pair = select_linux_update_asset(&info);
-            let choice = show_update_available_dialog(win, &info, pair.as_ref().map(|p| &p.0));
-            if choice == 1
-                && let Some((asset, sums)) = pair
-            {
-                start_async_update_download(info, asset, sums);
-            } else if choice == 2 {
-                let target = if info.html_url.trim().is_empty() {
-                    mskey_core::update::GITHUB_RELEASES_URL
-                } else {
-                    info.html_url.trim()
-                };
-                let _ = Command::new("xdg-open").arg(target).spawn();
-            }
-        } else {
-            show_info_modal(win, "Kiểm tra cập nhật", &payload.msg);
+        Ok(_) => {
+            PENDING_UPDATE.with_borrow_mut(|p| *p = None);
+            set_update_ui(&format!("Đang dùng bản mới nhất (v{current})."), "Kiểm tra cập nhật", true);
+        }
+        Err(err) => {
+            PENDING_UPDATE.with_borrow_mut(|p| *p = None);
+            set_update_ui(&format!("Không kiểm tra được: {err}"), "Kiểm tra lại", true);
         }
     }
     0
 }
 
-fn start_async_update_check(show_modal: bool) {
-    UI.with(|c| {
-        if let Some(st) = c.borrow().as_ref() {
-            set_label_text(st.lbl_update_status, "Đang kiểm tra cập nhật...");
-            unsafe { gtk_widget_set_sensitive(st.btn_check_update, 0) };
-        }
-    });
+fn start_async_update_check() {
+    if UPDATE_BUSY.replace(true) {
+        return;
+    }
+    set_update_ui("Đang kiểm tra cập nhật…", "Kiểm tra cập nhật", false);
     thread::spawn(move || {
-        let res = check_latest_release();
-        let release = res.as_ref().ok().cloned();
-        let (has_newer, msg) = format_update_check_message(env!("CARGO_PKG_VERSION"), res);
-        let payload = Box::into_raw(Box::new(UpdateResultPayload {
-            show_modal,
-            has_newer,
-            msg,
-            release: if has_newer { release } else { None },
-        }));
+        let payload = Box::into_raw(Box::new(UpdateCheckPayload { result: check_latest_release() }));
         unsafe {
             g_idle_add(Some(on_update_check_done), payload as *mut c_void);
         }
     });
 }
 
-unsafe extern "C" fn on_check_update(_: *mut GtkWidget, _: *mut c_void) {
-    if INSTALL_STARTED.get().is_some() {
-        unsafe { on_installer_waiting(ptr::null_mut()) };
+fn install_update(info: &mskey_core::update::ReleaseInfo) -> Result<LinuxInstallOutcome, String> {
+    if is_deb_installed() && has_linux_update_helper() {
+        return install_linux_update_with_helper(&info.version);
+    }
+    let (asset, sums) = select_linux_update_asset(info)
+        .ok_or_else(|| "Bản này chưa có gói cho máy Linux này".to_string())?;
+    let staged = download_and_verify_linux_update(&info.version, &asset, &sums, None)?;
+    apply_linux_staged_update(&staged)
+}
+
+unsafe extern "C" fn on_update_install_done(data: *mut c_void) -> c_int {
+    if data.is_null() {
+        return 0;
+    }
+    let UpdateInstallPayload { release, result } = *unsafe { Box::from_raw(data as *mut UpdateInstallPayload) };
+    UPDATE_BUSY.set(false);
+    match result {
+        Ok(out) => {
+            let restart = out.restart_setup.is_some();
+            set_update_ui(&out.message, "Kiểm tra cập nhật", !restart);
+            if restart {
+                RESTART_SETUP.set(out.restart_setup);
+                if let Some(win) = UI.with_borrow(|state| state.as_ref().map(|st| st.win)) {
+                    unsafe { gtk_widget_destroy(win) };
+                }
+            }
+        }
+        Err(err) => {
+            let button = format!("Thử lại cập nhật v{}", release.version);
+            PENDING_UPDATE.with_borrow_mut(|p| *p = Some(release));
+            set_update_ui(&err, &button, true);
+        }
+    }
+    0
+}
+
+fn start_async_update_install(info: mskey_core::update::ReleaseInfo) {
+    if UPDATE_BUSY.replace(true) {
         return;
     }
-    start_async_update_check(true);
+    set_update_ui(
+        &format!("Đang tải và cài v{}… Có thể mất vài phút, cứ để cửa sổ này mở.", info.version),
+        "Đang cập nhật…",
+        false,
+    );
+    thread::spawn(move || {
+        let result = install_update(&info);
+        let payload = Box::into_raw(Box::new(UpdateInstallPayload { release: info, result }));
+        unsafe {
+            g_idle_add(Some(on_update_install_done), payload as *mut c_void);
+        }
+    });
+}
+
+unsafe extern "C" fn on_check_update(_: *mut GtkWidget, _: *mut c_void) {
+    if UPDATE_BUSY.get() {
+        return;
+    }
+    match PENDING_UPDATE.with_borrow_mut(Option::take) {
+        Some(info) => start_async_update_install(info),
+        None => start_async_update_check(),
+    }
 }
 
 unsafe extern "C" fn on_import_tree(_: *mut GtkWidget, _: *mut c_void) {

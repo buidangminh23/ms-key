@@ -1,0 +1,61 @@
+#!/bin/sh
+set -eu
+PATH=/usr/sbin:/usr/bin:/sbin:/bin
+export PATH
+umask 022
+
+releases="https://github.com/buidangminh23/ms-key/releases/download"
+version="${1:-}"
+
+if ! printf '%s' "$version" | grep -Eqx '[0-9]+\.[0-9]+\.[0-9]+'; then
+    echo "Phiên bản không hợp lệ: $version" >&2
+    exit 2
+fi
+
+arch="$(dpkg --print-architecture)"
+case "$arch" in
+    amd64|arm64) ;;
+    *) echo "Kiến trúc $arch chưa có gói MS Key" >&2; exit 3 ;;
+esac
+
+installed="$(dpkg-query -W -f='${Version}' mskey 2>/dev/null || echo 0)"
+if ! dpkg --compare-versions "$version" gt "$installed"; then
+    echo "MS Key $installed đã là bản mới nhất" >&2
+    exit 4
+fi
+
+work="$(mktemp -d /var/tmp/mskey-update.XXXXXX)"
+trap 'rm -rf "$work"' EXIT
+chmod 755 "$work"
+deb="mskey_${version}_${arch}.deb"
+
+fetch() {
+    curl -fsSL --proto =https --proto-redir =https --connect-timeout 15 --max-time "$1" \
+        -H "User-Agent: MSKey-Linux-Updater" -o "$2" "$3"
+}
+
+if ! fetch 30 "$work/SHA256SUMS" "$releases/v$version/SHA256SUMS"; then
+    echo "Không tải được SHA256SUMS của bản $version" >&2
+    exit 5
+fi
+if ! fetch 240 "$work/$deb" "$releases/v$version/$deb"; then
+    echo "Không tải được $deb" >&2
+    exit 5
+fi
+
+expected="$(awk -v name="$deb" '$2 == name || $2 == "./" name || $2 == "*" name { print $1; exit }' "$work/SHA256SUMS")"
+actual="$(sha256sum "$work/$deb" | cut -d' ' -f1)"
+if ! printf '%s' "$expected" | grep -Eqx '[0-9a-f]{64}' || [ "$expected" != "$actual" ]; then
+    echo "Sai mã SHA-256 cho $deb" >&2
+    exit 6
+fi
+
+if [ "$(dpkg-deb -f "$work/$deb" Package)" != mskey ] || [ "$(dpkg-deb -f "$work/$deb" Version)" != "$version" ]; then
+    echo "Gói $deb không phải MS Key $version" >&2
+    exit 6
+fi
+
+DEBIAN_FRONTEND=noninteractive timeout 600 apt-get install -y -q \
+    -o DPkg::Lock::Timeout=120 -o Dpkg::Options::=--force-confdef -o Dpkg::Options::=--force-confold \
+    "$work/$deb"
+echo "Đã cài MS Key $version"

@@ -60,6 +60,8 @@ fi
 DEB_ROOT="${WORK}/deb"
 install -Dm755 "${BIN}" "${DEB_ROOT}/usr/bin/mskey-linux"
 render_xml /usr/bin/mskey-linux | install -Dm644 /dev/stdin "${DEB_ROOT}/usr/share/ibus/component/mskey.xml"
+install -Dm755 "${ROOT_DIR}/linux/update/mskey-update" "${DEB_ROOT}/usr/lib/mskey/mskey-update"
+install -Dm644 "${ROOT_DIR}/linux/update/org.mskey.update.policy" "${DEB_ROOT}/usr/share/polkit-1/actions/org.mskey.update.policy"
 render_desktop /usr/bin/mskey-linux | install -Dm644 /dev/stdin "${DEB_ROOT}/usr/share/applications/mskey.desktop"
 for size in 32 48 64 128 256 512; do
     install -Dm644 "${ROOT_DIR}/assets/branding/mskey-${size}.png" "${DEB_ROOT}/usr/share/icons/hicolor/${size}x${size}/apps/mskey.png"
@@ -78,8 +80,8 @@ Priority: optional
 Architecture: ${ARCH}
 Maintainer: Bui Dang Minh <buidangminh23@gmail.com>
 Installed-Size: ${INSTALLED_KB}
-Depends: ibus, libgtk-3-0t64 | libgtk-3-0, libglib2.0-0t64 | libglib2.0-0
-Recommends: xdotool, wtype, fcitx5
+Depends: ibus, curl, libgtk-3-0t64 | libgtk-3-0, libglib2.0-0t64 | libglib2.0-0
+Recommends: xdotool, wtype, fcitx5, pkexec | policykit-1
 Homepage: https://github.com/buidangminh23/ms-key
 Description: Vietnamese Unicode input method for IBus and Fcitx5
  MS Key is a lightweight Vietnamese input method engine for IBus and Fcitx5 with
