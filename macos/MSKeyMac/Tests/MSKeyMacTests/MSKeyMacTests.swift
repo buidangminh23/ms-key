@@ -55,6 +55,14 @@ final class MSKeyMacTests: XCTestCase {
         XCTAssertFalse(window.isVisible)
     }
 
+    func testReplacementSourceKeepsLocalKeyboardInputEnabled() throws {
+        let source = try XCTUnwrap(CGEventEmitter.makeEventSource())
+        XCTAssertEqual(source.localEventsSuppressionInterval, 0)
+        for state: CGEventSuppressionState in [.eventSuppressionStateSuppressionInterval, .eventSuppressionStateRemoteMouseDrag] {
+            XCTAssertTrue(source.getLocalEventsFilterDuringSuppressionState(state).contains(.permitLocalKeyboardEvents))
+        }
+    }
+
     func testUnicodeReplacementDeliversEveryScalarAsAKeyPair() {
         let text = "tiếng Việt là 📝e\u{301}"
         for paced in [false, true] {

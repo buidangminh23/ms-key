@@ -1,6 +1,5 @@
 use crate::config::InputMethod;
 use crate::engine::Engine;
-use crate::engine_helpers::has_vietnamese_diacritics;
 use crate::engine_quick::promote_u_ohorn_for_suffix;
 use crate::syllable::{is_valid_typing_prefix, parse_syllable};
 use crate::tables::{BaseVowel, Tone, VowelFamily, decode_vowel, is_vietnamese_vowel};
@@ -120,7 +119,11 @@ impl Engine {
     }
 
     fn sync_reverted_plain_ascii(&mut self) {
-        if !has_vietnamese_diacritics(&self.display) && self.display.iter().all(|c| c.is_ascii()) {
+        let explicit_escape = self
+            .raw
+            .last_chunk::<2>()
+            .is_some_and(|[first, second]| first.eq_ignore_ascii_case(second));
+        if explicit_escape && self.display.iter().all(char::is_ascii) {
             self.raw = self.display.clone();
             self.char_raw_starts = (0..self.display.len()).collect();
             self.had_transform = false;

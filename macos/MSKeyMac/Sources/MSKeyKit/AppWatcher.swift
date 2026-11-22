@@ -93,14 +93,17 @@ public enum MacAppDetector {
     }
 
     public static func surroundingWordBeforeCaret(maxChars: Int = 32) -> String? {
-        guard AXIsProcessTrusted() else { return nil }
-        let sys = AXUIElementCreateSystemWide()
+        guard AXIsProcessTrusted(), let pid = NSWorkspace.shared.frontmostApplication?.processIdentifier else { return nil }
+        let application = AXUIElementCreateApplication(pid)
+        AXUIElementSetMessagingTimeout(application, 0.025)
         var focusedRef: CFTypeRef?
-        guard AXUIElementCopyAttributeValue(sys, kAXFocusedUIElementAttribute as CFString, &focusedRef) == .success,
+        guard AXUIElementCopyAttributeValue(application, kAXFocusedUIElementAttribute as CFString, &focusedRef) == .success,
               let focused = focusedRef else {
             return nil
         }
         let axEl = focused as! AXUIElement
+        AXUIElementSetMessagingTimeout(axEl, 0.025)
+        guard !IsSecureEventInputEnabled(), secureFieldStatus(of: axEl) == false else { return nil }
         var rangeRef: CFTypeRef?
         guard AXUIElementCopyAttributeValue(axEl, kAXSelectedTextRangeAttribute as CFString, &rangeRef) == .success,
               let rangeVal = rangeRef,
@@ -250,20 +253,25 @@ public enum MacAppDetector {
               let focused = focusedRef else {
             return false
         }
-        let axEl = focused as! AXUIElement
-        var subroleRef: CFTypeRef?
-        if AXUIElementCopyAttributeValue(axEl, kAXSubroleAttribute as CFString, &subroleRef) == .success,
-           let subrole = subroleRef as? String,
-           subrole == (kAXSecureTextFieldSubrole as String) {
-            return true
+        return secureFieldStatus(of: focused as! AXUIElement) != false
+    }
+
+    static func secureFieldStatus(of element: AXUIElement) -> Bool? {
+        var role: CFTypeRef?
+        guard AXUIElementCopyAttributeValue(element, kAXRoleAttribute as CFString, &role) == .success,
+              let name = role as? String else { return nil }
+        if name == kAXSecureTextFieldSubrole { return true }
+        var subrole: CFTypeRef?
+        let status = AXUIElementCopyAttributeValue(element, kAXSubroleAttribute as CFString, &subrole)
+        return secureFieldStatus(subrole: subrole as? String, status: status)
+    }
+
+    static func secureFieldStatus(subrole: String?, status: AXError) -> Bool? {
+        switch status {
+        case .success: return subrole.map { $0 == kAXSecureTextFieldSubrole }
+        case .attributeUnsupported, .noValue: return false
+        default: return nil
         }
-        var roleRef: CFTypeRef?
-        if AXUIElementCopyAttributeValue(axEl, kAXRoleAttribute as CFString, &roleRef) == .success,
-           let role = roleRef as? String,
-           role == "AXSecureTextField" {
-            return true
-        }
-        return false
     }
 
     @MainActor

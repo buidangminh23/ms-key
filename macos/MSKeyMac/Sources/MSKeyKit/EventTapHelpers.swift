@@ -66,8 +66,17 @@ struct SendOptions {
 let mskeyEventTag: Int64 = 0x4D53_4B59
 
 enum CGEventEmitter {
+    static func makeEventSource() -> CGEventSource? {
+        guard let source = CGEventSource(stateID: .privateState) else { return nil }
+        source.localEventsSuppressionInterval = 0
+        let permitted: CGEventFilterMask = [.permitLocalKeyboardEvents, .permitLocalMouseEvents, .permitSystemDefinedEvents]
+        source.setLocalEventsFilterDuringSuppressionState(permitted, state: .eventSuppressionStateSuppressionInterval)
+        source.setLocalEventsFilterDuringSuppressionState(permitted, state: .eventSuppressionStateRemoteMouseDrag)
+        return source
+    }
+
     static func postVirtualKey(_ vk: CGKeyCode, flags: CGEventFlags, delayMs: Int, proxy: CGEventTapProxy? = nil) {
-        let src = CGEventSource(stateID: .privateState)
+        let src = makeEventSource()
         guard let down = CGEvent(keyboardEventSource: src, virtualKey: vk, keyDown: true),
               let up = CGEvent(keyboardEventSource: src, virtualKey: vk, keyDown: false) else {
             return
@@ -95,7 +104,7 @@ enum CGEventEmitter {
     }
 
     static func postUnicodeText(_ text: String, paceEachKey: Bool, delayMs: Int, post: (CGEvent) -> Void) {
-        let src = CGEventSource(stateID: .privateState)
+        let src = makeEventSource()
         for scalar in text.unicodeScalars {
             var units = Array(String(scalar).utf16)
             guard let down = CGEvent(keyboardEventSource: src, virtualKey: 0, keyDown: true),

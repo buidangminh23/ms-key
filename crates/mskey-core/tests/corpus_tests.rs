@@ -1,5 +1,8 @@
 use mskey_core::{Config, Engine, EngineAction, InputMethod, normalize_tone_style};
 
+#[path = "corpus/mixed.rs"]
+mod mixed;
+
 const VI_DIC: &str = include_str!("../data/vi.dic");
 
 fn simulate(engine: &mut Engine, input: &str) -> String {

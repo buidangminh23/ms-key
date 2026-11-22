@@ -2,6 +2,17 @@
 
 All notable changes to MS Key are documented here. The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and the project uses [Semantic Versioning](https://semver.org/).
 
+## [0.2.9] - 2026-11-22
+
+### Fixed
+
+- On macOS, MS Key tracks the focused app and its input field outside the keyboard callback. A busy editor no longer makes each keystroke wait for a window or field lookup. Secure Input still bypasses composition.
+- Restoring an English word at a word boundary keeps the original letters in names such as `Amanda` and words such as `banana`. Explicit Telex escapes for repeated letters still work.
+
+### Verification
+
+- Added dictionary regression tests and a macOS keyboard test covering all 29 Vietnamese letters, upper and lower case, six tones, overlapping key presses, mixed text, and a temporarily unresponsive editor.
+
 ## [0.2.8] - 2026-11-21
 
 ### Fixed

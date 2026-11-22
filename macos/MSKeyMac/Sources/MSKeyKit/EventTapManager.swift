@@ -26,6 +26,9 @@ public final class EventTapManager: @unchecked Sendable {
     private var tapRunLoop: CFRunLoop?
     private var tapThread: Thread?
     private var tapGeneration: UInt64 = 0
+    private var typingFocus: MacTypingFocus?
+    private var requestedFocusPID: pid_t?
+    var onFocusRefresh: (@Sendable () -> Void)?
     private var sandboxFocused = false
     private var bufferActive = false
     private var usesUSKeyboardLayout = true
@@ -233,6 +236,27 @@ public final class EventTapManager: @unchecked Sendable {
             bufferActive = false
         }
         lock.unlock()
+    }
+
+    var hasWindowTitleRules: Bool {
+        lock.lock()
+        defer { lock.unlock() }
+        return config.app_rules.contains { !$0.titlePattern.isEmpty }
+    }
+
+    func updateTypingFocus(_ focus: MacTypingFocus?, targetChanged: Bool) {
+        lock.lock()
+        typingFocus = focus
+        if focus != nil { requestedFocusPID = nil }
+        if targetChanged {
+            rust.resetAll()
+            rust.setTemporaryEnglish(false)
+            hotkeys.reset()
+            bufferActive = false
+        }
+        let sync = focus.flatMap { applyWindowCheckInsideLock(appName: $0.appName, windowTitle: $0.windowTitle) }
+        lock.unlock()
+        if let sync { onSyncUI?(sync.0, sync.1, false) }
     }
 
     public func notifyAppActivated(_ appName: String, windowTitle: String = "") {
@@ -474,15 +498,22 @@ public final class EventTapManager: @unchecked Sendable {
             Task { @MainActor in SelectionActionPanel.shared.cancel() }
         }
 
-        let detected = MacAppDetector.frontmostAppAndWindowTitle()
+        let targetPID = pid_t(truncatingIfNeeded: event.getIntegerValueField(.eventTargetUnixProcessID))
+        let frontPID = NSWorkspace.shared.frontmostApplication?.processIdentifier
+        let secureInput = IsSecureEventInputEnabled()
 
         lock.lock()
         if let holdState = hotkeys.updateHoldEnglish(holdKey: config.holdEnglishKey, flags: flags, keyCode: nil) {
             rust.setTemporaryEnglish(holdState)
         }
         var pendingAppSync: (Bool, String)?
-        if !detected.appName.isEmpty {
-            pendingAppSync = applyWindowCheckInsideLock(appName: detected.appName, windowTitle: detected.windowTitle)
+        let focus = typingFocus
+        if let frontPID, focus?.pid != frontPID, requestedFocusPID != frontPID {
+            requestedFocusPID = frontPID
+            onFocusRefresh?()
+        }
+        if let focus {
+            pendingAppSync = applyWindowCheckInsideLock(appName: focus.appName, windowTitle: focus.windowTitle)
         }
         let sig = hotkeys.handleKeyDown(
             preset: config.switch_preset,
@@ -508,6 +539,16 @@ public final class EventTapManager: @unchecked Sendable {
             }
             DispatchQueue.main.async { self.onConvertClipboard?() }
             return nil
+        }
+        let skipFocus = focus?.allowsTyping(targetPID: targetPID, frontPID: frontPID, secureInput: secureInput) != true
+        if skipFocus {
+            rust.resetAll()
+            bufferActive = false
+            lock.unlock()
+            if let s = pendingAppSync {
+                DispatchQueue.main.async { self.onSyncUI?(s.0, s.1, false) }
+            }
+            return Unmanaged.passUnretained(event)
         }
         if sig == .convertSelection {
             rust.resetAll()
@@ -540,7 +581,8 @@ public final class EventTapManager: @unchecked Sendable {
         let activeApp = session.activeApp
         let modMask = CGEventFlags.maskCommand.rawValue | CGEventFlags.maskControl.rawValue | CGEventFlags.maskAlternate.rawValue
         let hasAccelMod = (flags & modMask) != 0
-        if sandboxFocused || hasAccelMod || session.activeBehavior == .blacklist {
+        let inSandbox = sandboxFocused && focus?.pid == ProcessInfo.processInfo.processIdentifier
+        if inSandbox || hasAccelMod || session.activeBehavior == .blacklist {
             if hasAccelMod {
                 rust.resetWord()
                 bufferActive = false
@@ -562,13 +604,6 @@ public final class EventTapManager: @unchecked Sendable {
             DispatchQueue.main.async { self.onSyncUI?(s.0, s.1, false) }
         }
         if bypassLayout {
-            return Unmanaged.passUnretained(event)
-        }
-        if MacAppDetector.isSecureInputOrPasswordFocused() {
-            lock.lock()
-            rust.resetWord()
-            bufferActive = false
-            lock.unlock()
             return Unmanaged.passUnretained(event)
         }
         return processKeyAction(event: event, keyCode: keyCode, opts: opts, proxy: proxy)

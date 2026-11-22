@@ -208,6 +208,8 @@ bash scripts/build-macos.sh
 open dist/MSKey.app
 ```
 
+To exercise the installed macOS event tap, select the ABC layout and run `swift scripts/test-macos-live-typing.swift` with MS Key set to its default Telex/Unicode profile and Vietnamese enabled. For English pass-through, switch MS Key to English and run `swift scripts/test-macos-live-typing.swift --english`. Use a terminal with Accessibility permission and leave the test window focused. Each run first checks the raw US keyboard mapping in its own native editor, including Shift presses and releases. It then sends the test keys through the system event tap at 9 ms intervals with separate and overlapping presses while its editor stalls three times. Letter events carry their original ASCII characters so queued Shift transitions preserve the intended case. The Telex corpus includes all 29 Vietnamese letters in both cases, all vowel and tone combinations, repeated letters and mixed sentences. Both modes cover the ASCII alphabet, digits and punctuation. The test compares the complete text, prints aggregate counts and returns a nonzero status on failure.
+
 ## Packaging and releases
 
 Brand assets live in `assets/branding`. `mskey-logo.png` preserves the supplied full logo; `mskey-mark.png` is the transparent symbol used at small sizes. To regenerate ICO, ICNS, PNG sizes and installer bitmaps, install Pillow and run `python scripts/prepare-branding.py`.

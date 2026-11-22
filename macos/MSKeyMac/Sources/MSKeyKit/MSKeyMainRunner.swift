@@ -33,6 +33,7 @@ public final class MSKeyStore: ObservableObject {
     public let tapManager: EventTapManager
     public var menuBar: MenuBarController?
     private var mainWindow: NSWindow?
+    private lazy var focusMonitor = MacTypingFocusMonitor(tap: tapManager)
     private var workspaceObserver: NSObjectProtocol?
     private var inputSourceObserver: NSObjectProtocol?
     private var permTimer: Timer?
@@ -61,6 +62,11 @@ public final class MSKeyStore: ObservableObject {
                 self.menuBar?.updateStatusIcon(vietnamese: ve)
             }
         }
+        self.tapManager.onFocusRefresh = { [weak self] in
+            DispatchQueue.main.async {
+                self?.focusMonitor.synchronize(trusted: EventTapManager.hasAccessibilityPermission(prompt: false))
+            }
+        }
         self.tapManager.onConvertClipboard = { [weak self] in
             DispatchQueue.main.async {
                 self?.quickConvertPasteboard()
@@ -71,25 +77,14 @@ public final class MSKeyStore: ObservableObject {
     public func startRuntime(allowAutomaticUpdateCheck: Bool = true) {
         UpdatePanelController.applyTheme(config.theme)
         menuBar = MenuBarController(store: self)
-        let current = MacAppDetector.frontmostAppAndWindowTitle()
-        if !current.appName.isEmpty {
-            lastActiveApp = current.appName
-            tapManager.notifyAppActivated(current.appName, windowTitle: current.windowTitle)
-        }
         workspaceObserver = NSWorkspace.shared.notificationCenter.addObserver(
             forName: NSWorkspace.didActivateApplicationNotification,
             object: nil,
             queue: .main
         ) { [weak self] note in
             let app = note.userInfo?[NSWorkspace.applicationUserInfoKey] as? NSRunningApplication
-            let name = app.map(MacAppDetector.canonicalName(for:)) ?? ""
-            let pid = app?.processIdentifier ?? 0
-            DispatchQueue.main.async {
-                guard let self, !name.isEmpty else { return }
-                let title = AXIsProcessTrusted() && pid > 0
-                    ? MacAppDetector.focusedWindowTitle(of: AXUIElementCreateApplication(pid))
-                    : ""
-                self.tapManager.notifyAppActivated(name, windowTitle: title)
+            MainActor.assumeIsolated {
+                self?.focusMonitor.synchronize(trusted: EventTapManager.hasAccessibilityPermission(prompt: false), activatedApp: app)
             }
         }
         inputSourceObserver = DistributedNotificationCenter.default().addObserver(
@@ -134,6 +129,7 @@ public final class MSKeyStore: ObservableObject {
     public func refreshTapHealth() {
         refreshKeyboardLayout()
         let trusted = EventTapManager.hasAccessibilityPermission(prompt: false)
+        focusMonitor.synchronize(trusted: trusted)
         switch EventTapManager.healthAction(trusted: trusted, state: tapManager.tapState) {
         case .start:
             tapManager.start()
