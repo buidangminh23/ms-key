@@ -1,5 +1,5 @@
 PackageIdentifier: BuiDangMinh.MSKey
-PackageVersion: 0.2.10
+PackageVersion: 0.2.11
 MinimumOSVersion: 10.0.0.0
 InstallerType: nullsoft
 Scope: user
@@ -14,10 +14,10 @@ ReleaseDate: 2026-11-22
 AppsAndFeaturesEntries:
   - DisplayName: MS Key
     Publisher: Bui Dang Minh
-    DisplayVersion: 0.2.10
+    DisplayVersion: 0.2.11
 Installers:
   - Architecture: x64
-    InstallerUrl: https://github.com/buidangminh23/ms-key/releases/download/v0.2.10/MSKey-Setup-0.2.10-windows-x64.exe
-    InstallerSha256: EBC01C9EC5541501C98BF835BE2A094834954ADAA1B1C2D10A066294FE5CA284
+    InstallerUrl: https://github.com/buidangminh23/ms-key/releases/download/v0.2.11/MSKey-Setup-0.2.11-windows-x64.exe
+    InstallerSha256: 0ECFAB8DD01FAFA002DAAFF53E47C1AB0628E31BA8CCBBF6039B8661C90E09DA
 ManifestType: installer
 ManifestVersion: 1.6.0

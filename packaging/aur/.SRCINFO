@@ -1,6 +1,6 @@
 pkgbase = mskey
 	pkgdesc = Lightweight open-source Vietnamese input method (IBus engine, Fcitx5 addon, and CLI)
-	pkgver = 0.2.10
+	pkgver = 0.2.11
 	pkgrel = 1
 	url = https://github.com/buidangminh23/ms-key
 	arch = x86_64
@@ -19,7 +19,7 @@ pkgbase = mskey
 	conflicts = mskey-bin
 	conflicts = mskey-git
 	options = !lto
-	source = mskey-0.2.10.tar.gz::https://github.com/buidangminh23/ms-key/archive/refs/tags/v0.2.10.tar.gz
+	source = mskey-0.2.11.tar.gz::https://github.com/buidangminh23/ms-key/archive/refs/tags/v0.2.11.tar.gz
 	sha256sums = SKIP
 
 pkgname = mskey

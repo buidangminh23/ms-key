@@ -1,25 +1,25 @@
 class MskeyCli < Formula
   desc "Command-line toolkit for MS Key Vietnamese text conversion and macros"
   homepage "https://github.com/buidangminh23/ms-key"
-  version "0.2.10"
+  version "0.2.11"
   license "MIT"
 
   head "https://github.com/buidangminh23/ms-key.git", branch: "main"
 
   on_macos do
     url "https://github.com/buidangminh23/ms-key/releases/download/v#{version}/mskey-cli-#{version}-macos-universal.tar.gz"
-    sha256 "118aedce1b86fc8c621c019cab9d469eda354598eee73c27aa81f4ed142cf83d"
+    sha256 "6f8d6db78a2e9790308908309c5a468e69404b7b93896f48facd0d5d7178bb94"
   end
 
   on_linux do
     on_intel do
       url "https://github.com/buidangminh23/ms-key/releases/download/v#{version}/mskey-cli-#{version}-linux-amd64.tar.gz"
-      sha256 "b496a0bf3beb2e8a1ce11d7c3af07a07d8098b4cfc0c75b31158edd40751aded"
+      sha256 "7a9f2415524212bab720cd1b50aaea8a6b8666af23cb06140d9f001d466ff6d4"
     end
 
     on_arm do
       url "https://github.com/buidangminh23/ms-key/releases/download/v#{version}/mskey-cli-#{version}-linux-arm64.tar.gz"
-      sha256 "0f146e23fd81835d8d537ffd2df3c0d401fe97323feb4a2cf9dced9fee2f6486"
+      sha256 "4d48d1dd6d1d02b2d96540dd2c8950738ade5ea2454624e7603cfbee23c6de5b"
     end
   end
 
