@@ -1,5 +1,5 @@
 pkgname=mskey
-pkgver=0.2.9
+pkgver=0.2.10
 pkgrel=1
 pkgdesc="Lightweight open-source Vietnamese input method (IBus engine, Fcitx5 addon, and CLI)"
 arch=('x86_64' 'aarch64')

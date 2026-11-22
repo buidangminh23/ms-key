@@ -1,6 +1,6 @@
 cask "mskey" do
-  version "0.2.9"
-  sha256 "917861295bb7588192e68d282f627b64d85c5a1641a03adef35c57d54ab88775"
+  version "0.2.10"
+  sha256 "3248b4aaf1a53024ee53b3e75f072e29c2d69033c04c848cd33da47b4337a47e"
 
   url "https://github.com/buidangminh23/ms-key/releases/download/v#{version}/MSKey-#{version}-macos-universal.dmg"
   name "MS Key"
