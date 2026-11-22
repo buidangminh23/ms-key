@@ -148,7 +148,7 @@ const ALL_BASES: [BaseVowel; 12] = [
     BaseVowel::Y,
 ];
 
-const ALL_TONES: [Tone; 6] = [
+pub(crate) const ALL_TONES: [Tone; 6] = [
     Tone::None,
     Tone::Acute,
     Tone::Grave,

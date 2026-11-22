@@ -137,7 +137,7 @@ fn words() -> Vec<&'static str> {
 
 fn is_ambiguous_spelling(word: &str) -> bool {
     let base = mskey_core::strip_vietnamese_diacritics(word);
-    base.contains("oo") || word == "gỵa"
+    base.contains("oo")
 }
 
 fn run(style: Style, label: &str) -> Vec<String> {
@@ -147,11 +147,6 @@ fn run(style: Style, label: &str) -> Vec<String> {
         let Some(keys) = to_telex(w, style) else {
             continue;
         };
-        if matches!(style, Style::InlineToneMid)
-            && (w.starts_with("qu") || mskey_core::dict::is_english_word(&keys))
-        {
-            continue;
-        }
         let got = simulate(&mut engine, &format!("{keys} "));
         let want = format!("{w} ");
         if got != want && normalize_tone_style(&got, true) != normalize_tone_style(&want, true) {

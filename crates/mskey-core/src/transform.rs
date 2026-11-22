@@ -292,7 +292,18 @@ pub fn try_apply_breve(chars: &mut Vec<char>, config: &Config) -> TransformOutco
         } else {
             !applied || validate_candidate(&candidate, config)
         };
-        if !allowed {
+        let dictionary_tone_pending = !allowed && applied && tone == Tone::None && {
+            let mut toned = candidate.clone();
+            crate::tables::ALL_TONES[1..].iter().any(|&tone| {
+                toned[idx] = encode_vowel(next_base, tone, upper);
+                dict::is_vietnamese_word_with_custom(
+                    &toned.iter().collect::<String>(),
+                    config.allow_fjwz,
+                    &config.user_dict_words,
+                )
+            })
+        };
+        if !allowed && !dictionary_tone_pending {
             candidate[idx] = chars[idx];
             continue;
         }
@@ -463,7 +474,13 @@ pub fn try_apply_tone(chars: &mut Vec<char>, target_tone: Tone, config: &Config)
     if let Some((base, _, upper)) = decode_vowel(candidate[abs_idx]) {
         candidate[abs_idx] = encode_vowel(base, target_tone, upper);
     }
-    if !validate_candidate(&candidate, config) {
+    if !validate_candidate(&candidate, config)
+        && !dict::has_vietnamese_completion(
+            &candidate.iter().collect::<String>(),
+            config.allow_fjwz,
+            &config.user_dict_words,
+        )
+    {
         return TransformOutcome::Ignored;
     }
     *chars = candidate;

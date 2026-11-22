@@ -188,16 +188,10 @@ fn is_non_canonical_english_collision(
         return false;
     };
     let is_tone_key = |b: u8| matches!(b, b's' | b'f' | b'r' | b'x' | b'j');
-    let is_vowel_key = |b: u8| matches!(b, b'a' | b'e' | b'i' | b'o' | b'u' | b'y');
-    let mut tone_count = 0usize;
-    for (idx, &b) in bytes.iter().enumerate().skip(first_vowel + 1) {
-        if is_tone_key(b) {
-            tone_count += 1;
-            if bytes[idx + 1..].iter().any(|&next| is_vowel_key(next)) {
-                return true;
-            }
-        }
-    }
+    let tone_count = bytes[first_vowel + 1..]
+        .iter()
+        .filter(|&&b| is_tone_key(b))
+        .count();
     if tone_count >= 2 {
         return true;
     }

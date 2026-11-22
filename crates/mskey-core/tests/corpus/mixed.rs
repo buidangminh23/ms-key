@@ -91,3 +91,94 @@ fn separated_shape_keys_preserve_english_spelling_and_vietnamese_escapes() {
         expected
     );
 }
+
+fn early_telex_cases() -> impl Iterator<Item = (&'static str, &'static str)> {
+    include_str!("telex-regressions.tsv")
+        .lines()
+        .map(|line| line.split_once('\t').unwrap())
+}
+
+const ENGLISH_COLLISIONS: [&str; 14] = [
+    "chose", "gary", "hero", "lose", "mary", "ore", "sofa", "taxi", "usee", "visa", "vary", "usa",
+    "ira", "uri",
+];
+
+#[test]
+fn early_telex_words_compose_before_and_after_each_boundary() {
+    let mut failures = Vec::new();
+    for (keys, word) in early_telex_cases() {
+        for boundary in ["", " ", ",", "!", "\t", "\n"] {
+            let actual = simulate(
+                &mut Engine::new(Config::default()),
+                &format!("{keys}{boundary}"),
+            );
+            if actual != format!("{word}{boundary}") {
+                failures.push(format!(
+                    "{keys:?} + {boundary:?}: {actual:?}, expected {word:?}"
+                ));
+            }
+        }
+    }
+    assert!(
+        failures.is_empty(),
+        "{} mismatches\n{}",
+        failures.len(),
+        failures.join("\n")
+    );
+}
+
+#[test]
+fn continuous_early_telex_preserves_words_and_separators_without_resets() {
+    let mut input = String::new();
+    let mut expected = String::new();
+    let boundaries = [" ", ", ", "! ", "\t", "\n"];
+    for (index, (keys, word)) in early_telex_cases().enumerate() {
+        let separator = boundaries[index % boundaries.len()];
+        input.push_str(keys);
+        input.push_str(separator);
+        expected.push_str(word);
+        expected.push_str(separator);
+    }
+    assert_eq!(
+        simulate(&mut Engine::new(Config::default()), &input.repeat(3)),
+        expected.repeat(3)
+    );
+}
+
+#[test]
+fn early_telex_respects_orthography_english_escape_and_user_dictionary() {
+    let mut classic = Engine::new(Config {
+        modern_tone: false,
+        ..Config::default()
+    });
+    assert_eq!(
+        simulate(&mut classic, "chose lose ore sofa "),
+        "chóe lóe ỏe sòa "
+    );
+
+    let literal = ENGLISH_COLLISIONS.join(" ") + " ";
+    let mut english = Engine::new(Config::default());
+    english.set_temporary_english(true);
+    assert_eq!(simulate(&mut english, &literal), literal);
+
+    let escaped = ENGLISH_COLLISIONS.join("\x1b ") + "\x1b ";
+    assert_eq!(
+        simulate(&mut Engine::new(Config::default()), &escaped),
+        literal
+    );
+
+    let mut overridden = Engine::new(Config {
+        user_dict_words: ENGLISH_COLLISIONS
+            .iter()
+            .map(|word| word.to_string())
+            .collect(),
+        ..Config::default()
+    });
+    assert_eq!(simulate(&mut overridden, &literal), literal);
+
+    let unaffected = "software hardware browser server example ";
+    assert_eq!(
+        simulate(&mut Engine::new(Config::default()), unaffected),
+        unaffected
+    );
+}

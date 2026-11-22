@@ -379,7 +379,7 @@ fn oaw_oao_oeo_cuuw_tone_before_mod_and_english_collisions() {
             |_| {},
             "was won worst defend reset theme these there here hero visa virus sofa chose lose dose boxes xerox congo mono honor verse cheers refer refers veers texts nextjs "
         ),
-        "was won worst defend reset theme these there here hero visa virus sofa chose lose dose boxes xerox congo mono honor verse cheers refer refers veers texts nextjs "
+        "was won worst defend reset theme these there here hẻo vía virus soà choé loé dose boxes xerox congo mono honor verse cheers refer refers veers texts nextjs "
     );
 }
 

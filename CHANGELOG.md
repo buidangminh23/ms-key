@@ -2,6 +2,18 @@
 
 All notable changes to MS Key are documented here. The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and the project uses [Semantic Versioning](https://semver.org/).
 
+## [0.2.10] - 2026-11-22
+
+### Fixed
+
+- Telex accepts the tone key immediately after `qu`, before the next vowel. For example, `qufa` produces “quà” and `qusooc` produces “quốc”.
+- Telex accepts a late `w` in “Đắk” (`DDakws`) and “Lắk” (`Lakws`) and preserves the tone in “gỵa” (`gyja`).
+- Vietnamese mode keeps valid Vietnamese spellings when the same keys also spell an English word. For example, `gary` produces “gảy” and `visa` produces “vía”. Press Escape before the word boundary to restore the literal spelling, or use English mode.
+
+### Verification
+
+- The regression suite checks 126 distinct Telex sequences as individual words and in continuous text, including spaces, punctuation, tabs and line breaks. It also checks modern and traditional tone placement and literal English input.
+
 ## [0.2.9] - 2026-11-22
 
 ### Fixed

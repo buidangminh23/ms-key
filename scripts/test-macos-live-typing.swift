@@ -10,7 +10,7 @@ struct Stroke {
     let ascii: UInt16?
 }
 
-func typingCases(english: Bool) -> [(String, String)] {
+func typingCases(english: Bool) throws -> [(String, String)] {
     let alphabet = "abcdefghijklmnopqrstuvwxyz"
     let punctuation = ##"!"#$%&'()*+,-./:;<=>?@[\]^_`{|}~"##
     let alternating = zip(alphabet, alphabet.uppercased()).map { "\($0)\($1)" }.joined()
@@ -52,6 +52,14 @@ func typingCases(english: Bool) -> [(String, String)] {
         ("API v2.4: cacs file JSON cofn ddaayf ddur.", "API v2.4: các file JSON còn đầy đủ."),
         ("CPU 95%, RAM 32GB; cacs tuwf Telex vieets ddungs.", "CPU 95%, RAM 32GB; các từ Telex viết đúng."),
     ]
+    let fixture = URL(fileURLWithPath: #filePath).deletingLastPathComponent()
+        .deletingLastPathComponent()
+        .appendingPathComponent("crates/mskey-core/tests/corpus/telex-regressions.tsv")
+    for line in try String(contentsOf: fixture, encoding: .utf8).split(separator: "\n") {
+        let fields = line.split(separator: "\t")
+        guard fields.count == 2 else { throw CocoaError(.fileReadCorruptFile) }
+        cases.append((String(fields[0]), String(fields[1])))
+    }
     return cases
 }
 
@@ -60,7 +68,7 @@ guard arguments.isEmpty || arguments == ["--english"] else {
     print("Usage: swift scripts/test-macos-live-typing.swift [--english]")
     exit(2)
 }
-let cases = typingCases(english: arguments == ["--english"])
+let cases = try typingCases(english: arguments == ["--english"])
 let keys = cases.map { $0.0 }.joined(separator: " ") + " "
 let expected = String(repeating: cases.map { $0.1 }.joined(separator: " ") + " ", count: 2)
 let plain = "abcdefghijklmnopqrstuvwxyz0123456789`-=[]\\;',./ "

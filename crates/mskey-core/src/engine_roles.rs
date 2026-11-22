@@ -4,7 +4,7 @@ use crate::engine_quick::promote_u_ohorn_for_suffix;
 use crate::syllable::{is_valid_typing_prefix, parse_syllable};
 use crate::tables::{BaseVowel, Tone, VowelFamily, decode_vowel, is_vietnamese_vowel};
 use crate::transform::{
-    KeyRole, TransformOutcome, reanchor_tone, try_apply_breve, try_apply_circumflex,
+    KeyRole, TransformOutcome, classify_key, reanchor_tone, try_apply_breve, try_apply_circumflex,
     try_apply_d_stroke, try_apply_horn_family, try_apply_tone,
 };
 
@@ -332,6 +332,23 @@ impl Engine {
 
     pub(crate) fn append_normal_char(&mut self, ch: char) {
         self.last_w_standalone = false;
+        if let [q, u, key] = self.display.as_slice()
+            && q.eq_ignore_ascii_case(&'q')
+            && u.eq_ignore_ascii_case(&'u')
+            && is_vietnamese_vowel(ch)
+            && matches!(self.config.input_method, InputMethod::Telex | InputMethod::SimpleTelex)
+            && let KeyRole::Tone(tone) = classify_key(*key, &self.config)
+        {
+            let mut candidate = vec![*q, *u, ch];
+            if matches!(
+                try_apply_tone(&mut candidate, tone, &self.config),
+                TransformOutcome::Applied
+            ) {
+                self.display = candidate;
+                self.had_transform = true;
+                return;
+            }
+        }
         if is_vietnamese_vowel(ch) && !matches!(ch.to_ascii_lowercase(), 'i' | 'u') {
             self.auto_o_horn = false;
         }

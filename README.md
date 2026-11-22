@@ -97,7 +97,7 @@ On first launch, allow MS Key in **System Settings > Privacy & Security > Access
 | `hoaf` | hoà | `hoa2` | hoà |
 | `windows` | windows | | |
 
-Press **Esc** right after a word to undo the Vietnamese marks and get back the keys you typed.
+In Vietnamese mode, a tone can come before the vowel in a word starting with `qu`, so both `qufa` and `quaf` produce “quà”. Some English spellings are also valid Telex input, such as `visa` → “vía” and `taxi` → “tãi”. Press **Esc** before the next space or punctuation mark to keep the literal spelling, or switch to **E** to type English.
 
 ## Features
 
